@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import AsyncIterator, Optional, Dict, Tuple
 
-import aiofiles
+
 
 from ..core.models import ObjectMeta, ByteRange
 from .base import Storage, StorageNotFound
@@ -47,7 +47,7 @@ class LocalStorage(Storage):
 
         size: int = 0
         md5 = hashlib.md5()
-
+        import aiofiles
         async with aiofiles.open(path, "wb") as f:
             async for chunk in body:
                 if not chunk:
@@ -87,6 +87,7 @@ class LocalStorage(Storage):
                 end_inclusive = min(byte_range.end, meta.size - 1)
 
         async def streamer() -> AsyncIterator[bytes]:
+            import aiofiles
             async with aiofiles.open(path, "rb") as f:
                 await f.seek(start)
 

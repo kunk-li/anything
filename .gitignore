@@ -2,3 +2,5 @@
 /file/
 /models/
 /config/
+__pycache__/
+*.pyc
