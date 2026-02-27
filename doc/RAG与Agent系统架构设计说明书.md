@@ -47,8 +47,9 @@
 |应用层|接收用户请求，展示系统响应，提供用户交互入口（如API接口调用、简单控制台）|API服务模块、控制台交互模块|低（最后开发，依赖接口层）|
 |接口层|统一接口管理，实现各模块之间的通信，封装核心业务逻辑调用，提供标准化请求/响应格式|接口封装模块、请求响应处理模块|中（核心模块开发完成后开发）|
 |核心业务层|实现RAG与Agent核心功能，是系统核心模块集合|RAG模块、Agent模块、协同调度模块|高（优先开发）|
-|数据层|负责数据存储、读取、更新，包括文档数据、向量数据、Agent状态数据等|文档存储模块、向量数据库模块、状态存储模块|高（与核心业务层同步开发）|
+|数据层|负责数据存储、读取、更新，包括文档数据、向量数据、Agent状态数据等|文档解析模块、文档存储模块、向量数据库模块、状态存储模块|高（与核心业务层同步开发）|
 |基础支撑层|提供系统通用能力，支撑所有上层模块，包含通用工具、配置管理、日志、异常处理等|通用工具模块、配置管理模块、日志模块、异常处理模块|最高（最先开发，所有模块依赖）|
+
 ## 2.3 系统交互流程
 
 1.  用户通过应用层（API/控制台）发起请求（如问答、任务执行）；
@@ -711,67 +712,54 @@ except Exception as e:
 
 ## 4.2 数据层模块设计
 
-数据层负责系统所有数据的存储与读取，包含3个独立模块，依赖基础支撑层的通用工具、配置管理、日志、异常处理模块，各模块独立开发，互不依赖。
+数据层负责系统所有数据的存储与读取，包含4个独立模块，依赖基础支撑层的通用工具、配置管理、日志、异常处理模块，各模块独立开发，互不依赖。
 
-### 4.2.1 文档存储模块（document_store_module）
+### 4.2.1 文档解析模块（document_parser_module）
 
 #### 4.2.1.1 模块功能
 
-负责原始文档的存储、读取、更新、删除，支持多种文档格式（如txt、pdf、docx）的加载与解析，将解析后的文档文本存储到本地文件或数据库，为RAG模块提供原始文档数据。
+负责将原始文件（txt、pdf、docx）解析为统一的“标准文本结构”，不做任何存储落盘，输出结果交由文档存储模块保存。该模块只关心“如何解析”，不关心“存到哪里”。
+
+- 输入：file_path（支持txt、pdf、docx）
+- 输出：统一结构（不含doc_id，由存储模块或上层流程生成/绑定）
+
+统一输出格式示例：
+```json
+{
+  "content": "解析后的文本内容（已做基础清洗）",
+  "file_name": "example.pdf",
+  "meta": {
+    "ext": ".pdf"
+  }
+}
+```
 
 #### 4.2.1.2 抽象基类（core/base.py）
 
 ```python
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional
+from typing import List, Dict
 
-class BaseDocumentStore(ABC):
-    """文档存储抽象基类，定义文档操作核心接口"""
-    
+class BaseDocumentParser(ABC):
+    """文档解析抽象基类，定义文档解析核心接口"""
+
     @abstractmethod
-    def load_document(self, file_path: str) -> Dict[str, str]:
+    def parse_file(self, file_path: str) -> Dict:
         """
-        加载单个文档，解析为文本
-        :param file_path: 文档文件路径（支持txt、pdf、docx）
-        :return: 文档信息字典，格式：{"doc_id": 文档唯一ID, "content": 文档文本, "file_name": 文件名}
-        :raises RAGException: 文档加载失败时抛出异常
+        解析单个文件为文本
+        :param file_path: 文件路径（支持txt、pdf、docx）
+        :return: {"content": str, "file_name": str, "meta": dict}
+        :raises RAGException: 解析失败抛出异常
         """
         pass
-    
+
     @abstractmethod
-    def load_documents(self, folder_path: str) -> List[Dict[str, str]]:
+    def parse_folder(self, folder_path: str) -> List[Dict]:
         """
-        加载文件夹下所有文档，解析为文本
+        解析文件夹下所有文件
         :param folder_path: 文件夹路径
-        :return: 文档信息列表，每个元素为文档信息字典（同load_document返回格式）
-        :raises RAGException: 文件夹不存在或文档加载失败时抛出异常
-        """
-        pass
-    
-    @abstractmethod
-    def save_document(self, document: Dict[str, str]) -> bool:
-        """
-        保存单个文档（解析后的文本）
-        :param document: 文档信息字典（含doc_id、content、file_name）
-        :return: 保存成功返回True，失败返回False
-        """
-        pass
-    
-    @abstractmethod
-    def get_document(self, doc_id: str) -> Optional[Dict[str, str]]:
-        """
-        根据文档ID获取文档信息
-        :param doc_id: 文档唯一ID
-        :return: 文档信息字典，不存在则返回None
-        """
-        pass
-    
-    @abstractmethod
-    def delete_document(self, doc_id: str) -> bool:
-        """
-        根据文档ID删除文档
-        :param doc_id: 文档唯一ID
-        :return: 删除成功返回True，失败返回False
+        :return: 解析结果列表，每个元素同parse_file输出
+        :raises RAGException: 文件夹不存在或解析失败抛出异常
         """
         pass
 ```
@@ -780,11 +768,8 @@ class BaseDocumentStore(ABC):
 
 ```python
 import os
-import uuid
-from .base import BaseDocumentStore
-from typing import List, Dict, Optional
+from typing import List, Dict
 from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
 from log_module.core.impl import SystemLogger
 from exception_module.core.impl import RAGException
 
@@ -792,117 +777,191 @@ from exception_module.core.impl import RAGException
 from PyPDF2 import PdfReader
 from docx import Document
 
-class LocalDocumentStore(BaseDocumentStore):
-    """本地文档存储实现类，将文档存储到本地文件夹，解析多种格式文档"""
-    
+from .base import BaseDocumentParser
+
+class LocalDocumentParser(BaseDocumentParser):
+    """本地文档解析实现类：负责解析txt/pdf/docx为文本，不做存储"""
+
     def __init__(self):
         self.utils = CommonUtils()
-        self.config_manager = ConfigManager()
-        self.config_manager.load_config()
         self.logger = SystemLogger()
-        # 从配置中获取文档存储目录
-        self.doc_store_dir = self.config_manager.get_config("document_store.dir", "documents")
-        # 创建文档存储目录（不存在则创建）
-        if not os.path.exists(self.doc_store_dir):
-            os.makedirs(self.doc_store_dir)
-    
-    def _generate_doc_id(self) -> str:
-        """生成文档唯一ID（UUID）"""
-        return str(uuid.uuid4())
-    
+
     def _parse_txt(self, file_path: str) -> str:
-        """解析txt文档"""
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
-    
+
     def _parse_pdf(self, file_path: str) -> str:
-        """解析pdf文档"""
         reader = PdfReader(file_path)
         content = ""
         for page in reader.pages:
             content += page.extract_text() or ""
         return content
-    
+
     def _parse_docx(self, file_path: str) -> str:
-        """解析docx文档"""
         doc = Document(file_path)
         content = ""
         for paragraph in doc.paragraphs:
             content += paragraph.text + "\n"
         return content.strip()
-    
-    def load_document(self, file_path: str) -> Dict[str, str]:
+
+    def parse_file(self, file_path: str) -> Dict:
         try:
-            # 检查文件是否存在
             if not os.path.exists(file_path):
                 raise RAGException("DOCUMENT_NOT_FOUND", f"文档文件不存在：{file_path}")
 
-            # 获取文件扩展名，判断文档类型
-            file_ext = os.path.splitext(file_path)[1].lower()
+            ext = os.path.splitext(file_path)[1].lower()
 
-            # 解析文档
-            if file_ext == ".txt":
+            if ext == ".txt":
                 content = self._parse_txt(file_path)
-            elif file_ext == ".pdf":
+            elif ext == ".pdf":
                 content = self._parse_pdf(file_path)
-            elif file_ext == ".docx":
+            elif ext == ".docx":
                 content = self._parse_docx(file_path)
             else:
-                raise RAGException("UNSUPPORTED_FILE_TYPE", f"不支持的文件类型：{file_ext}")
+                raise RAGException("UNSUPPORTED_FILE_TYPE", f"不支持的文件类型：{ext}")
 
-            # 文本清洗
+            # 基础清洗（保持与其他模块一致）
             content = self.utils.text_clean(content)
 
-            # 生成文档ID
-            doc_id = self._generate_doc_id()
-
-            document = {
-                "doc_id": doc_id,
+            out = {
                 "content": content,
-                "file_name": os.path.basename(file_path)
+                "file_name": os.path.basename(file_path),
+                "meta": {"ext": ext}
             }
 
-            # 保存文档
-            self.save_document(document)
-
-            self.logger.info(f"文档加载成功：{file_path}", logger_name="document_store_module")
-
-            return document
+            self.logger.info(f"文档解析成功：{file_path}", logger_name="document_parser_module")
+            return out
 
         except Exception as e:
-            self.logger.error(f"文档加载失败：{str(e)}", logger_name="document_store_module")
+            self.logger.error(f"文档解析失败：{str(e)}", logger_name="document_parser_module")
             if isinstance(e, RAGException):
                 raise e
-            raise RAGException("DOCUMENT_LOAD_FAILED", str(e))
+            raise RAGException("DOCUMENT_PARSE_FAILED", str(e))
 
-    def load_documents(self, folder_path: str) -> List[Dict[str, str]]:
+    def parse_folder(self, folder_path: str) -> List[Dict]:
         try:
             if not os.path.exists(folder_path):
                 raise RAGException("FOLDER_NOT_FOUND", f"文件夹不存在：{folder_path}")
 
-            documents = []
-
+            results: List[Dict] = []
             for file_name in os.listdir(folder_path):
                 file_path = os.path.join(folder_path, file_name)
-
                 if os.path.isfile(file_path):
                     try:
-                        document = self.load_document(file_path)
-                        documents.append(document)
+                        results.append(self.parse_file(file_path))
                     except Exception as e:
-                        self.logger.warning(f"跳过文件 {file_name}，原因：{str(e)}",
-                                            logger_name="document_store_module")
+                        self.logger.warning(
+                            f"跳过文件 {file_name}，原因：{str(e)}",
+                            logger_name="document_parser_module"
+                        )
 
-            self.logger.info(f"批量加载完成，共加载 {len(documents)} 个文档",
-                             logger_name="document_store_module")
-
-            return documents
+            self.logger.info(f"批量解析完成，共解析 {len(results)} 个文件", logger_name="document_parser_module")
+            return results
 
         except Exception as e:
-            self.logger.error(f"批量加载失败：{str(e)}", logger_name="document_store_module")
+            self.logger.error(f"批量解析失败：{str(e)}", logger_name="document_parser_module")
             if isinstance(e, RAGException):
                 raise e
-            raise RAGException("BATCH_LOAD_FAILED", str(e))
+            raise RAGException("BATCH_PARSE_FAILED", str(e))
+```
+
+#### 4.2.1.4 接口调用示例
+
+```python
+from document_parser_module.core.impl import LocalDocumentParser
+
+parser = LocalDocumentParser()
+parsed = parser.parse_file("data/example.pdf")
+print(parsed["file_name"])
+print(parsed["content"][:200])
+```
+
+### 4.2.2 文档存储模块（document_store_module）
+#### 4.2.2.1 模块功能
+
+负责“解析后文本”的存储、读取、更新、删除，不负责文件解析。解析工作由文档解析模块完成。
+
+- 输入：document（含doc_id、content、file_name）
+
+- 输出：读取返回统一结构（含doc_id、content、file_name）
+
+#### 4.2.2.2 抽象基类（core/base.py）
+```python
+from abc import ABC, abstractmethod
+from typing import Dict, Optional
+
+class BaseDocumentStore(ABC):
+    """文档存储抽象基类，定义文档存取核心接口（不包含解析）"""
+
+    @abstractmethod
+    def create_document(self, content: str, file_name: str) -> Dict[str, str]:
+        """
+        创建标准文档结构（生成doc_id），不做存储
+        :param content: 文本内容（已解析/清洗）
+        :param file_name: 原文件名
+        :return: {"doc_id": str, "content": str, "file_name": str}
+        """
+        pass
+
+    @abstractmethod
+    def save_document(self, document: Dict[str, str]) -> bool:
+        """
+        保存单个文档（解析后的文本）
+        :param document: {"doc_id": str, "content": str, "file_name": str}
+        :return: 成功True，否则False
+        """
+        pass
+
+    @abstractmethod
+    def get_document(self, doc_id: str) -> Optional[Dict[str, str]]:
+        """
+        根据doc_id获取文档
+        :param doc_id: 文档唯一ID
+        :return: {"doc_id": str, "content": str, "file_name": str} 或 None
+        """
+        pass
+
+    @abstractmethod
+    def delete_document(self, doc_id: str) -> bool:
+        """
+        删除文档
+        :param doc_id: 文档唯一ID
+        :return: 成功True，否则False
+        """
+        pass
+
+```
+
+#### 4.2.2.3 具体实现（core/impl.py）
+```python
+import os
+import uuid
+from typing import Dict, Optional
+from .base import BaseDocumentStore
+from config_module.core.impl import ConfigManager
+from log_module.core.impl import SystemLogger
+
+class LocalDocumentStore(BaseDocumentStore):
+    """本地文档存储实现类：将解析后的文本存储到本地文件夹（documents/{doc_id}.txt）"""
+
+    def __init__(self):
+        self.config_manager = ConfigManager()
+        self.config_manager.load_config()
+        self.logger = SystemLogger()
+
+        self.doc_store_dir = self.config_manager.get_config("document_store.dir", "documents")
+        if not os.path.exists(self.doc_store_dir):
+            os.makedirs(self.doc_store_dir)
+
+    def _generate_doc_id(self) -> str:
+        return str(uuid.uuid4())
+
+    def create_document(self, content: str, file_name: str) -> Dict[str, str]:
+        return {
+            "doc_id": self._generate_doc_id(),
+            "content": content,
+            "file_name": file_name
+        }
 
     def save_document(self, document: Dict[str, str]) -> bool:
         try:
@@ -910,22 +969,18 @@ class LocalDocumentStore(BaseDocumentStore):
             file_path = os.path.join(self.doc_store_dir, f"{doc_id}.txt")
 
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write(document["content"])
+                f.write(document.get("content", ""))
 
-            self.logger.info(f"文档保存成功：{doc_id}",
-                             logger_name="document_store_module")
-
+            self.logger.info(f"文档保存成功：{doc_id}", logger_name="document_store_module")
             return True
 
         except Exception as e:
-            self.logger.error(f"文档保存失败：{str(e)}",
-                              logger_name="document_store_module")
+            self.logger.error(f"文档保存失败：{str(e)}", logger_name="document_store_module")
             return False
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, str]]:
         try:
             file_path = os.path.join(self.doc_store_dir, f"{doc_id}.txt")
-
             if not os.path.exists(file_path):
                 return None
 
@@ -939,46 +994,47 @@ class LocalDocumentStore(BaseDocumentStore):
             }
 
         except Exception as e:
-            self.logger.error(f"获取文档失败：{str(e)}",
-                              logger_name="document_store_module")
+            self.logger.error(f"获取文档失败：{str(e)}", logger_name="document_store_module")
             return None
 
     def delete_document(self, doc_id: str) -> bool:
         try:
             file_path = os.path.join(self.doc_store_dir, f"{doc_id}.txt")
-
             if os.path.exists(file_path):
                 os.remove(file_path)
-                self.logger.info(f"文档删除成功：{doc_id}",
-                                 logger_name="document_store_module")
+                self.logger.info(f"文档删除成功：{doc_id}", logger_name="document_store_module")
                 return True
-
             return False
 
         except Exception as e:
-            self.logger.error(f"文档删除失败：{str(e)}",
-                              logger_name="document_store_module")
+            self.logger.error(f"文档删除失败：{str(e)}", logger_name="document_store_module")
             return False
+        
 ```
-#### 4.2.1.4 配置补充（config/config.yaml）
+#### 4.2.2.4 配置补充（config/config.yaml）
 ```yaml
 document_store:
   dir: "documents"
 ```
 
-#### 4.2.1.5 接口调用示例
-
+#### 4.2.2.5 接口调用示例
 ```python
+from document_parser_module.core.impl import LocalDocumentParser
 from document_store_module.core.impl import LocalDocumentStore
 
+parser = LocalDocumentParser()
 store = LocalDocumentStore()
-doc = store.load_document("data/example.pdf")
-print(doc["doc_id"])
-print(doc["content"][:200])
+
+parsed = parser.parse_file("data/example.pdf")
+doc = store.create_document(parsed["content"], parsed["file_name"])
+store.save_document(doc)
+
+got = store.get_document(doc["doc_id"])
+print(got["doc_id"])
+print(got["content"][:200])
+
 ```
-
-#### 4.2.1.6 测试用例（tests/test_impl.py）
-
+#### 4.2.2.6 测试用例（tests/test_impl.py）
 ```python
 import unittest
 import os
@@ -988,32 +1044,23 @@ class TestLocalDocumentStore(unittest.TestCase):
 
     def setUp(self):
         self.store = LocalDocumentStore()
-        self.tmp_file = "tmp_test.txt"
-        with open(self.tmp_file, "w", encoding="utf-8") as f:
-            f.write("测试文档内容123")
 
-    def tearDown(self):
-        if os.path.exists(self.tmp_file):
-            os.remove(self.tmp_file)
+    def test_save_get_delete_document(self):
+        doc = self.store.create_document("测试文档内容123", "tmp_test.txt")
+        self.assertTrue(self.store.save_document(doc))
 
-    def test_load_document(self):
-        doc = self.store.load_document(self.tmp_file)
-        self.assertIn("doc_id", doc)
-        self.assertEqual(doc["content"], "测试文档内容123")
-
-    def test_get_delete_document(self):
-        doc = self.store.load_document(self.tmp_file)
         got = self.store.get_document(doc["doc_id"])
         self.assertIsNotNone(got)
+        self.assertEqual(got["content"], "测试文档内容123")
+
         self.assertTrue(self.store.delete_document(doc["doc_id"]))
         self.assertIsNone(self.store.get_document(doc["doc_id"]))
 
 if __name__ == "__main__":
     unittest.main()
 ```
-
-### 4.2.2 向量数据库模块（vector_db_module）
-#### 4.2.2.1 模块功能
+### 4.2.3 向量数据库模块（vector_db_module）
+#### 4.2.3.1 模块功能
 
 用于存储文档向量并支持相似度检索，是RAG检索能力核心。要求：
 
@@ -1022,7 +1069,7 @@ if __name__ == "__main__":
 3. 支持 delete（按向量ID或doc_id删除） 
 4. 返回统一结构，供RAG模块直接使用
 
-#### 4.2.2.2 抽象基类（core/base.py）
+#### 4.2.3.2 抽象基类（core/base.py）
 
 ```python
 from abc import ABC, abstractmethod
@@ -1062,7 +1109,7 @@ class BaseVectorDB(ABC):
         pass
 ```
 
-#### 4.2.2.3 具体实现（core/impl.py）——提供本地FAISS示例（便于初学者落地）
+#### 4.2.3.3 具体实现（core/impl.py）——提供本地FAISS示例（便于初学者落地）
 
 说明：生产可替换 Pinecone/Chroma/Milvus，实现只需遵循 BaseVectorDB 接口。
 
@@ -1188,7 +1235,7 @@ class FaissVectorDB(BaseVectorDB):
                    
 ```
 
-#### 4.2.2.4 配置示例（config/config.yaml）
+#### 4.2.3.4 配置示例（config/config.yaml）
 ```yaml
 vector_db:
   type: "faiss"
@@ -1196,7 +1243,7 @@ vector_db:
   local_dir: "vector_store"
 ```
 
-#### 4.2.2.5 测试用例（tests/test_impl.py）
+#### 4.2.3.5 测试用例（tests/test_impl.py）
 ```python
 import unittest
 from vector_db_module.core.impl import FaissVectorDB
@@ -1220,8 +1267,8 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-### 4.2.3 状态存储模块（state_store_module）
-#### 4.2.3.1 模块功能
+### 4.2.4 状态存储模块（state_store_module）
+#### 4.2.4.1 模块功能
 
 用于存储Agent运行状态（会话记忆、任务步骤、工具调用记录等），支持：
 
@@ -1230,7 +1277,7 @@ if __name__ == "__main__":
 * append_event(session_id, event)
 * clear_state(session_id)
 
-#### 4.2.3.2 抽象基类（core/base.py）
+#### 4.2.4.2 抽象基类（core/base.py）
 ```python
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
@@ -1254,7 +1301,7 @@ class BaseStateStore(ABC):
     def clear_state(self, session_id: str) -> bool:
         pass
 ```
-#### 4.2.3.3 具体实现（core/impl.py）——本地JSON存储示例
+#### 4.2.4.3 具体实现（core/impl.py）——本地JSON存储示例
 ```python
 import os
 import json
@@ -1316,7 +1363,7 @@ class LocalStateStore(BaseStateStore):
             return False
 
 ```
-#### 4.2.3.4 配置示例
+#### 4.2.4.4 配置示例
 ```yaml
 state_store:
   dir: "state_store"
@@ -1872,32 +1919,42 @@ def build_handler() -> RequestHandler:
 没有“索引构建”，RAG无法检索。本节为完整性必须补充。
 
 ## 6.1 流程
-1. document_store.load_document(s) 解析并落盘 
-2. embedding.embed_text(s) 生成向量 
-3. vector_db.upsert_vectors 写入向量，并写入 metadata（至少包含doc_id）
+
+1. document_parser.parse_file(s) 解析文件为文本（不落盘）  
+2. document_store.create_document + save_document 生成doc_id并落盘保存解析后的文本  
+3. embedding.embed_text(s) 生成向量  
+4. vector_db.upsert_vectors 写入向量，并写入 metadata（至少包含doc_id）
 
 ## 6.2 索引构建脚本示例（build_index.py）
+
 ```python
+from document_parser_module.core.impl import LocalDocumentParser
 from document_store_module.core.impl import LocalDocumentStore
 from embedding_module.core.impl import STEmbedding
 from vector_db_module.core.impl import FaissVectorDB
 
 def build(folder_path: str):
+    parser = LocalDocumentParser()
     store = LocalDocumentStore()
     emb = STEmbedding()
     vdb = FaissVectorDB()
 
-    docs = store.load_documents(folder_path)
+    parsed_list = parser.parse_folder(folder_path)
 
     vectors = []
-    for d in docs:
-        vec = emb.embed_text(d["content"][:2000])  # 简化：截断避免太长
+    for p in parsed_list:
+        # 1) 生成doc_id并落盘保存（存储模块只做存储）
+        doc = store.create_document(p["content"], p["file_name"])
+        store.save_document(doc)
+
+        # 2) 生成向量并写入向量库
+        vec = emb.embed_text(doc["content"][:2000])  # 简化：截断避免太长
         vectors.append({
-            "vector_id": d["doc_id"],  # 简化：vector_id=doc_id，便于追踪
+            "vector_id": doc["doc_id"],  # 简化：vector_id=doc_id，便于追踪
             "embedding": vec,
             "metadata": {
-                "doc_id": d["doc_id"],
-                "file_name": d["file_name"]
+                "doc_id": doc["doc_id"],
+                "file_name": doc["file_name"]
             }
         })
 
@@ -1906,7 +1963,6 @@ def build(folder_path: str):
 
 if __name__ == "__main__":
     build("data_docs")
-    
 ```
 # 7. 开发与交付规范（补全闭环）
 ## 7.1 每个模块交付物清单（必须）
