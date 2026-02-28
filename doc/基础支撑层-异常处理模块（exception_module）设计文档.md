@@ -457,3 +457,5 @@ A：未知异常会被自动捕获，返回错误码UNKNOWN_ERROR，异常信息
 |TOOL_NOT_FOUND|Agent模块|工具不存在：{tool_name}，请检查工具配置|AgentException|Agent调用工具时，指定的工具未注册或不存在|
 |TOOL_CALL_FAILED|Agent模块|工具调用失败：{tool_name}，请检查工具状态或参数|AgentException|Agent调用工具时，工具本身执行失败|
 |EXCEPTION_HANDLER_ERROR|异常处理模块|异常处理器执行失败，请检查日志模块或异常配置|无（系统异常）|异常处理模块自身执行出错，如日志模块调用失败|
+
+返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)
