@@ -1,0 +1,4 @@
+# This module uses only Python standard library by default.
+# In the full system it depends on:
+# - config_module (ConfigManager)
+# - log_module (SystemLogger)
