@@ -1,0 +1,3 @@
+# exception_module requirements
+# 本模块原则上仅依赖基础支撑层内部 log_module
+# 若 log_module 通过同一仓库/monorepo 提供，则无需在此单独声明 pip 依赖

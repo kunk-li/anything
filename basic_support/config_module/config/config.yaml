@@ -1,0 +1,68 @@
+# 全局配置
+global:
+  env: "development"
+  log_level: "INFO"
+  hot_reload: true
+  hot_reload_interval: 5
+  backup_enabled: true
+  backup_interval: 24
+  backup_retention: 7
+
+# 配置校验规则
+validate_rules:
+  global.env:
+    type: "str"
+    required: true
+    range: ["development", "test", "production"]
+  vector_db.vector_dimension:
+    type: "int"
+    required: true
+    range: [128, 2048]
+  llm.temperature:
+    type: "float"
+    required: true
+    range: [0.0, 1.0]
+  security.auth_enabled:
+    type: "bool"
+    required: true
+
+vector_db:
+  type: "faiss"
+  host: "localhost"
+  api_key: "${VECTOR_DB_API_KEY}"
+  index_name: "rag-agent-index"
+  vector_dimension: 768
+
+embedding:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  max_length: 512
+
+llm:
+  model_name: "gpt-3.5-turbo"
+  api_key: "${LLM_API_KEY}"
+  temperature: 0.7
+
+agent:
+  max_retries: 3
+  timeout: 30
+
+document_store:
+  dir: "documents"
+
+state_store:
+  dir: "state_store"
+
+security:
+  auth_enabled: true
+  auth_type: "apikey"
+  api_keys:
+    - "${API_KEY_1}"
+  jwt_secret: "${JWT_SECRET}"
+  sensitive_config_secret: "${SENSITIVE_CONFIG_SECRET}"
+
+remote_config:
+  enabled: false
+  url: "http://nacos-server:8848/nacos/v1/cs/configs"
+  data_id: "rag-agent-config"
+  group: "DEFAULT_GROUP"
+  config_type: "yaml"
