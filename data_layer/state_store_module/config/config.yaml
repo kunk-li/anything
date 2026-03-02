@@ -1,0 +1,4 @@
+state_store:
+  dir: "state_store"
+  expire_hours: 24
+  max_size: 1073741824

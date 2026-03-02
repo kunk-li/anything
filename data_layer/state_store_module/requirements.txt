@@ -1,0 +1,2 @@
+# Python 3.10+
+# 本模块仅依赖系统基础支撑层模块（config_module/log_module/exception_module）与标准库
