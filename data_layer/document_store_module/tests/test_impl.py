@@ -79,7 +79,7 @@ class TestLocalDocumentStore(unittest.TestCase):
         self.assertTrue(self.store.save_document(doc))
 
         # remove info file to create type4
-        info_path = os.path.join(self.tmpdir, f"{doc['doc_id']}.info.json")
+        info_path = doc["info_file_path"]
         os.remove(info_path)
 
         zombies = self.store.identify_zombie_files(threshold_days=0)

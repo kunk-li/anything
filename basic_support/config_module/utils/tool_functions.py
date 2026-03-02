@@ -7,7 +7,7 @@ import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple
 
-from cryptography.fernet import Fernet
+
 
 
 ENC_PREFIX = "ENC::"
@@ -83,12 +83,14 @@ def derive_fernet_key(secret_key: str) -> bytes:
 
 
 def encrypt_value(value: Any, secret_key: str) -> str:
+    from cryptography.fernet import Fernet
     f = Fernet(derive_fernet_key(secret_key))
     token = f.encrypt(str(value).encode("utf-8")).decode("utf-8")
     return f"{ENC_PREFIX}{token}"
 
 
 def decrypt_value(value: str, secret_key: str) -> str:
+    from cryptography.fernet import Fernet
     if not isinstance(value, str) or not value.startswith(ENC_PREFIX):
         return value
     token = value[len(ENC_PREFIX):]

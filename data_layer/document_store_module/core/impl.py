@@ -24,32 +24,9 @@ from ..utils.tool_functions import (
     json_load,
 )
 
-# Optional external dependencies (project-level config/log modules).
-try:
-    from config_module.core.impl import ConfigManager  # type: ignore
-except Exception:  # pragma: no cover
-    class ConfigManager:
-        """Minimal fallback ConfigManager.
+from config_module import ConfigManager  # type: ignore
+from log_module import SystemLogger  # type: ignore
 
-        - Reads from env variables with prefix DOCUMENT_STORE_ (optional).
-        - Otherwise returns default.
-        """
-
-        def get(self, key: str, default=None):
-            env_key = "DOCUMENT_STORE_" + key.upper().replace(".", "_")
-            return os.getenv(env_key, default)
-
-try:
-    from log_module.core.impl import SystemLogger  # type: ignore
-except Exception:  # pragma: no cover
-    class SystemLogger:
-        def __init__(self, module_name: str = "LocalDocumentStore"):
-            self.module_name = module_name
-        def debug(self, msg: str, *args, **kwargs): pass
-        def info(self, msg: str, *args, **kwargs): pass
-        def warning(self, msg: str, *args, **kwargs): pass
-        def error(self, msg: str, *args, **kwargs): pass
-        def critical(self, msg: str, *args, **kwargs): pass
 
 
 class LocalDocumentStore(BaseDocumentStore):
@@ -63,12 +40,12 @@ class LocalDocumentStore(BaseDocumentStore):
 
     def __init__(self):
         self.config_manager = ConfigManager()
-        self.logger = SystemLogger(module_name="LocalDocumentStore")
+        self.logger = SystemLogger()
 
         defaults = DocumentStoreConfig()
 
-        self.storage_dir = self.config_manager.get("document_store.storage_dir", default=defaults.storage_dir)
-        self.supported_file_types = self.config_manager.get(
+        self.storage_dir = self.config_manager.get_config("document_store.storage_dir", default=defaults.storage_dir)
+        self.supported_file_types = self.config_manager.get_config(
             "document_store.supported_file_types", default=defaults.supported_file_types
         )
         # ConfigManager may return string for list; normalize.
@@ -76,19 +53,19 @@ class LocalDocumentStore(BaseDocumentStore):
             self.supported_file_types = [x.strip().lower() for x in self.supported_file_types.split(",") if x.strip()]
 
         self.hash_algorithm = str(
-            self.config_manager.get("document_store.hash_algorithm", default=defaults.hash_algorithm)
+            self.config_manager.get_config("document_store.hash_algorithm", default=defaults.hash_algorithm)
         ).lower()
 
         self.zombie_threshold = int(
-            self.config_manager.get("document_store.zombie_threshold_days", default=defaults.zombie_threshold_days)
+            self.config_manager.get_config("document_store.zombie_threshold_days", default=defaults.zombie_threshold_days)
         )
 
-        self.core_doc_prefix = self.config_manager.get("document_store.core_doc_prefix", default=defaults.core_doc_prefix)
+        self.core_doc_prefix = self.config_manager.get_config("document_store.core_doc_prefix", default=defaults.core_doc_prefix)
         if isinstance(self.core_doc_prefix, str):
             self.core_doc_prefix = [x.strip() for x in self.core_doc_prefix.split(",") if x.strip()]
 
-        self.backup_dir = self.config_manager.get("document_store.backup_dir", default=defaults.backup_dir)
-        self.hash_map_filename = self.config_manager.get("document_store.hash_map_filename", default=defaults.hash_map_filename)
+        self.backup_dir = self.config_manager.get_config("document_store.backup_dir", default=defaults.backup_dir)
+        self.hash_map_filename = self.config_manager.get_config("document_store.hash_map_filename", default=defaults.hash_map_filename)
 
         self.hash_map_path = os.path.join(self.storage_dir, self.hash_map_filename)
         self.hash_doc_map: Dict[str, str] = self._load_hash_map()

@@ -10,19 +10,19 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 # External logger is optional for standalone usage.
-try:
-    from log_module.core.impl import SystemLogger  # type: ignore
-except Exception:  # pragma: no cover
-    class SystemLogger:  # minimal fallback
-        def __init__(self, module_name: str = "tool_functions"):
-            self.module_name = module_name
-        def debug(self, msg: str, *args, **kwargs): pass
-        def info(self, msg: str, *args, **kwargs): pass
-        def warning(self, msg: str, *args, **kwargs): pass
-        def error(self, msg: str, *args, **kwargs): pass
-        def critical(self, msg: str, *args, **kwargs): pass
-
-logger = SystemLogger(module_name="tool_functions")
+# try:
+#     from log_module.core.impl import SystemLogger  # type: ignore
+# except Exception:  # pragma: no cover
+#     class SystemLogger:  # minimal fallback
+#         def __init__(self, module_name: str = "tool_functions"):
+#             self.module_name = module_name
+#         def debug(self, msg: str, *args, **kwargs): pass
+#         def info(self, msg: str, *args, **kwargs): pass
+#         def warning(self, msg: str, *args, **kwargs): pass
+#         def error(self, msg: str, *args, **kwargs): pass
+#         def critical(self, msg: str, *args, **kwargs): pass
+from log_module.core.impl import SystemLogger
+logger = SystemLogger()
 
 ILLEGAL_FILE_NAME_CHARS = set('/\\:*?"<>|')  # cross-platform unsafe chars
 
