@@ -929,3 +929,5 @@ def create_document(self, content: str, file_name: str, file_type: str, content_
 - 数据迁移：若扩展存储方式（如从本地存储迁移到S3存储），需提供数据迁移工具和迁移方案，确保原有数据不丢失、可正常访问。
 
 - 兼容性测试：扩展后需进行兼容性测试，验证与上层模块、基础支撑层模块的兼容性，确保整个系统稳定运行。
+
+返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)
