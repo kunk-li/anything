@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Dict, Tuple
 
-from llm_adapter_module.model.data_model import (
-    LLMRequest,
-    LLMResponse,
-    FileContent,
-    MediaContent,
-    MultimodalResult,
-)
+from llm_adapter_module.model.data_model import LLMRequest, LLMResponse, MediaContent, MultimodalResult, FileContent
+
 
 class BaseLLMAdapter(ABC):
     """大模型通用适配器抽象基类"""
 
     @abstractmethod
     def __init__(self, model_name: str):
-        self.model_name = model_name
+        pass
 
     @abstractmethod
     def call(self, request: LLMRequest) -> LLMResponse:
@@ -79,7 +74,7 @@ class BaseLLMService(ABC):
         pass
 
     @abstractmethod
-    def call_by_file(self, file_content: FileContent, request_type: str, model_param=None, model_name: str = "default") -> LLMResponse:
+    def call_by_file(self, file_content: FileContent, request_type: str, model_param: Any = None) -> LLMResponse:
         pass
 
     @abstractmethod

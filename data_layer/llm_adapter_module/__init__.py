@@ -1,26 +1,15 @@
-"""数据层-大模型对接模块（llm_adapter_module）
+"""llm_adapter_module package.
 
-对外暴露：
-- LLMService：统一大模型调用入口
-- 数据模型：LLMRequest / LLMResponse / FileContent / MediaContent 等
+Expose core service for external modules.
 """
-
 from .core.impl import LLMService
 from .model.data_model import (
-    MediaContent,
-    FileContent,
-    LLMParam,
-    LLMRequest,
-    MultimodalResult,
-    LLMResponse,
+    FileContent, MediaContent,
+    LLMRequest, LLMResponse, LLMParam, MultimodalResult,
 )
 
 __all__ = [
     "LLMService",
-    "MediaContent",
-    "FileContent",
-    "LLMParam",
-    "LLMRequest",
-    "MultimodalResult",
-    "LLMResponse",
+    "FileContent", "MediaContent",
+    "LLMRequest", "LLMResponse", "LLMParam", "MultimodalResult",
 ]

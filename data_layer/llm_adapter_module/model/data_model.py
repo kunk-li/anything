@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any
 
-RequestType = Literal["VECTOR", "CHAT", "MULTIMODAL"]
-MediaType = Literal["image", "audio", "video"]
 
 @dataclass
 class MediaContent:
     """媒体内容子模型（适配多模态）"""
-    media_type: MediaType
-    media_path: str
+    media_type: str                 # image/audio/video
+    media_path: str                 # 本地/云存储路径
     media_base64: Optional[str] = None
     media_metadata: Optional[Dict[str, Any]] = None
 
+
 @dataclass
 class FileContent:
-    """文件内容标准化模型（支持多模态），对接文档解析模块"""
+    """文件内容标准化模型（支持多模态）"""
     file_name: str
     file_type: str
     text_content: Optional[str] = None
@@ -24,6 +23,7 @@ class FileContent:
     media_contents: Optional[List[MediaContent]] = None
     file_size: Optional[int] = None
     parse_time: Optional[str] = None
+
 
 @dataclass
 class LLMParam:
@@ -36,18 +36,18 @@ class LLMParam:
     media_process_mode: str = "auto"  # auto/extract/raw
     extra_params: Optional[Dict[str, Any]] = None
 
+
 @dataclass
 class LLMRequest:
     """大模型统一请求模型（支持多模态）"""
-    request_type: RequestType
+    request_type: str                              # VECTOR / CHAT / MULTIMODAL
     input_text: Optional[str] = None
     batch_input: Optional[List[str]] = None
     file_content: Optional[FileContent] = None
     media_input: Optional[List[MediaContent]] = None
     model_param: LLMParam = field(default_factory=LLMParam)
     model_name: str = "default"
-    # 可选：多轮对话上下文。若传入则优先使用 messages。
-    messages: Optional[List[Dict[str, Any]]] = None
+
 
 @dataclass
 class MultimodalResult:
@@ -55,6 +55,7 @@ class MultimodalResult:
     text_result: Optional[str] = None
     media_result: Optional[Dict[str, Any]] = None
     confidence: Optional[float] = None
+
 
 @dataclass
 class LLMResponse:

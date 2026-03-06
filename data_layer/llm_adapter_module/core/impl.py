@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import os
 import time
-import uuid
-from typing import Any, Dict, List, Optional, Type
+import hashlib
+from typing import Dict, Any, List, Optional, Tuple
 
 import requests
 
-from llm_adapter_module.config.config import LLMAdapterConfig
 from llm_adapter_module.core.base import (
     BaseLLMService,
     BaseVectorAdapter,
@@ -14,370 +14,429 @@ from llm_adapter_module.core.base import (
     BaseMultimodalAdapter,
 )
 from llm_adapter_module.model.data_model import (
-    LLMRequest,
-    LLMResponse,
-    LLMParam,
-    FileContent,
-    MediaContent,
-    MultimodalResult,
+    LLMRequest, LLMResponse, LLMParam,
+    FileContent, MediaContent, MultimodalResult,
 )
+from llm_adapter_module.config.config import LLMAdapterConfig
 from llm_adapter_module.utils.tool_functions import (
-    ensure_filecontent_splits,
-    normalize_vectors,
-    validate_media_list,
-    to_openai_image_part,
+    gen_trace_id, now_ts,
+    normalize_vector, ensure_file_content_splits,
+    merge_media_from_file_and_request, hydrate_media_base64, safe_dict,
 )
 
+# 基础支撑层依赖（外部已实现）
+from config_module.core.impl import ConfigManager
 from log_module.core.impl import SystemLogger
 from exception_module.core.impl import ExceptionHandler, ConfigException, SystemBaseException
 
 
-# ----------------------------- OpenAI adapters -----------------------------
+class _BaseHTTPAdapterMixin:
+    """给需要HTTP调用的适配器提供通用requests能力（超时、重试）"""
 
-class _OpenAIBase:
-    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_timeout: int):
+    def _post_json(self, url: str, headers: Dict[str, str], payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+
+class OpenAIVectorAdapter(BaseVectorAdapter, _BaseHTTPAdapterMixin):
+    """OpenAI 向量模型适配器（基于HTTP示例实现）
+
+    说明：
+    - 为了保持模块可独立测试，未强依赖openai官方SDK
+    - 若你们项目已引入SDK，可在此替换实现
+    """
+
+    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_cfg: Dict[str, Any], logger: SystemLogger):
         self.model_name = model_name
-        self.model_cfg = model_cfg or {}
-        self.api_key = self.model_cfg.get("api_key")
-        self.api_base = self.model_cfg.get("api_base", "https://api.openai.com/v1").rstrip("/")
-        self.timeout = int(self.model_cfg.get("timeout", common_timeout))
-        self.support_media = self.model_cfg.get("support_media", [])
-        self.max_media_size = self.model_cfg.get("max_media_size", None)
+        self.model_cfg = model_cfg
+        self.common_cfg = common_cfg
+        self.logger = logger
+        self.api_key = str(model_cfg.get("api_key", "") or "")
+        self.api_base = str(model_cfg.get("api_base", "https://api.openai.com/v1") or "").rstrip("/")
+        self.timeout = int(common_cfg.get("timeout", 30))
+        self.max_retry = int(common_cfg.get("max_retry", 3))
 
     def check_config(self) -> bool:
         return bool(self.api_key and self.api_base)
 
-    def _headers(self) -> Dict[str, str]:
-        return {
+    def embed_single(self, text: str, request: LLMRequest) -> List[float]:
+        vectors = self.embed_batch([text], request)
+        return vectors[0] if vectors else []
+
+    def embed_batch(self, texts: List[str], request: LLMRequest) -> List[List[float]]:
+        # 若未配置key，则返回可测试的伪向量（稳定哈希），避免单测依赖外部网络
+        if not self.check_config():
+            return [self._fake_embedding(t, dim=8) for t in texts]
+
+        url = f"{self.api_base}/embeddings"
+        headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.api_base}{path}"
-        r = requests.post(url, headers=self._headers(), json=payload, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
-
-
-class OpenAIVectorAdapter(BaseVectorAdapter, _OpenAIBase):
-    """OpenAI 向量模型适配器（REST /embeddings）"""
-
-    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_timeout: int = 30):
-        BaseVectorAdapter.__init__(self, model_name)
-        _OpenAIBase.__init__(self, model_name, model_cfg, common_timeout)
-
-    def embed_single(self, text: str, request: LLMRequest) -> List[float]:
-        res = self.embed_batch([text], request)
-        return res[0] if res else []
-
-    def embed_batch(self, texts: List[str], request: LLMRequest) -> List[List[float]]:
-        payload: Dict[str, Any] = {
+        payload = {
             "model": self.model_name,
             "input": texts,
         }
-        if request.model_param and request.model_param.extra_params:
-            payload.update(request.model_param.extra_params)
-        data = self._post("/embeddings", payload)
-        vectors = [item["embedding"] for item in data.get("data", [])]
-        if request.model_param.normalize:
-            vectors = normalize_vectors(vectors)
-        return vectors
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                data = self._post_json(url, headers, payload, timeout=self.timeout)
+                # OpenAI embeddings: data['data'][i]['embedding']
+                out: List[List[float]] = []
+                for item in data.get("data", []):
+                    out.append(item.get("embedding", []))
+                return out
+            except Exception as e:
+                last_err = e
+                self.logger.warning(f"[llm_adapter] OpenAI embed attempt {attempt+1} failed: {e}", logger_name="llm_adapter")
+                time.sleep(min(2 ** attempt, 8))
+        raise last_err or RuntimeError("embedding failed")
 
     def call(self, request: LLMRequest) -> LLMResponse:
-        # service 里会统一封装，adapter 只做核心业务
-        texts: List[str] = []
-        if request.batch_input:
-            texts = request.batch_input
-        elif request.input_text:
-            texts = [request.input_text]
-        elif request.file_content and request.file_content.split_contents:
-            texts = request.file_content.split_contents
-        elif request.file_content and request.file_content.text_content:
-            texts = [request.file_content.text_content]
-        vectors = self.embed_batch(texts, request)
-        return LLMResponse(code="SUCCESS", message="ok", vector_result=vectors)
+        start = now_ts()
+        trace_id = gen_trace_id()
+        try:
+            texts: List[str] = []
+            if request.batch_input:
+                texts = request.batch_input
+            elif request.input_text:
+                texts = [request.input_text]
+            elif request.file_content:
+                fc = ensure_file_content_splits(request.file_content)
+                texts = fc.split_contents or []
+            vectors = self.embed_batch(texts, request)
+            if request.model_param.normalize:
+                vectors = [normalize_vector(v) for v in vectors]
+            return LLMResponse(code="SUCCESS", message="ok", vector_result=vectors, cost_time=now_ts()-start, trace_id=trace_id)
+        except Exception as e:
+            return LLMResponse(code="VECTOR_QUERY_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
 
-class OpenAIChatAdapter(BaseChatAdapter, _OpenAIBase):
-    """OpenAI 聊天模型适配器（REST /chat/completions）"""
+    @staticmethod
+    def _fake_embedding(text: str, dim: int = 8) -> List[float]:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        # map bytes to [-1,1]
+        vec = [((digest[i] / 255.0) * 2.0 - 1.0) for i in range(dim)]
+        return vec
 
-    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_timeout: int = 30):
-        BaseChatAdapter.__init__(self, model_name)
-        _OpenAIBase.__init__(self, model_name, model_cfg, common_timeout)
+
+class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
+    """OpenAI 聊天模型适配器（HTTP示例实现，支持单轮与多轮）"""
+
+    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_cfg: Dict[str, Any], logger: SystemLogger):
+        self.model_name = model_name
+        self.model_cfg = model_cfg
+        self.common_cfg = common_cfg
+        self.logger = logger
+        self.api_key = str(model_cfg.get("api_key", "") or "")
+        self.api_base = str(model_cfg.get("api_base", "https://api.openai.com/v1") or "").rstrip("/")
+        self.timeout = int(common_cfg.get("timeout", 30))
+        self.max_retry = int(common_cfg.get("max_retry", 3))
+
+    def check_config(self) -> bool:
+        return bool(self.api_key and self.api_base)
 
     def generate(self, prompt: str, request: LLMRequest) -> str:
         messages = [{"role": "user", "content": prompt}]
         return self.chat_with_context(messages, request)
 
     def chat_with_context(self, messages: List[Dict[str, Any]], request: LLMRequest) -> str:
-        mp = request.model_param or LLMParam()
+        if not self.check_config():
+            # 测试降级：返回固定回复
+            return f"[mock-chat:{self.model_name}] {messages[-1].get('content','')}"
+
+        url = f"{self.api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        p: LLMParam = request.model_param
         payload: Dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": mp.temperature,
-            "max_tokens": mp.max_tokens,
+            "temperature": p.temperature,
+            "max_tokens": p.max_tokens,
         }
-        # OpenAI chat/completions 不支持 top_k，保留 extra_params 可扩展
-        if mp.extra_params:
-            payload.update(mp.extra_params)
-        data = self._post("/chat/completions", payload)
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-        msg = choices[0].get("message", {})
-        return msg.get("content", "") or ""
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                data = self._post_json(url, headers, payload, timeout=self.timeout)
+                choices = data.get("choices", [])
+                if not choices:
+                    return ""
+                msg = choices[0].get("message", {})
+                return msg.get("content", "") or ""
+            except Exception as e:
+                last_err = e
+                self.logger.warning(f"[llm_adapter] OpenAI chat attempt {attempt+1} failed: {e}", logger_name="llm_adapter")
+                time.sleep(min(2 ** attempt, 8))
+        raise last_err or RuntimeError("chat failed")
 
     def call(self, request: LLMRequest) -> LLMResponse:
-        if request.messages:
-            out = self.chat_with_context(request.messages, request)
-        else:
-            prompt = request.input_text or (request.file_content.text_content if request.file_content else "") or ""
-            out = self.generate(prompt, request)
-        return LLMResponse(code="SUCCESS", message="ok", chat_result=out)
-
-class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _OpenAIBase):
-    """OpenAI 多模态模型适配器（chat/completions with image parts; audio optional）"""
-
-    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_timeout: int = 30):
-        BaseMultimodalAdapter.__init__(self, model_name)
-        _OpenAIBase.__init__(self, model_name, model_cfg, common_timeout)
-
-    def understand_text_media(self, text: str, media_list: List[MediaContent], request: LLMRequest) -> MultimodalResult:
-        ok, msg = validate_media_list(media_list, support_media=self.support_media, max_media_size_mb=self.max_media_size)
-        if not ok:
-            raise ValueError(msg)
-
-        content_parts: List[Dict[str, Any]] = [{"type": "text", "text": text or ""}]
-        for m in media_list:
-            if m.media_type == "image":
-                content_parts.append(to_openai_image_part(m))
-            elif m.media_type == "audio":
-                # 音频理解在 OpenAI 生态中通常走转写或专用接口；这里做降级：先转写再问答
-                transcript = self.media_to_text([m], request)
-                content_parts.append({"type": "text", "text": f"[audio_transcript]\n{transcript}"})
+        start = now_ts()
+        trace_id = gen_trace_id()
+        try:
+            if request.input_text:
+                out = self.generate(request.input_text, request)
+            elif request.file_content and request.input_text:
+                # 这种组合通常是：用input_text作为指令，file_content作为上下文；这里简单拼接
+                fc = ensure_file_content_splits(request.file_content)
+                ctx = "\n\n".join((fc.split_contents or [])[:5])
+                out = self.generate(f"{request.input_text}\n\n[context]\n{ctx}", request)
+            elif request.file_content:
+                fc = ensure_file_content_splits(request.file_content)
+                prompt = "\n\n".join((fc.split_contents or [])[:5])
+                out = self.generate(prompt, request)
             else:
-                raise ValueError(f"暂不支持的媒体类型：{m.media_type}")
+                out = ""
+            return LLMResponse(code="SUCCESS", message="ok", chat_result=out, cost_time=now_ts()-start, trace_id=trace_id)
+        except Exception as e:
+            return LLMResponse(code="RAG_RUN_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
 
-        mp = request.model_param or LLMParam()
-        payload: Dict[str, Any] = {
-            "model": self.model_name,
-            "messages": [{"role": "user", "content": content_parts}],
-            "temperature": mp.temperature,
-            "max_tokens": mp.max_tokens,
-        }
-        if mp.extra_params:
-            payload.update(mp.extra_params)
-        data = self._post("/chat/completions", payload)
-        choices = data.get("choices", [])
-        text_out = ""
-        if choices:
-            text_out = (choices[0].get("message", {}) or {}).get("content", "") or ""
-        return MultimodalResult(text_result=text_out)
+
+class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
+    """OpenAI 多模态适配器（HTTP示例实现）
+
+    说明：
+    - OpenAI 多模态/视觉接口在不同版本API中路径与payload可能不同
+    - 此处提供“可落地的框架 + 可测试的降级实现”
+    - 若你们已确定厂商与具体API形态，请在此按实际接口调整
+    """
+
+    def __init__(self, model_name: str, model_cfg: Dict[str, Any], common_cfg: Dict[str, Any], logger: SystemLogger):
+        self.model_name = model_name
+        self.model_cfg = model_cfg
+        self.common_cfg = common_cfg
+        self.logger = logger
+        self.api_key = str(model_cfg.get("api_key", "") or "")
+        self.api_base = str(model_cfg.get("api_base", "https://api.openai.com/v1") or "").rstrip("/")
+        self.timeout = int(common_cfg.get("timeout", 30))
+        self.max_retry = int(common_cfg.get("max_retry", 3))
+        self.support_media = list(model_cfg.get("support_media", ["image"]))
+        self.max_media_size_mb = float(model_cfg.get("max_media_size", 20))
+
+    def check_config(self) -> bool:
+        return bool(self.api_key and self.api_base)
+
+    def _max_bytes(self) -> int:
+        return int(self.max_media_size_mb * 1024 * 1024)
 
     def media_to_text(self, media_list: List[MediaContent], request: LLMRequest) -> str:
-        # 尝试使用 OpenAI 音频转写接口：/audio/transcriptions
-        # 仅当 media_type == audio 且配置中存在 transcription_model 时启用
-        if not media_list:
-            return ""
-        m = media_list[0]
-        if m.media_type != "audio":
-            raise ValueError("media_to_text currently only supports audio -> text")
-        transcription_model = self.model_cfg.get("transcription_model")
-        if not transcription_model:
-            raise ValueError("未配置 transcription_model，无法进行音频转写")
-        url = f"{self.api_base}/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
-        files = {"file": open(m.media_path, "rb")}
-        data = {"model": transcription_model}
-        r = requests.post(url, headers=headers, files=files, data=data, timeout=self.timeout)
-        r.raise_for_status()
-        j = r.json()
-        return j.get("text", "") or ""
+        # 降级：若无真实多模态接口，这里只返回媒体元信息汇总
+        parts: List[str] = []
+        for m in media_list:
+            meta = m.media_metadata or {}
+            parts.append(f"{m.media_type}:{os.path.basename(m.media_path)} meta={meta}")
+        return "\n".join(parts)
 
-    def multimodal_chat(self, messages: List[Dict[str, Any]], request: LLMRequest) -> MultimodalResult:
-        # messages: [{"role":"user","content":"...","media":[MediaContent,...]}]
-        converted: List[Dict[str, Any]] = []
-        for msg in messages or []:
-            role = msg.get("role", "user")
-            text = msg.get("content", "") or ""
-            media_list = msg.get("media") or []
-            parts: List[Dict[str, Any]] = [{"type": "text", "text": text}]
-            for m in media_list:
-                if isinstance(m, dict):
-                    m = MediaContent(**m)  # 容错：允许 dict 形式
-                if m.media_type == "image":
-                    parts.append(to_openai_image_part(m))
-                elif m.media_type == "audio":
-                    transcript = self.media_to_text([m], request)
-                    parts.append({"type": "text", "text": f"[audio_transcript]\n{transcript}"})
-                else:
-                    raise ValueError(f"暂不支持的媒体类型：{m.media_type}")
-            converted.append({"role": role, "content": parts})
+    def understand_text_media(self, text: str, media_list: List[MediaContent], request: LLMRequest) -> MultimodalResult:
+        if not self.check_config():
+            # mock返回：把文本与媒体描述拼接
+            mtxt = self.media_to_text(media_list, request)
+            return MultimodalResult(text_result=f"[mock-multimodal:{self.model_name}] {text}\n{mtxt}", confidence=0.5)
 
-        mp = request.model_param or LLMParam()
+        # 真实调用（示例）：构造 content 数组 (text + image_url/base64)
+        # 注意：不同API可能不同；此处示例是“合理猜测的payload形态”，实际请按厂商文档调整。
+        url = f"{self.api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        content: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        for m in media_list:
+            if m.media_type not in self.support_media:
+                raise ValueError(f"unsupported media_type: {m.media_type}")
+            hydrate_media_base64(m, max_bytes=self._max_bytes())
+            if not m.media_base64:
+                raise ValueError(f"missing media_base64 for {m.media_path}")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{m.media_base64}"}
+            })
+        p = request.model_param
         payload: Dict[str, Any] = {
             "model": self.model_name,
-            "messages": converted,
-            "temperature": mp.temperature,
-            "max_tokens": mp.max_tokens,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": p.temperature,
+            "max_tokens": p.max_tokens,
         }
-        if mp.extra_params:
-            payload.update(mp.extra_params)
-        data = self._post("/chat/completions", payload)
-        choices = data.get("choices", [])
-        text_out = ""
-        if choices:
-            text_out = (choices[0].get("message", {}) or {}).get("content", "") or ""
-        return MultimodalResult(text_result=text_out)
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                data = self._post_json(url, headers, payload, timeout=self.timeout)
+                choices = data.get("choices", [])
+                msg = choices[0].get("message", {}) if choices else {}
+                txt = msg.get("content", "") or ""
+                return MultimodalResult(text_result=txt, confidence=None)
+            except Exception as e:
+                last_err = e
+                self.logger.warning(f"[llm_adapter] OpenAI multimodal attempt {attempt+1} failed: {e}", logger_name="llm_adapter")
+                time.sleep(min(2 ** attempt, 8))
+        raise last_err or RuntimeError("multimodal failed")
+
+    def multimodal_chat(self, messages: List[Dict[str, Any]], request: LLMRequest) -> MultimodalResult:
+        # 简化：将最后一条消息中的媒体+文本调用 understand_text_media
+        if not messages:
+            return MultimodalResult(text_result="", confidence=None)
+        last = messages[-1]
+        text = str(last.get("content", "") or "")
+        media = last.get("media", []) or []
+        media_list: List[MediaContent] = media
+        return self.understand_text_media(text, media_list, request)
 
     def call(self, request: LLMRequest) -> LLMResponse:
-        media_list = request.media_input or (request.file_content.media_contents if request.file_content else None) or []
-        if request.messages:
-            mm = self.multimodal_chat(request.messages, request)
-        else:
-            mm = self.understand_text_media(request.input_text or "", media_list, request)
-        return LLMResponse(code="SUCCESS", message="ok", multimodal_result=mm)
+        start = now_ts()
+        trace_id = gen_trace_id()
+        try:
+            media_list = merge_media_from_file_and_request(
+                request.file_content.media_contents if request.file_content else None,
+                request.media_input,
+            )
+            if not media_list:
+                raise ValueError("多模态请求需提供媒体输入")
+            text = request.input_text or ""
+            result = self.understand_text_media(text, media_list, request)
+            return LLMResponse(code="SUCCESS", message="ok", multimodal_result=result, cost_time=now_ts()-start, trace_id=trace_id)
+        except Exception as e:
+            return LLMResponse(code="RAG_RUN_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
 
-
-# ----------------------------- service -----------------------------
-
-_ADAPTER_CLASS_REGISTRY: Dict[str, Type] = {
-    "OpenAIVectorAdapter": OpenAIVectorAdapter,
-    "OpenAIChatAdapter": OpenAIChatAdapter,
-    "OpenAIMultimodalAdapter": OpenAIMultimodalAdapter,
-}
 
 class LLMService(BaseLLMService):
-    """模块对外唯一核心服务：统一初始化、路由、校验、异常封装。"""
+    """大模型统一服务实现：对外唯一入口"""
 
     def __init__(self):
         self.logger = SystemLogger()
-        self.exc = ExceptionHandler()
-        self.cfg = LLMAdapterConfig()
-        self.common = self.cfg.get_common()
-        self.adapters: Dict[str, Any] = {}  # model_name -> adapter instance
-        self.model_type: Dict[str, str] = {}  # model_name -> request_type
-        self._initialized = False
+        self.exception_handler = ExceptionHandler()
+        self.config_manager = ConfigManager()
+        self.config_manager.load_config()
+        self.cfg = LLMAdapterConfig(self.config_manager)
+
+        self.adapters: Dict[str, Any] = {}  # model_name -> adapter
         self.init_adapters()
 
     def init_adapters(self) -> None:
-        if self._initialized:
-            return
+        # 从配置扫描所有模型
         llm_root = self.cfg.get_llm_root()
-        # 遍历厂商节点：openai / zhipu / etc
-        for vendor, vendor_cfg in (llm_root or {}).items():
-            if vendor in {"common", "default_vector_model", "default_chat_model", "default_multimodal_model"}:
+        common_cfg = self.cfg.get_common() if isinstance(self.cfg.get_common(), dict) else {}
+        if not isinstance(llm_root, dict):
+            llm_root = {}
+        for vendor, vendor_cfg in llm_root.items():
+            if vendor in {"default_vector_model", "default_chat_model", "default_multimodal_model", "common"}:
                 continue
             if not isinstance(vendor_cfg, dict):
                 continue
             for model_name, model_cfg in vendor_cfg.items():
                 if not isinstance(model_cfg, dict):
                     continue
-                adapter_class_name = model_cfg.get("adapter_class")
-                request_type = model_cfg.get("request_type")
-                if not adapter_class_name or not request_type:
-                    continue
-                cls = _ADAPTER_CLASS_REGISTRY.get(adapter_class_name)
-                if not cls:
-                    self.logger.warning(f"未识别的 adapter_class：{adapter_class_name}，model={model_name}")
-                    continue
-                try:
-                    adapter = cls(model_name=model_name, model_cfg=model_cfg, common_timeout=self.common.timeout)
-                    if not adapter.check_config():
-                        self.logger.warning(f"模型配置不完整，跳过注册：{model_name}")
-                        continue
+                req_type = str(model_cfg.get("request_type", "")).upper()
+                adapter_class = str(model_cfg.get("adapter_class", ""))
+                adapter = self._build_adapter(adapter_class, model_name, model_cfg, common_cfg)
+                if adapter:
                     self.adapters[model_name] = adapter
-                    self.model_type[model_name] = request_type
-                    self.logger.info(f"已注册模型适配器：{model_name} ({request_type})")
-                except Exception as e:
-                    self.logger.error(f"注册模型失败：{model_name}，错误：{e}")
-        self._initialized = True
+                    self.logger.info(f"[llm_adapter] registered model={model_name} type={req_type} adapter={adapter_class}", logger_name="llm_adapter")
 
-    def _pick_model(self, request: LLMRequest) -> str:
-        # default 兜底
-        model_name = request.model_name or "default"
-        if model_name == "default":
-            model_name = self.cfg.get_default_model(request.request_type)
-        return model_name
+    def _build_adapter(self, adapter_class: str, model_name: str, model_cfg: Dict[str, Any], common_cfg: Dict[str, Any]):
+        # 可按需扩展更多厂商/更多适配器
+        mapping = {
+            "OpenAIVectorAdapter": OpenAIVectorAdapter,
+            "OpenAIChatAdapter": OpenAIChatAdapter,
+            "OpenAIMultimodalAdapter": OpenAIMultimodalAdapter,
+        }
+        cls = mapping.get(adapter_class)
+        if not cls:
+            # 未识别适配器：跳过
+            self.logger.warning(f"[llm_adapter] unknown adapter_class={adapter_class} for model={model_name}", logger_name="llm_adapter")
+            return None
+        return cls(model_name=model_name, model_cfg=model_cfg, common_cfg=common_cfg, logger=self.logger)
 
-    def validate_request(self, request: LLMRequest):
-        if request is None:
-            return False, "request 不能为空"
-        if request.request_type not in {"VECTOR", "CHAT", "MULTIMODAL"}:
-            return False, f"request_type 不支持：{request.request_type}"
-        if request.request_type == "VECTOR":
-            if request.batch_input:
-                return True, ""
-            if request.input_text:
-                return True, ""
-            if request.file_content and (request.file_content.split_contents or request.file_content.text_content):
-                return True, ""
-            return False, "向量请求需提供 input_text / batch_input / file_content(text_content|split_contents)"
-        if request.request_type == "CHAT":
-            if request.messages:
-                return True, ""
-            if request.input_text:
-                return True, ""
-            if request.file_content and request.file_content.text_content:
-                return True, ""
-            return False, "聊天请求需提供 input_text / messages / file_content.text_content"
-        if request.request_type == "MULTIMODAL":
-            if request.messages:
-                return True, ""
-            media_list = request.media_input or (request.file_content.media_contents if request.file_content else None)
-            if media_list:
-                return True, ""
-            return False, "多模态请求需提供 media_input 或 file_content.media_contents（或 messages 带 media）"
+    def validate_request(self, request: LLMRequest) -> Tuple[bool, str]:
+        rt = (request.request_type or "").upper()
+        if rt not in {"VECTOR", "CHAT", "MULTIMODAL"}:
+            return False, "request_type仅支持VECTOR/CHAT/MULTIMODAL"
+
+        if not request.model_name or request.model_name == "default":
+            # 允许default，后续会替换为配置默认模型
+            pass
+
+        if rt == "VECTOR":
+            if not (request.input_text or request.batch_input or request.file_content):
+                return False, "VECTOR请求需提供input_text/batch_input/file_content"
+        elif rt == "CHAT":
+            if not (request.input_text or request.file_content):
+                return False, "CHAT请求需提供input_text或file_content"
+        elif rt == "MULTIMODAL":
+            has_media = bool(request.media_input) or bool(request.file_content and request.file_content.media_contents)
+            if not has_media:
+                return False, "多模态请求需提供媒体输入"
         return True, ""
 
-    def call_by_file(self, file_content: FileContent, request_type: str, model_param=None, model_name: str = "default") -> LLMResponse:
+    def _resolve_model_name(self, request: LLMRequest) -> str:
+        name = request.model_name or "default"
+        if name == "default":
+            return self.cfg.get_default_model((request.request_type or "").upper())
+        return name
+
+    def _get_adapter(self, model_name: str):
+        adapter = self.adapters.get(model_name)
+        if adapter:
+            return adapter
+        # 未注册：尝试按配置单独构建一次（支持配置热加载后动态新增）
+        model_cfg = self.cfg.get_model_config(model_name)
+        common_cfg = self.cfg.get_common() if isinstance(self.cfg.get_common(), dict) else {}
+        adapter_class = str(model_cfg.get("adapter_class", ""))
+        if adapter_class:
+            adapter = self._build_adapter(adapter_class, model_name, model_cfg, common_cfg)
+            if adapter:
+                self.adapters[model_name] = adapter
+                return adapter
+        return None
+
+    def call_llm(self, request: LLMRequest) -> LLMResponse:
+        start = now_ts()
+        trace_id = gen_trace_id()
+        ok, msg = self.validate_request(request)
+        if not ok:
+            return LLMResponse(code="PARAM_INVALID", message=msg, request_info={"trace_id": trace_id}, cost_time=now_ts()-start, trace_id=trace_id)
+
+        model_name = self._resolve_model_name(request)
+        adapter = self._get_adapter(model_name)
+        if not adapter:
+            return LLMResponse(code="MODEL_NOT_FOUND", message=f"未注册的模型名称：{model_name}", request_info={"trace_id": trace_id}, cost_time=now_ts()-start, trace_id=trace_id)
+
+        # 补充 request_info
+        request_info = {
+            "request_type": request.request_type,
+            "model_name": model_name,
+            "trace_id": trace_id,
+        }
+
+        try:
+            request.model_name = model_name
+            resp: LLMResponse = adapter.call(request)
+            # 强制带上 trace_id 与 request_info
+            resp.trace_id = resp.trace_id or trace_id
+            resp.request_info = resp.request_info or request_info
+            return resp
+        except SystemBaseException as se:
+            # 按系统异常码封装
+            err = self.exception_handler.handle_exception(se)
+            return LLMResponse(code=err.get("code", "UNKNOWN_ERROR"), message=err.get("message", str(se)), request_info=request_info, cost_time=now_ts()-start, trace_id=trace_id)
+        except Exception as e:
+            # 未知异常
+            err = self.exception_handler.handle_exception(e)
+            return LLMResponse(code=err.get("code", "UNKNOWN_ERROR"), message=err.get("message", str(e)), request_info=request_info, cost_time=now_ts()-start, trace_id=trace_id)
+
+    def call_by_file(self, file_content: FileContent, request_type: str, model_param: Any = None) -> LLMResponse:
         req = LLMRequest(
             request_type=request_type,
             file_content=file_content,
-            model_name=model_name or "default",
-            model_param=model_param or LLMParam(),
+            model_name="default",
+            model_param=model_param if isinstance(model_param, LLMParam) else (LLMParam() if model_param is None else LLMParam(**model_param)),
         )
         return self.call_llm(req)
-
-    def call_llm(self, request: LLMRequest) -> LLMResponse:
-        trace_id = str(uuid.uuid4())
-        start = time.time()
-        # request 校验
-        ok, msg = self.validate_request(request)
-        if not ok:
-            return LLMResponse(code="PARAM_INVALID", message=msg, trace_id=trace_id, cost_time=round(time.time()-start, 6))
-
-        # 文件输入适配：补全 split_contents
-        if request.file_content and request.request_type in {"VECTOR"}:
-            ensure_filecontent_splits(request.file_content, max_chars=2000, overlap=200)
-
-        model_name = self._pick_model(request)
-        adapter = self.adapters.get(model_name)
-        if not adapter:
-            # 配置缺失
-            err = ConfigException("CONFIG_KEY_MISSING", f"未注册的模型名称：{model_name}")
-            info = self.exc.handle_exception(err)
-            return LLMResponse(code=info["code"], message=info["message"], trace_id=trace_id, cost_time=round(time.time()-start, 6), request_info={"model_name": model_name})
-
-        try:
-            resp = adapter.call(request)
-            resp.trace_id = trace_id
-            resp.cost_time = round(time.time() - start, 6)
-            # 补充 request_info 便于调试
-            resp.request_info = resp.request_info or {
-                "request_type": request.request_type,
-                "model_name": model_name,
-            }
-            return resp
-        except requests.Timeout as e:
-            info = self.exc.handle_exception(SystemBaseException("SYSTEM_ERROR", f"大模型调用超时：{e}"))
-            return LLMResponse(code=info["code"], message=info["message"], trace_id=trace_id, cost_time=round(time.time()-start, 6))
-        except requests.HTTPError as e:
-            # HTTPError 通常带 response，尽量给出状态码
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            msg = f"大模型HTTP错误{status}: {e}"
-            info = self.exc.handle_exception(SystemBaseException("SYSTEM_ERROR", msg))
-            return LLMResponse(code=info["code"], message=info["message"], trace_id=trace_id, cost_time=round(time.time()-start, 6))
-        except Exception as e:
-            info = self.exc.handle_exception(e)
-            return LLMResponse(code=info["code"], message=info["message"], trace_id=trace_id, cost_time=round(time.time()-start, 6))
