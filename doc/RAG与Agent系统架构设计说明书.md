@@ -189,69 +189,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 说明：原文中Embedding作为术语出现，但为保证完整性，这里补充一个独立Embedding模块，供RAG与向量库统一调用。
 
-#### 4.3.1.1 模块功能
-
-* 将文本转换为向量
-* 支持单条/批量Embedding
-* 统一输出 List[float]
-
-#### 4.3.1.2 抽象基类（core/base.py）
-
-```python
-from abc import ABC, abstractmethod
-from typing import List
-
-
-class BaseEmbedding(ABC):
-    """Embedding抽象基类"""
-
-    @abstractmethod
-    def embed_text(self, text: str) -> List[float]:
-        pass
-
-    @abstractmethod
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        pass
-
-```
-
-#### 4.3.1.3 具体实现（core/impl.py）——示例：sentence-transformers
-
-```python
-from typing import List
-from .base import BaseEmbedding
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import RAGException
-
-
-class STEmbedding(BaseEmbedding):
-    """sentence-transformers Embedding实现（示例）"""
-
-    def __init__(self):
-        self.config = ConfigManager()
-        self.config.load_config()
-        self.logger = SystemLogger()
-
-        self.model_name = self.config.get_config("embedding.model_name")
-        if not self.model_name:
-            raise RAGException("EMBEDDING_CONFIG_MISSING", "embedding.model_name未配置")
-
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(self.model_name)
-        except Exception as e:
-            raise RAGException("EMBEDDING_INIT_FAILED", str(e))
-
-    def embed_text(self, text: str) -> List[float]:
-        vec = self.model.encode([text], normalize_embeddings=True)[0]
-        return vec.tolist()
-
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        vecs = self.model.encode(texts, normalize_embeddings=True)
-        return [v.tolist() for v in vecs]
-
-```
+详细信息见[核心业务层-Embedding模块（embedding_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Embedding%E6%A8%A1%E5%9D%97%EF%BC%88embedding_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.2 RAG模块（rag_module）
 
