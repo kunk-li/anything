@@ -209,71 +209,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.4.1 请求响应处理模块（request_response_module）
 
-#### 4.4.1.1 模块功能
-
-* 校验请求字段
-* 标准化输入
-* 标准化输出（统一响应结构）
-* 捕获异常并转为统一错误结构
-
-#### 4.4.1.2 抽象基类（core/base.py）
-
-```python
-from abc import ABC, abstractmethod
-from typing import Dict, Any
-
-
-class BaseRequestHandler(ABC):
-
-    @abstractmethod
-    def handle(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        pass
-
-
-```
-
-#### 4.4.1.3 具体实现（core/impl.py）
-
-```python
-from typing import Dict, Any
-from .base import BaseRequestHandler
-from common_utils_module.core.impl import CommonUtils
-from exception_module.core.impl import ExceptionHandler
-from log_module.core.impl import SystemLogger
-
-
-class RequestHandler(BaseRequestHandler):
-    """统一请求处理器"""
-
-    def __init__(self, orchestrator):
-        self.utils = CommonUtils()
-        self.ex_handler = ExceptionHandler()
-        self.logger = SystemLogger()
-        self.orchestrator = orchestrator
-
-    def handle(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            # 基础校验
-            if "type" not in request:
-                request["type"] = "rag"
-
-            if request["type"] == "rag":
-                if not self.utils.param_validate(request, ["query"]):
-                    return {"code": "PARAM_MISSING", "message": "缺少必填参数：query"}
-            elif request["type"] in ["agent", "hybrid"]:
-                if not self.utils.param_validate(request, ["task"]):
-                    return {"code": "PARAM_MISSING", "message": "缺少必填参数：task"}
-
-            # 调用调度模块
-            return self.orchestrator.route(request)
-
-        except Exception as e:
-            # 统一异常封装
-            err = self.ex_handler.handle_exception(e)
-            return {"code": err["code"], "message": err["message"]}
-
-
-```
+详细信息见[接口层-请求响应处理模块（request_response_module）设计说明书](%E6%8E%A5%E5%8F%A3%E5%B1%82-%E8%AF%B7%E6%B1%82%E5%93%8D%E5%BA%94%E5%A4%84%E7%90%86%E6%A8%A1%E5%9D%97%EF%BC%88request_response_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.5 应用层模块设计
 
