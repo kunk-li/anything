@@ -1,0 +1,12 @@
+# Agent 模块依赖清单
+# 核心依赖由系统全局管理，此处列出模块专属依赖（若有）
+
+# 无额外专属依赖，复用系统全局依赖
+# 确保以下系统模块已安装：
+# - state_store_module
+# - common_utils_module
+# - config_module
+# - log_module
+# - exception_module
+# - llm_adapter_module
+# - rag_module (作为工具被调用)
