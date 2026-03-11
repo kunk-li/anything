@@ -193,11 +193,11 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.3.2 RAG模块（rag_module）
 
-详细信息见[核心业务层 - RAG 模块（rag_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82%20-%20RAG%20%E6%A8%A1%E5%9D%97%EF%BC%88rag_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细信息见[核心业务层-RAG模块（rag_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-RAG%E6%A8%A1%E5%9D%97%EF%BC%88rag_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.3 Agent模块（agent_module）
 
-详细信息见[核心业务层-Agent 模块（agent_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Agent%20%E6%A8%A1%E5%9D%97%EF%BC%88agent_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细信息见[核心业务层-Agent模块（agent_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Agent%E6%A8%A1%E5%9D%97%EF%BC%88agent_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.4 协同调度模块（orchestrator_module）
 
