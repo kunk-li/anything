@@ -201,61 +201,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.3.4 协同调度模块（orchestrator_module）
 
-#### 4.3.4.1 模块功能
-
-调度模块作为核心业务层入口之一，决定：
-
-* 走RAG（普通问答）
-* 走Agent（多步骤任务）
-* Agent + RAG协同（Agent在执行过程中调用RAG）
-
-#### 4.3.4.2 抽象基类（core/base.py）
-
-```python
-from abc import ABC, abstractmethod
-from typing import Dict, Any
-
-
-class BaseOrchestrator(ABC):
-    """协同调度抽象基类"""
-
-    @abstractmethod
-    def route(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """根据请求内容路由到RAG/Agent/协同"""
-        pass
-
-```
-
-#### 4.3.4.3 具体实现（core/impl.py）
-
-```python
-from typing import Dict, Any
-from .base import BaseOrchestrator
-from log_module.core.impl import SystemLogger
-
-
-class SimpleOrchestrator(BaseOrchestrator):
-    """简单调度：根据request.type路由"""
-
-    def __init__(self, rag_runner, agent_runner):
-        self.logger = SystemLogger()
-        self.rag = rag_runner
-        self.agent = agent_runner
-
-    def route(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        req_type = request.get("type", "rag")  # 默认rag
-        if req_type == "rag":
-            return self.rag.run(request["query"], top_k=int(request.get("top_k", 5)))
-        elif req_type == "agent":
-            return self.agent.execute(request["task"], session_id=request.get("session_id"))
-        elif req_type == "hybrid":
-            # hybrid：Agent内部通过工具调用rag_search实现协同，此处直接走Agent
-            return self.agent.execute(request["task"], session_id=request.get("session_id"))
-        else:
-            return {"code": "BAD_REQUEST", "message": f"不支持的type：{req_type}"}
-
-
-```
+详细信息见[核心业务层-协同调度模块（orchestrator_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-%E5%8D%8F%E5%90%8C%E8%B0%83%E5%BA%A6%E6%A8%A1%E5%9D%97%EF%BC%88orchestrator_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.4 接口层模块设计
 
