@@ -150,16 +150,16 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 基础支撑层是所有模块的依赖，提供通用能力，需最先开发，包含4个独立模块，各模块独立开发，互不依赖（除配置管理模块可被其他模块依赖）。
 
 ### 4.1.1 通用工具模块（common_utils_module）
-详细信息见[通用工具模块（common_utils_module）设计文档](./基础支撑层-通用工具模块（common_utils_module）设计文档.md)
+详细设计见[通用工具模块（common_utils_module）设计文档](./基础支撑层-通用工具模块（common_utils_module）设计文档.md)
 
 ### 4.1.2 配置管理模块（config_module）
-详细信息见[配置管理模块（config_module）设计文档](./基础支撑层-配置管理模块（config_module）设计文档.md)
+详细设计见[配置管理模块（config_module）设计文档](./基础支撑层-配置管理模块（config_module）设计文档.md)
 
 ### 4.1.3 日志模块（log_module）
-详细信息见[日志模块（log_module）设计文档](./基础支撑层-日志模块（log_module）设计文档.md)
+详细设计见[日志模块（log_module）设计文档](./基础支撑层-日志模块（log_module）设计文档.md)
 
 ### 4.1.4 异常处理模块（exception_module）
-详细信息见[异常处理模块（exception_module）设计文档](./基础支撑层-异常处理模块（exception_module）设计文档.md)
+详细设计见[异常处理模块（exception_module）设计文档](./基础支撑层-异常处理模块（exception_module）设计文档.md)
 
 
 ## 4.2 数据层模块设计
@@ -167,19 +167,19 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 数据层负责系统所有数据的存储与读取，包含5个独立模块，依赖基础支撑层的通用工具、配置管理、日志、异常处理模块，各模块独立开发，互不依赖。
 
 ### 4.2.1 文档解析模块（document_parser_module）
-详细信息见[文档解析模块（document_parser_module）设计说明书](数据层-文档解析模块（document_parser_module）设计说明书.md)
+详细设计见[文档解析模块（document_parser_module）设计说明书](数据层-文档解析模块（document_parser_module）设计说明书.md)
 
 ### 4.2.2 文档存储模块（document_store_module）
-详细信息见[文档存储模块（document_store_module）设计说明书](数据层-文档存储模块（document_store_module）设计说明书.md)
+详细设计见[文档存储模块（document_store_module）设计说明书](数据层-文档存储模块（document_store_module）设计说明书.md)
 
 ### 4.2.3 向量数据库模块（vector_db_module）
-详细信息见[数据层-向量数据库模块（vector_db_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E6%A8%A1%E5%9D%97%EF%BC%88vector_db_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[数据层-向量数据库模块（vector_db_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E6%A8%A1%E5%9D%97%EF%BC%88vector_db_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.2.4 状态存储模块（state_store_module）
-详细信息见[数据层-状态存储模块（state_store_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E7%8A%B6%E6%80%81%E5%AD%98%E5%82%A8%E6%A8%A1%E5%9D%97%EF%BC%88state_store_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[数据层-状态存储模块（state_store_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E7%8A%B6%E6%80%81%E5%AD%98%E5%82%A8%E6%A8%A1%E5%9D%97%EF%BC%88state_store_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.2.5 大模型对接模块（state_store_module）
-详细信息见[数据层-大模型对接模块（llm_adapter_module）设计说明书.md](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AF%B9%E6%8E%A5%E6%A8%A1%E5%9D%97%EF%BC%88llm_adapter_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[数据层-大模型对接模块（llm_adapter_module）设计说明书.md](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AF%B9%E6%8E%A5%E6%A8%A1%E5%9D%97%EF%BC%88llm_adapter_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.3 核心业务层模块设计
 
@@ -189,19 +189,19 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 说明：原文中Embedding作为术语出现，但为保证完整性，这里补充一个独立Embedding模块，供RAG与向量库统一调用。
 
-详细信息见[核心业务层-Embedding模块（embedding_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Embedding%E6%A8%A1%E5%9D%97%EF%BC%88embedding_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[核心业务层-Embedding模块（embedding_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Embedding%E6%A8%A1%E5%9D%97%EF%BC%88embedding_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.2 RAG模块（rag_module）
 
-详细信息见[核心业务层-RAG模块（rag_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-RAG%E6%A8%A1%E5%9D%97%EF%BC%88rag_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[核心业务层-RAG模块（rag_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-RAG%E6%A8%A1%E5%9D%97%EF%BC%88rag_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.3 Agent模块（agent_module）
 
-详细信息见[核心业务层-Agent模块（agent_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Agent%E6%A8%A1%E5%9D%97%EF%BC%88agent_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[核心业务层-Agent模块（agent_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-Agent%E6%A8%A1%E5%9D%97%EF%BC%88agent_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.3.4 协同调度模块（orchestrator_module）
 
-详细信息见[核心业务层-协同调度模块（orchestrator_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-%E5%8D%8F%E5%90%8C%E8%B0%83%E5%BA%A6%E6%A8%A1%E5%9D%97%EF%BC%88orchestrator_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[核心业务层-协同调度模块（orchestrator_module）设计说明书](%E6%A0%B8%E5%BF%83%E4%B8%9A%E5%8A%A1%E5%B1%82-%E5%8D%8F%E5%90%8C%E8%B0%83%E5%BA%A6%E6%A8%A1%E5%9D%97%EF%BC%88orchestrator_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.4 接口层模块设计
 
@@ -209,7 +209,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.4.1 请求响应处理模块（request_response_module）
 
-详细信息见[接口层-请求响应处理模块（request_response_module）设计说明书](%E6%8E%A5%E5%8F%A3%E5%B1%82-%E8%AF%B7%E6%B1%82%E5%93%8D%E5%BA%94%E5%A4%84%E7%90%86%E6%A8%A1%E5%9D%97%EF%BC%88request_response_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+详细设计见[接口层-请求响应处理模块（request_response_module）设计说明书](%E6%8E%A5%E5%8F%A3%E5%B1%82-%E8%AF%B7%E6%B1%82%E5%93%8D%E5%BA%94%E5%A4%84%E7%90%86%E6%A8%A1%E5%9D%97%EF%BC%88request_response_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.5 应用层模块设计
 
@@ -217,30 +217,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.5.1 API服务模块（api_service_module）
 
-#### 4.5.1.1 模块功能
-
-* 提供HTTP接口
-* 请求转发给接口层
-* 返回JSON响应
-
-#### 4.5.1.2 FastAPI示例（core/impl.py）
-
-```python
-from fastapi import FastAPI
-from request_response_module.core.impl import RequestHandler
-
-app = FastAPI()
-
-# handler需在启动时注入（见“系统集成与启动”）
-handler: RequestHandler = None
-
-
-@app.post("/invoke")
-def invoke(request: dict):
-    return handler.handle(request)
-
-
-```
+详细设计见[应用层-API服务模块（api_service_module）设计说明书](%E5%BA%94%E7%94%A8%E5%B1%82-API%E6%9C%8D%E5%8A%A1%E6%A8%A1%E5%9D%97%EF%BC%88api_service_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.5.2 控制台交互模块（console_app_module）
 
