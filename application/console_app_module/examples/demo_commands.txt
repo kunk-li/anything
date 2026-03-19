@@ -1,0 +1,6 @@
+# demo script
+/mode hybrid
+/topk 8
+请根据当前项目结构，给出最小可行开发计划
+/history 5
+/export ./out/history.json

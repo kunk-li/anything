@@ -221,20 +221,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 ### 4.5.2 控制台交互模块（console_app_module）
 
-```python
-from request_response_module.core.impl import RequestHandler
-
-
-def run_console(handler: RequestHandler):
-    while True:
-        text = input("请输入问题/任务（exit退出）：")
-        if text.strip().lower() == "exit":
-            break
-
-        req = {"type": "rag", "query": text, "top_k": 5}
-        print(handler.handle(req))
-
-```
+详细设计见[应用层-控制台交互模块（console_app_module）设计说明书](%E5%BA%94%E7%94%A8%E5%B1%82-%E6%8E%A7%E5%88%B6%E5%8F%B0%E4%BA%A4%E4%BA%92%E6%A8%A1%E5%9D%97%EF%BC%88console_app_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 # 5. 系统集成与启动规范（必须包含）
 
