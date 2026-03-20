@@ -1,18 +1,28 @@
-# 接口层 - 请求响应处理模块（request_response_module）设计说明书
+# 接口层-请求响应处理模块（request_response_module）设计说明书
 
-| 文档版本 | v1.0 |
+| 文档版本 | v1.1 |
 | :--- | :--- |
-| **最后更新** | 2026-02-28 |
-| **维护责任人** | 请求响应处理模块开发负责人 |
-| **状态** | 正式发布 |
+| 最后更新 | 2026-03-19 |
+| 维护责任人 | 请求响应处理模块开发负责人 |
+| 状态 | 修订版 |
 
+> 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1，重点修正 trace_id 来源、统一请求/响应结构、接口边界、错误码与校验职责。
 ---
 
 ## 1. 文档概述
 
 ### 1.1 文档目的
-本文档为 RAG 与 Agent 系统接口层 - 请求响应处理模块的独立、完整设计说明书。文档严格遵循系统整体架构规范，明确模块功能、项目结构、接口定义、依赖关系、数据格式及开发要求。旨在指导开发人员（含初学者）进行该模块的独立开发、测试与集成，确保模块与系统无缝兼容、可扩展、可替换。
+本文档为 RAG 与 Agent 系统接口层 - 请求响应处理模块的独立设计说明书。
+本模块位于应用层与核心业务层之间，是系统内部唯一的业务请求标准化入口，负责完成：
 
+- 统一业务参数校验
+- 请求标准化与默认值补齐
+- trace_id / session_id 透传与补齐
+- 调用协同调度模块执行核心流程
+- 统一响应封装
+- 异常转换为系统标准错误响应
+
+本文档作为本模块开发、测试、联调与后续替换实现的唯一标准依据。
 ### 1.2 适用人群
 - **开发人员**：作为请求响应处理模块开发、测试、维护的唯一标准依据。
 - **测试人员**：作为编写测试用例、验收模块功能的标准依据。
@@ -21,11 +31,11 @@
 ### 1.3 核心需求回顾
 | 需求类型 | 具体要求 |
 | :--- | :--- |
-| **模块功能** | 统一处理系统所有请求与响应，完成参数校验、请求标准化、响应封装、异常捕获与转换，确保对外接口格式统一。 |
-| **开发语言** | Python 3.10+，与系统整体保持一致。 |
-| **开发模式** | 独立开发、互不依赖，基于本说明书即可完成开发，开发完成后通过统一接口集成至接口层。 |
-| **文档要求** | 详细、易懂，适配初学者，明确模块所有可提前定义的内容（接口、数据格式、项目结构等）。 |
-| **模块约束** | 需包含抽象基类（ABC），确保模块一致性；代码可与系统其他模块交换，数据格式符合系统统一标准。 |
+| 模块功能 | 作为接口层唯一业务请求入口，完成业务语义校验、请求标准化、调度调用、统一响应封装、异常处理。 |
+| 开发语言 | Python 3.10+，最低 3.10，推荐 3.12，与系统整体保持一致。 |
+| 开发模式 | 独立开发、可替换实现、通过抽象接口集成。 |
+| 文档要求 | 与系统总设计 v1.1 保持一致，明确请求/响应、trace_id、错误码、边界与测试要求。 |
+| 模块约束 | 应用层仅依赖 `BaseRequestHandler`；本模块不得承载 HTTP 协议逻辑，不得直接决定 HTTP 状态码。 |
 
 ### 1.4 术语定义
 | 术语 | 定义 |
@@ -41,102 +51,114 @@
 ## 2. 模块核心设计
 
 ### 2.1 模块定位与职责
-本模块属于系统**接口层**，是系统对外的统一入口处理器，串联应用层与核心业务层，完整实现请求响应的标准化处理：
-- 接收应用层转发的原始请求（HTTP/控制台），完成参数校验、异常处理。
-- 标准化请求格式，转换为协同调度模块可识别的请求结构。
-- 调用协同调度模块执行核心业务逻辑（RAG/Agent/Hybrid）。
-- 封装核心业务层返回结果，输出标准化响应格式。
-- 捕获并处理全流程异常，转换为统一错误响应。
-- 记录请求响应日志，包含 trace_id，便于链路追踪与问题排查。
-- 屏蔽底层模块差异，支持配置化切换校验规则、响应格式。
+
+本模块属于系统**接口层**，位于**应用层**与**核心业务层**之间，是系统内部统一的业务请求处理入口，不直接暴露 HTTP 协议接口。
+
+核心职责如下：
+- 接收应用层传入的原始业务请求字典或统一请求对象；
+- 执行业务语义层参数校验（如 type/query/task/top_k/session_id）；
+- 对请求做标准化处理，补齐默认值并透传 trace_id；
+- 按统一格式调用协同调度模块；
+- 将下游返回结果封装为系统统一响应结构；
+- 捕获并转换全流程异常为标准化错误响应；
+- 记录请求、响应与异常日志，确保 trace_id 可追踪。
+
+本模块不负责：
+- 不负责 HTTP/HTTPS 协议处理；
+- 不负责认证鉴权、CORS、路由、中间件；
+- 不负责直接决定 HTTP 状态码；
+- 不直接执行 RAG / Agent / Hybrid 业务逻辑。
 
 ### 2.2 输入输出规范
 
 #### 2.2.1 输入
-遵循系统统一请求格式（见架构设计说明书第 8 章）：
+
+遵循系统统一请求格式（见系统总设计第 8 章）：
 
 | 参数名 | 类型 | 必填 | 说明 | 默认值 |
 | :--- | :--- | :--- | :--- | :--- |
 | `type` | str | 是 | 请求类型：`rag` / `agent` / `hybrid` | `rag` |
-| `query` | str | 条件必填 | 用户问题（type=rag 时必填） | - |
-| `task` | str | 条件必填 | 用户任务（type=agent/hybrid 时必填） | - |
-| `session_id` | str | 否 | 会话唯一标识 | 自动生成 |
-| `top_k` | int | 否 | 检索片段数量（rag 模式） | 5 |
-| `extra_params` | Dict | 否 | 额外扩展参数 | {} |
+| `query` | str | 条件必填 | 用户问题（`type=rag` 时必填） | - |
+| `task` | str | 条件必填 | 用户任务（`type=agent/hybrid` 时必填） | - |
+| `session_id` | str | 否 | 会话唯一标识；`rag` 可为空，`agent/hybrid` 若为空由本模块补齐 | - |
+| `top_k` | int | 否 | 检索片段数量（仅 `rag` 相关） | 5 |
+| `trace_id` | str | 否 | 链路追踪 ID；由应用层入口生成并透传 | - |
+| `extra_params` | Dict | 否 | 扩展参数透传字典，不允许各层自定义改名 | `{}` |
 
 #### 2.2.2 输出
-标准化响应格式（遵循系统统一异常码规范，见架构设计说明书第 10 章）：
 
-**成功响应：**
+标准化响应格式（遵循系统总设计第 10 章）：
+
+**成功响应**
 ```json
 {
   "code": "SUCCESS",
   "message": "ok",
-  "data": { ... },
+  "data": {},
   "trace_id": "b3b1c6d7f2b24f5aa0d8e7c8b9a1c2d3",
   "retryable": false,
-  "details": null
+  "details": null,
+  "cost_time": 0.123456
 }
 ```
 
-**失败响应：**
+**失败响应**
 ```json
 {
-  "code": "PARAM_MISSING",
-  "message": "缺少必填参数：query",
+  "code": "PARAM_INVALID",
+  "message": "top_k 参数必须为 1~50 的整数",
   "data": null,
   "trace_id": "b3b1c6d7f2b24f5aa0d8e7c8b9a1c2d3",
   "retryable": false,
   "details": {
-    "field": "query",
-    "expected": "string",
-    "example": "用户问题内容"
-  }
+    "field": "top_k",
+    "expected": "integer (1~50)",
+    "actual": "string",
+    "example": 10
+  },
+  "cost_time": 0.004231
 }
 ```
 
-### 2.3 依赖关系
-本模块是接口层核心模块，依赖基础支撑层及核心业务层模块。
 
-#### 基础支撑层依赖
-| 依赖模块 | 用途 |
+---
+
+### 2.3 依赖关系（小修）
+这里主要补一句边界：
+
+```md
+#### 应用层协作约束
+| 协作对象 | 说明 |
 | :--- | :--- |
-| **通用工具模块** (`common_utils_module`) | 参数校验、时间处理、trace_id 生成。 |
-| **配置管理模块** (`config_module`) | 读取校验规则、响应格式配置。 |
-| **日志模块** (`log_module`) | 记录请求响应全流程日志、异常信息（使用 `SystemLogger`）。 |
-| **异常处理模块** (`exception_module`) | 捕获并转换异常为标准化错误响应（使用 `ExceptionHandler`）。 |
-
-#### 核心业务层依赖
-| 依赖模块 | 用途 |
-| :--- | :--- |
-| **协同调度模块** (`orchestrator_module`) | 执行核心业务逻辑（RAG/Agent/Hybrid 路由与执行）。 |
-
+| API服务模块 / 控制台模块 | 仅负责生成或透传 `trace_id`，并调用 `BaseRequestHandler.handle()`；不得重复实现业务语义校验。 |
 ---
 
 ## 3. 统一项目结构规范
 
-严格遵循系统整体项目结构规范，模块根目录命名为 `request_response_module`（全小写，多单词用下划线连接），目录结构如下，开发者不得随意修改目录名称与层级。
+本模块遵循系统总设计 v1.1 的统一目录规范。
 
-```
-request_response_module/                  # 模块根目录
-├── __init__.py                # 模块初始化文件，暴露核心类/方法
-├── core/                      # 核心逻辑目录（抽象基类 + 实现类）
+### 3.1 必选目录与文件
+```text
+request_response_module/
+├── __init__.py
+├── core/
 │   ├── __init__.py
-│   ├── base.py                # 抽象基类（ABC），定义处理核心接口
-│   └── impl.py                # 具体实现类，继承抽象基类
-├── model/                     # 数据模型目录（统一请求/响应模型）
+│   ├── base.py
+│   └── impl.py
+├── model/
 │   ├── __init__.py
-│   └── data_model.py          # 请求/响应标准化模型
-├── utils/                     # 模块专属工具函数
+│   └── data_model.py
+├── utils/
 │   ├── __init__.py
-│   └── tool_functions.py      # 请求校验、响应封装等工具
-├── config/                    # 模块专属配置
+│   └── tool_functions.py
+├── config/
 │   ├── __init__.py
-│   └── config.py              # 读取全局配置，补充处理专属配置
-├── tests/                     # 测试用例目录
+│   └── config.py
+├── tests/
 │   ├── __init__.py
-│   └── test_impl.py           # 核心功能测试用例
-└── README.md                  # 模块说明文档（适配初学者）
+│   └── test_impl.py
+├── README.md
+└── requirements.txt
 ```
 
 ### 3.1 目录结构说明
@@ -151,59 +173,55 @@ request_response_module/                  # 模块根目录
 | `tests` | 覆盖请求校验、响应封装、异常处理、全流程的测试用例。 |
 | `README.md` | 详细说明模块功能、接口、使用方法、依赖项、扩展步骤。 |
 
+本模块如有需要，可增加：
+examples/：示例请求与响应
+schemas/：可选的 JSON Schema / Pydantic Schema
+docs/：补充说明材料
+新增扩展目录时，必须在 README.md 中说明职责与边界。
+
 ---
 
-## 4. 核心数据模型设计
 
-本模块定义统一的请求/响应模型，所有接口均基于该模型交互，确保模块内部及与外部模块的数据格式统一，遵循系统整体数据规范。
+---
 
-### 4.1 统一请求模型（UnifiedRequest）
+## 4. 核心数据模型设计（整段修订）
+
+原文的 `UnifiedRequest` 仍保留了 `source`、`timestamp` 这类字段，但总设计 v1.1 统一请求格式中没有这两个字段，且当前系统实际主链路更依赖 `trace_id + extra_params`。:contentReference[oaicite:13]{index=13} :contentReference[oaicite:14]{index=14}
+
+建议改成下面这版。
+
+### 4.1 UnifiedRequest
 ```python
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 @dataclass
 class UnifiedRequest:
-    """系统统一请求模型"""
-    # 请求类型：rag / agent / hybrid
+    """系统统一请求模型（接口层标准）"""
     type: str
-    # 用户问题（rag 模式必填）
     query: Optional[str] = None
-    # 用户任务（agent/hybrid 模式必填）
     task: Optional[str] = None
-    # 会话唯一标识（可选，为空则自动生成）
     session_id: Optional[str] = None
-    # 检索片段数量（rag 模式可选）
     top_k: int = 5
-    # 附加参数（可选，传递给底层模块）
-    extra_params: Optional[Dict[str, Any]] = None
-    # 请求来源标识（可选，用于日志追踪）
-    source: Optional[str] = None
-    # 请求时间戳（可选，用于性能统计）
-    timestamp: Optional[str] = None
+    trace_id: Optional[str] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
 ```
+
 
 ### 4.2 统一响应模型（UnifiedResponse）
 ```python
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 @dataclass
 class UnifiedResponse:
-    """系统统一响应模型，遵循系统统一异常码规范"""
-    # 响应码：SUCCESS 或系统异常码
+    """系统统一响应模型"""
     code: str
-    # 响应信息
     message: str
-    # 响应数据
     data: Optional[Dict[str, Any]] = None
-    # 链路追踪 ID（所有响应必须返回）
-    trace_id: str
-    # 是否建议重试
+    trace_id: str = ""
     retryable: bool = False
-    # 结构化扩展信息（失败时提供详细信息）
     details: Optional[Dict[str, Any]] = None
-    # 调用耗时（秒，可选）
     cost_time: Optional[float] = None
 ```
 
@@ -225,6 +243,8 @@ class ErrorDetails:
     example: Optional[Any] = None
     # 修复建议
     hint: Optional[str] = None
+    
+    allowed: Optional[list[Any]] = None
 ```
 
 ---
@@ -242,24 +262,19 @@ from ..model.data_model import UnifiedRequest, UnifiedResponse
 
 
 class BaseRequestHandler(ABC):
-    """请求响应处理模块抽象基类，所有处理实现类必须继承此类"""
-
     @abstractmethod
-    def validate_request(self, request: Dict[str, Any]) -> tuple[bool, str]:
+    def validate_request(self, request: Dict[str, Any]) -> tuple[bool, str, str]:
         """
-        请求参数校验：校验请求字段完整性、类型、格式
-        :param request: 原始请求字典
-        :return: 元组（校验是否通过，错误信息）
+        请求参数校验
+        :return: (是否通过, 错误信息, 错误码)
         """
         pass
 
     @abstractmethod
-    def handle(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def handle(self, request: Dict[str, Any], trace_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        处理请求：完成参数校验、调用调度模块、封装响应
-        :param request: 原始请求字典
-        :return: 标准化响应字典（与 UnifiedResponse 结构一致）
-        :raises Exception: 处理失败时抛出异常
+        处理请求全流程
+        :param trace_id: 由应用层透传的 trace_id；为空时本模块兜底生成
         """
         pass
 
@@ -294,29 +309,22 @@ class BaseRequestHandler(ABC):
 
 ### 6.1 标准请求响应处理实现类（RequestHandler）
 继承抽象基类，实现完整请求响应处理全流程，串联协同调度模块与基础支撑层，是系统默认使用的处理实现类。位于 `core/impl.py`。
+`RequestHandler` 是系统默认请求处理实现，负责：
+- 调用统一工具函数完成业务语义校验
+- 标准化请求结构
+- 透传 trace_id / session_id
+- 调用协同调度模块
+- 统一封装响应
+- 将异常转换为系统标准错误响应
 
+本实现必须保持无状态，可并发使用。
 **类定义基础结构：**
 ```python
-import time
-import uuid
-from typing import Dict, Any, Optional, Tuple
-
-from .base import BaseRequestHandler
-from ..model.data_model import UnifiedRequest, UnifiedResponse, ErrorDetails
-from ..utils.tool_functions import validate_request_params, build_error_details
-
-# 依赖模块导入（遵循设计文档依赖关系）
-from orchestrator_module.core.impl import SimpleOrchestrator
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import ExceptionHandler
+from orchestrator_module.core.base import BaseOrchestrator
 
 
 class RequestHandler(BaseRequestHandler):
-    """标准请求响应处理实现类：参数校验 + 调度调用 + 响应封装，系统默认实现"""
-
-    def __init__(self, orchestrator: SimpleOrchestrator):
+    def __init__(self, orchestrator: BaseOrchestrator):
         """
         初始化处理模块，注入协同调度实例，加载系统配置
         :param orchestrator: 协同调度模块实例（需实现 BaseOrchestrator 接口）
@@ -333,73 +341,76 @@ class RequestHandler(BaseRequestHandler):
 
         # 读取系统处理核心配置
         self.default_type = self.config.get_config(
-            "request_response.default_type", 
+            "request_response.default_type",
             "rag"
         )
         self.enable_trace = self.config.get_config(
-            "request_response.enable_trace", 
+            "request_response.enable_trace",
             True
         )
 
         self.logger.info("请求响应处理模块初始化完成，加载系统默认配置")
 
-    def validate_request(self, request: Dict[str, Any]) -> Tuple[bool, str]:
-        """实现抽象方法：请求参数校验"""
-        # 逻辑定义：
-        # 1. 检查 type 是否合法（rag/agent/hybrid）
-        # 2. 检查 rag 模式下 query 是否存在
-        # 3. 检查 agent/hybrid 模式下 task 是否存在
-        # 4. 检查参数类型是否正确（top_k 为 int 等）
-        # 5. 返回校验结果（bool, error_message）
+    def validate_request(self, request: Dict[str, Any]) -> Tuple[bool, str, str]:
+        """
+        校验业务请求参数
+        PARAM_MISSING：缺字段或空值
+        PARAM_INVALID：类型/范围错误
+        BAD_REQUEST：type 不支持或整体结构非法
+        REQUEST_TOO_LARGE：请求体估算大小超过限制
+        返回：
+        - is_valid: 是否通过
+        - error_message: 错误描述
+        - error_code: 系统统一错误码
+        规则：
+        1. 检查 request 是否为 dict
+        2. 检查请求大小是否超过 max_request_size
+        3. 检查 type 是否属于 rag / agent / hybrid
+        4. 检查 rag 模式下 query 是否存在且为非空字符串
+        5. 检查 agent / hybrid 模式下 task 是否存在且为非空字符串
+        6. 检查 top_k 是否为 1~50 的整数
+        """
+        pass
+    
+    def handle(self, request: Dict[str, Any], trace_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        处理请求全流程
+    
+        处理顺序：
+        1. 解析 trace_id：优先使用入参，其次 request['trace_id']，最后兜底生成
+        2. 调用 validate_request() 进行业务语义校验
+        3. 校验失败时，按错误码返回统一失败响应
+        4. 请求标准化：补默认 type / top_k / extra_params；仅对 agent/hybrid 缺失时补 session_id
+        5. 调用 orchestrator.route()
+        6. 对下游结果统一补全 trace_id / retryable / cost_time
+        7. 返回统一响应
+        8. 异常时调用 handle_exception()
+        """
         pass
 
-    def handle(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """实现抽象方法：处理请求全流程"""
-        start_time = time.time()
-        trace_id = self._generate_trace_id()
-        
-        try:
-            # 1. 参数校验
-            is_valid, error_msg = self.validate_request(request)
-            if not is_valid:
-                return self.format_response(
-                    code="PARAM_MISSING",
-                    message=error_msg,
-                    data=None,
-                    trace_id=trace_id,
-                    cost_time=time.time() - start_time
-                )
-            
-            # 2. 请求标准化
-            standardized_request = self._standardize_request(request)
-            
-            # 3. 调用协同调度模块
-            result = self.orchestrator.route(standardized_request)
-            
-            # 4. 封装响应
-            return self.format_response(
-                code=result.get("code", "SUCCESS"),
-                message=result.get("message", "ok"),
-                data=result.get("data"),
-                trace_id=trace_id,
-                cost_time=time.time() - start_time
-            )
-
-        except Exception as e:
-            return self.handle_exception(e, trace_id)
-
-    def format_response(self, code: str, message: str, data: Any, 
-                        trace_id: str, cost_time: float = None) -> Dict[str, Any]:
-        """实现抽象方法：格式化响应"""
-        # 逻辑定义：
-        # 1. 构建统一响应结构
-        # 2. 根据 code 判断是否成功，设置 retryable
-        # 3. 根据 code 生成 details（失败时）
-        # 4. 返回标准化响应字典
+    def format_response(
+        self,
+        code: str,
+        message: str,
+        data: Any,
+        trace_id: str,
+        request_context: Optional[Dict[str, Any]] = None,
+        cost_time: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        统一响应封装
+        - SUCCESS -> retryable = False, details = None
+        - 失败 -> retryable 根据错误码表计算
+        - details 通过 build_error_details(code, request_context, message) 生成
+        """
         pass
 
     def handle_exception(self, exception: Exception, trace_id: str) -> Dict[str, Any]:
-        """实现抽象方法：异常处理"""
+        """实现抽象方法：异常处理
+        异常码解析优先取标准异常对象的 code/message
+        未知异常统一映射为 UNKNOWN_ERROR
+        返回必须带 trace_id
+        details 由标准模板生成"""
         # 逻辑定义：
         # 1. 调用异常处理模块获取标准化错误信息
         # 2. 记录异常日志（包含 trace_id）
@@ -412,14 +423,17 @@ class RequestHandler(BaseRequestHandler):
         # 逻辑定义：生成 UUID 或时间戳 + 随机数
         pass
 
-    def _standardize_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """私有方法：标准化请求格式"""
-        # 逻辑定义：
-        # 1. 设置默认 type（若未提供）
-        # 2. 设置默认 top_k（若未提供）
-        # 3. 生成 session_id（若未提供）
-        # 4. 返回标准化请求字典
-        pass
+    def _standardize_request(self, request: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
+        """
+        标准化请求格式
+        规则：
+        - 默认 type = config.default_type
+        - 默认 top_k = 5
+        - 默认 extra_params = {}
+        - trace_id 强制写入
+        - 仅当 type in {'agent', 'hybrid'} 且 session_id 为空时，自动生成 session_id
+        """
+        pass    
 ```
 
 ### 6.2 工具函数（utils/tool_functions.py）
@@ -430,11 +444,10 @@ class RequestHandler(BaseRequestHandler):
 from typing import Dict, Any, Tuple, Optional
 
 
-def validate_request_params(request: Dict[str, Any]) -> Tuple[bool, str]:
+def validate_request_params(request: Dict[str, Any]) -> Tuple[bool, str, str]:
     """
-    校验请求参数完整性
-    :param request: 请求字典
-    :return: 元组（校验是否通过，错误信息）
+    校验业务请求参数
+    :return: (是否通过, 错误信息, 错误码)
     """
     # 逻辑定义：
     # 1. 检查 type 是否合法
@@ -444,12 +457,20 @@ def validate_request_params(request: Dict[str, Any]) -> Tuple[bool, str]:
     pass
 
 
-def build_error_details(code: str, request: Dict[str, Any]) -> Optional[Dict]:
+def build_error_details(
+    code: str,
+    request: Optional[Dict[str, Any]] = None,
+    message: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     构建错误详情信息，用于响应中的 details 字段
+    仅作为兜底函数使用
+    不是主路径
+    主路径 trace_id 由应用层传入
     :param code: 错误码
     :param request: 原始请求
     :return: 错误详情字典（失败时）或 None（成功时）
+    
     """
     # 逻辑定义：
     # 1. 根据错误码生成对应的 details 结构
@@ -501,17 +522,15 @@ response = handler.handle(agent_request)
 
 ### 7.2 异常处理示例
 ```python
-from request_response_module.core.impl import RequestHandler
-
 handler = RequestHandler(orchestrator=orchestrator)
 
-# 模拟非法请求（缺少必填参数）
-invalid_request = {
+rag_request = {
     "type": "rag",
-    # 缺少 query 参数
+    "query": "RAG 系统架构是什么？",
+    "top_k": 5,
+    "trace_id": "trace_demo_001"
 }
-
-response = handler.handle(invalid_request)
+response = handler.handle(rag_request, trace_id=rag_request["trace_id"])
 # 响应示例：
 # {
 #   "code": "PARAM_MISSING",
@@ -526,16 +545,17 @@ response = handler.handle(invalid_request)
 ### 7.3 与 API 服务模块集成示例
 ```python
 # API 服务模块中调用请求响应处理模块
-from fastapi import FastAPI
-from request_response_module.core.impl import RequestHandler
+from fastapi import FastAPI, Request
+from request_response_module.core.base import BaseRequestHandler
 
 app = FastAPI()
-handler: RequestHandler = None  # 启动时注入
+handler: BaseRequestHandler = None  # 启动时注入
 
 @app.post("/invoke")
-def invoke(request: dict):
-    """统一业务入口"""
-    return handler.handle(request)
+async def invoke(req: Request):
+    body = await req.json()
+    trace_id = getattr(req.state, "trace_id", None)
+    return handler.handle(body, trace_id=trace_id)
 
 @app.get("/health")
 def health():
@@ -547,12 +567,15 @@ def health():
 
 ## 8. 测试规范
 
-### 8.1 测试范围
+### 8.1 测试范围（修订）
 | 测试类型 | 测试内容 |
 | :--- | :--- |
-| **请求校验测试** | type 参数识别、必填参数校验、参数类型校验、非法参数处理。 |
-| **响应封装测试** | 成功响应格式、失败响应格式、trace_id 生成、retryable 设置。 |
-| **异常处理测试** | 参数缺失异常、调度模块异常、系统未知异常、异常日志记录。 |
+| 请求校验测试 | type 合法性、query/task 条件必填、top_k 范围、请求大小限制 |
+| trace 透传测试 | 应用层传入 trace_id 时是否原样透传；未传入时是否兜底生成 |
+| session 规则测试 | rag 不补 session_id；agent/hybrid 自动补 session_id |
+| 响应封装测试 | retryable 计算、details 模板生成、cost_time 写入 |
+| 异常处理测试 | 标准异常、未知异常、下游调度异常 |
+| 边界职责测试 | 本模块不决定 HTTP 状态码，不执行鉴权逻辑 |
 | **全流程测试** | 请求→校验→调度→响应端到端测试。 |
 | **配置切换测试** | 默认 type 切换、trace 开关切换、校验规则切换。 |
 
@@ -669,8 +692,10 @@ class RequestResponseConfig:
 # 请求响应处理模块配置
 request_response:
   default_type: "rag"              # 默认请求类型（rag/agent/hybrid）
+  default_top_k: 5
   enable_trace: true               # 是否启用链路追踪
   max_request_size: 1048576        # 最大请求大小（字节，默认 1MB）
+  session_prefix: "session"
   timeout: 60                      # 请求处理超时时间（秒）
   validate_strict: true            # 是否启用严格参数校验
 ```
@@ -692,18 +717,18 @@ request_response:
 | `README.md` | 模块说明文档（适配初学者）。 |
 | `requirements.txt` | 依赖包清单（无额外专属依赖，复用系统依赖）。 |
 
+若模块使用额外扩展目录（如 examples/、schemas/），也必须在 README 中说明职责，并纳入测试覆盖范围。
 ---
 
 ## 11. 可替换性约束（强制）
 
 | 约束项 | 说明 |
 | :--- | :--- |
-| **接口依赖** | 上层模块（应用层）仅依赖 `BaseRequestHandler` 抽象接口，禁止直接引用具体实现类。 |
-| **扩展实现** | 新增处理实现（如 GraphQL 处理器、gRPC 处理器）仅需实现 `BaseRequestHandler` 抽象接口，无需修改上层代码。 |
-| **响应格式** | 响应结构、错误码、trace_id 必须严格遵循系统统一标准，不得修改。 |
-| **异常处理** | 异常必须通过异常处理模块统一处理，抛出标准化错误响应。 |
-| **调度注入** | 协同调度模块必须通过构造函数注入，禁止在处理模块内部硬编码实例化。 |
-
+| 接口依赖 | 应用层仅依赖 `BaseRequestHandler`，不得依赖 `RequestHandler` 私有实现细节。 |
+| HTTP 边界 | 本模块不得处理 HTTP 状态码映射、鉴权、中间件、路由。 |
+| 调度注入 | 协同调度依赖必须通过构造函数注入，禁止内部硬编码实例化。 |
+| trace 约束 | `trace_id` 由应用层入口生成并透传，本模块仅兜底生成。 |
+| 统一格式 | 请求与响应结构必须严格遵循系统总设计 v1.1。 |
 ---
 
 ## 12. 常见问题（FAQ）
@@ -711,10 +736,10 @@ request_response:
 | 问题 | 解答 |
 | :--- | :--- |
 | **请求参数校验失败怎么办？** | 检查请求中是否包含必填参数（rag 模式需 query，agent 模式需 task）；检查 type 是否为 rag/agent/hybrid。 |
-| **响应中 trace_id 为空？** | 检查配置中 `enable_trace` 是否为 true；检查 `_generate_trace_id` 方法是否正常执行。 |
+| 响应中 trace_id 为空？ | 先检查应用层是否已透传 trace_id；若未透传，检查本模块兜底生成逻辑。 |
 | **如何处理大请求？** | 检查请求大小是否超过 `max_request_size` 配置；建议在 API 层增加请求大小限制。 |
 | **异常响应格式不统一？** | 确保所有异常都通过 `handle_exception` 方法处理；检查异常处理模块是否正确集成。 |
-| **如何扩展新的请求类型？** | 在 `validate_request` 方法中添加新类型的校验逻辑；在协同调度模块中注册新类型的路由。 |
+| 如何扩展新的请求类型？ | 先更新系统总设计与统一请求格式，再修改本模块校验规则与协同调度模块路由，不得仅修改本模块代码。 |
 | **如何调试请求处理流程？** | 查看日志模块中 `request_response_module` 相关日志，关注 trace_id 与请求参数。 |
 | **如何禁用参数校验？** | 修改配置中 `validate_strict` 为 false（不推荐生产环境使用）。 |
 | **如何处理并发请求？** | 模块本身无状态，支持并发；确保协同调度模块与底层模块支持并发调用。 |
@@ -723,22 +748,19 @@ request_response:
 
 ## 13. 附录：系统错误码关联
 
-本模块异常与系统错误码表的关联如下（补充至架构设计说明书第 10 章）：
+本模块直接使用或透传的核心错误码如下：
 
-| 错误码 | 异常类 | 适用场景 |
+| 错误码 | 来源 | 适用场景 |
 | :--- | :--- | :--- |
-| `PARAM_MISSING` | SystemBaseException | 请求缺少必填参数 |
-| `PARAM_INVALID` | SystemBaseException | 请求参数类型/格式不合法 |
-| `BAD_REQUEST` | SystemBaseException | 请求类型 type 不支持 |
-| `REQUEST_TIMEOUT` | SystemBaseException | 请求处理超时 |
-| `REQUEST_TOO_LARGE` | SystemBaseException | 请求大小超过限制 |
-| `ORCHESTRATOR_RUN_FAILED` | SystemBaseException | 协同调度模块执行失败 |
-| `UNKNOWN_ERROR` | SystemBaseException | 系统未知异常 |
+| `SUCCESS` | 本模块/下游 | 处理成功 |
+| `PARAM_MISSING` | 本模块 | 缺少 query / task 等必填字段 |
+| `PARAM_INVALID` | 本模块 | top_k 类型或范围不合法 |
+| `BAD_REQUEST` | 本模块 | type 非 rag/agent/hybrid 或请求结构不合法 |
+| `ORCHESTRATOR_RUN_FAILED` | 下游透传 | 协同调度执行失败 |
+| `AGENT_TIMEOUT` | 下游透传 | Agent 执行超时 |
+| `RAG_RUN_FAILED` | 下游透传 | RAG 执行失败 |
+| `UNKNOWN_ERROR` | 异常兜底 | 未知运行时异常 |
 
 ---
-
-**文档版本**: v1.0  
-**最后更新**: 2026-02-28  
-**维护责任人**: 请求响应处理模块开发负责人
 
 返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)

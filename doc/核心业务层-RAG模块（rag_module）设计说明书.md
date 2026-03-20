@@ -1,477 +1,737 @@
-# 核心业务层 - RAG 模块（rag_module）设计说明书
+# 核心业务层-RAG模块（rag_module）设计说明书
+
+| 文档版本 | v1.1 |
+| :--- | :--- |
+| 最后更新 | 2026-03-19 |
+| 维护责任人 | RAG模块开发负责人 |
+| 状态 | 修订版 |
+
+> 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1、接口层-请求响应处理模块修订版、应用层-API服务模块修订版、协同调度模块修订版与 Agent 模块修订版，重点修正 chunk 级检索与引用规范、依赖注入边界、统一请求透传、上下文拼装规则、索引链路职责与统一响应结构。
 
 # 1. 文档概述
 
 ## 1.1 文档目的
 
-本文档为RAG 与 Agent 系统核心业务层 - RAG 模块的独立、完整设计说明书，严格遵循系统整体架构规范，明确模块功能、项目结构、接口定义、依赖关系、数据格式及开发要求，用于指导开发人员（含初学者）进行该模块的独立开发、测试与集成，确保模块与系统无缝兼容、可扩展、可替换。
+本文档为 RAG 与 Agent 系统核心业务层-RAG模块（`rag_module`）的独立设计说明书。
+
+本模块负责系统中的检索增强生成能力，是“问题向量化 -> 检索召回 -> 上下文拼装 -> 生成回答 -> 引用输出”的核心执行模块。模块在系统中的职责包括：
+
+- 接收标准化 RAG 请求；
+- 执行 query normalize / retrieve / 可选 rerank / context assemble / generate；
+- 基于 chunk 级检索结果构造模型上下文；
+- 生成包含 citations 的最终回答；
+- 返回系统统一响应结构；
+- 作为独立 RAG 执行器供协同调度模块和 Agent 工具调用。
+
+本文档作为本模块开发、测试、联调与后续替换实现的唯一标准依据。
 
 ## 1.2 适用人群
 
-本团队所有开发人员（含资深开发者与初学者）、测试人员，作为 RAG 模块开发、测试、维护的唯一标准依据；项目管理人员可参考本说明书进行模块开发进度管控。
+适用于 RAG 模块开发人员、协同调度模块开发人员、Agent 模块开发人员、数据层开发人员、测试人员、架构设计人员及后续维护人员。
 
 ## 1.3 核心需求回顾
 
-- 模块功能：实现检索增强生成全流程，接收用户问题，完成文本检索、上下文拼接、大模型回答生成，输出标准化答案与检索依据。
+| 需求类型 | 具体要求 |
+| :--- | :--- |
+| 模块功能 | 提供 query 处理、向量检索、上下文拼装、答案生成与 citations 输出能力。 |
+| 开发语言 | Python 3.10+，最低 3.10，推荐 3.12，与系统整体保持一致。 |
+| 开发模式 | 独立开发、可替换实现、通过抽象接口集成。 |
+| 文档要求 | 与系统总设计 v1.1 及接口层 / 应用层 / 调度层 / Agent 模块子设计保持一致。 |
+| 模块约束 | 本模块不负责 HTTP 协议处理；不重新生成新的业务 trace_id；必须按 chunk 级执行检索与引用；不得把整篇文档直接当作检索最小单元。 |
 
-- 开发语言：Python 3.10+，与系统整体保持一致。
-
-- 开发模式：独立开发、互不依赖，基于本说明书即可完成开发，开发完成后通过统一接口集成至核心业务层。
-
-- 文档要求：详细、易懂，适配初学者，明确模块所有可提前定义的内容（接口、数据格式、项目结构等）。
-
-- 模块约束：需包含抽象基类（ABC），确保模块一致性；代码可与系统其他模块交换，数据格式符合系统统一标准。
-
-## 1.4 术语定义
-
-|术语|定义|
-|---|---|
-|RAG|检索增强生成（Retrieval-Augmented Generation），核心业务层核心模块，结合向量检索与大模型生成，提升回答准确性与事实性。|
-|检索|根据用户问题向量，从向量数据库中匹配最相似的文本片段，是 RAG 的核心检索环节。|
-|上下文拼接|将检索到的文本片段按规则拼接为大模型输入提示词（Prompt），控制上下文长度。|
-|ABC|抽象基类，定义模块的核心接口与方法，强制子类实现，保障模块一致性。|
-|标准化响应|模块输出统一格式结果，包含答案、检索依据、状态码、错误信息，遵循系统统一异常码规范。|
 # 2. 模块核心设计
 
 ## 2.1 模块定位与职责
 
-本模块属于系统核心业务层，是 RAG 系统的核心中枢，串联数据层与基础支撑层所有相关模块，完整实现 RAG 全流程：
+本模块属于系统**核心业务层**，是系统中负责检索增强生成能力的核心模块。
 
-1. 接收用户问题 / 查询，完成参数校验、异常处理；
+本模块职责如下：
 
-2. 调用 Embedding 模块将问题转换为向量；
+- 接收标准化查询请求；
+- 对 query 做最小清洗与规范化；
+- 调用 Embedding 能力生成查询向量；
+- 调用向量数据库执行 chunk 级检索；
+- 基于检索结果组装上下文；
+- 调用大模型生成回答；
+- 生成 chunk 级 citations；
+- 返回统一响应结构。
 
-3. 调用向量数据库模块执行相似度检索，获取相关文本片段；
+本模块不负责：
 
-4. 上下文拼接与 Prompt 模板渲染，生成标准化大模型输入；
+- 不负责 HTTP/HTTPS 协议处理；
+- 不负责业务语义级参数校验（由接口层负责）；
+- 不负责索引构建全流程编排；
+- 不直接编排上传、鉴权、中间件、路由；
+- 不重新生成新的业务 `trace_id`；
+- 不将整篇文档直接作为最终检索上下文主路径。
 
-5. 调用大模型对接模块生成增强回答；
+## 2.2 模块边界
 
-6. 输出标准化 RAG 响应，包含答案、检索依据、状态信息；
+### 2.2.1 本模块负责
 
-7. 屏蔽底层模块差异，支持配置化切换向量模型、大模型、向量库。
+- Query 规范化；
+- Query 向量化；
+- 向量召回；
+- 可选重排；
+- 上下文拼装；
+- 生成回答；
+- 输出 citations。
 
-## 2.2 输入输出规范
+### 2.2.2 本模块不负责
 
-### 2.2.1 输入
-
-- 核心输入：query: str（用户问题 / 查询文本）；
-
-- 可选参数：top_k: int（返回最相似的片段数量，默认 5）、model_name: str（指定生成大模型，默认系统配置）。
-
-### 2.2.2 输出
-
-标准化 RAG 响应格式（遵循系统统一异常码规范）：
-
-```json
-{
-  "code": "SUCCESS",
-  "message": "RAG执行成功",
-  "data": {
-    "query": "用户问题",
-    "top_k": 5,
-    "contexts_count": 3,
-    "answer": "生成的增强回答",
-    "retrieved": [
-      {
-        "vector_id": "v1",
-        "score": 0.92,
-        "doc_id": "d1",
-        "metadata": {"chunk_id": "d1#c000001", "file_name": "test.pdf"}
-      }
-    ]
-  }
-}
-```
+- 不做统一请求标准化；
+- 不直接做 chunking 索引构建（由索引链路或 index_service 负责）；
+- 不负责管理上传文件；
+- 不在本模块实现 HTTP 状态码映射；
+- 不直接控制外部服务生命周期。
 
 ## 2.3 依赖关系
 
-本模块是核心业务层最核心的模块，依赖基础支撑层、数据层、核心业务层其他模块，是系统数据流转的中枢：
+### 2.3.1 上游依赖
 
-**基础支撑层依赖：**
+| 依赖模块 | 用途 |
+| :--- | :--- |
+| `orchestrator_module` | 通过协同调度模块接收 `type=rag` 请求 |
+| `agent_module`（工具调用场景） | 通过工具能力间接调用 RAG 检索与生成 |
 
-1. 通用工具模块（common_utils_module）：文本清洗、参数校验；
+### 2.3.2 下游依赖
 
-2. 配置管理模块（config_module）：读取 RAG 参数、Prompt 模板、上下文长度限制；
+| 依赖模块 | 用途 |
+| :--- | :--- |
+| `embedding_module` | 生成查询向量 |
+| `vector_db_module` | 执行 chunk 级相似度检索 |
+| `llm_adapter_module` 或等价 LLM 服务 | 生成最终回答 |
+| `document_store_module`（可选） | 在需要补全文档片段时读取原始内容或片段映射 |
 
-3. 日志模块（log_module）：记录 RAG 全流程日志、异常信息；
+### 2.3.3 基础依赖
 
-4. 异常处理模块（exception_module）：抛出标准化 RAG 异常。
+| 依赖模块 | 用途 |
+| :--- | :--- |
+| `config_module` | 模块配置读取 |
+| `log_module` | 检索与生成过程日志记录 |
+| `exception_module` | 异常封装 |
+| `common_utils_module` | 通用辅助函数 |
 
-**数据层依赖：**
+说明：
 
-1. 向量数据库模块（vector_db_module）：执行向量相似度检索；
-
-2. 文档存储模块（document_store_module）：根据检索结果获取原文文本；
-
-3. 大模型对接模块（llm_adapter_module）：调用聊天大模型生成增强回答。
-
-**核心业务层依赖：**
-
-1. Embedding 模块（embedding_module）：将用户问题转换为向量。
+- 本模块优先依赖抽象接口，如 `BaseEmbedding`、`BaseVectorDB`、LLM 抽象客户端；
+- 具体默认实现由 bootstrap 注入；
+- `document_store_module` 不应用于“把整篇文档取回再截断”作为默认主路径，而应优先依赖 chunk 级检索结果本身。
 
 # 3. 统一项目结构规范
 
-严格遵循系统整体项目结构规范，模块根目录命名为rag_module（全小写，多单词用下划线连接），目录结构如下，开发者不得随意修改目录名称与层级，初学者可直接复制该结构搭建项目。
+本模块遵循系统总设计 v1.1 的统一目录规范。
 
-```plaintext
-rag_module/                  # 模块根目录
-├── __init__.py              # 模块初始化文件，暴露核心类/方法
-├── core/                    # 核心逻辑目录（抽象基类+实现类）
+## 3.1 必选目录与文件
+
+```text
+rag_module/
+├── __init__.py
+├── core/
 │   ├── __init__.py
-│   ├── base.py              # 抽象基类（ABC），定义RAG核心接口
-│   └── impl.py              # 具体实现类，继承抽象基类
-├── model/                   # 数据模型目录（统一请求/响应模型）
+│   ├── base.py
+│   └── impl.py
+├── model/
 │   ├── __init__.py
-│   └── data_model.py        # RAG请求/响应标准化模型
-├── prompt/                  # Prompt模板目录（RAG专属）
+│   └── data_model.py
+├── prompt/
 │   ├── __init__.py
-│   └── prompt_template.py    # RAG增强生成Prompt模板
-├── utils/                   # 模块专属工具函数
+│   └── prompt_template.py
+├── utils/
 │   ├── __init__.py
-│   └── tool_functions.py    # 上下文拼接、Prompt渲染、检索结果处理
-├── config/                  # 模块专属配置
+│   └── tool_functions.py
+├── config/
 │   ├── __init__.py
-│   └── config.py            # 读取全局配置，补充RAG专属配置
-├── tests/                   # 测试用例目录
+│   └── config.py
+├── tests/
 │   ├── __init__.py
-│   └── test_impl.py         # 核心功能测试用例
-└── README.md                # 模块说明文档（适配初学者）
+│   └── test_impl.py
+├── README.md
+└── requirements.txt
 ```
 
-## 3.1 目录结构说明
+## 3.2 可选扩展目录
 
-- rag_module：模块根目录，名称固定，与功能精准对应；
+本模块按复杂度与演进阶段，可选增加：
 
-- __init__.py：每个目录必须包含，根目录暴露核心类（如SimpleRAG、RAGService），方便其他模块调用；
+- `rerank/`：重排器相关逻辑
+- `chunking/`：若短期将 chunking 作为模块内组件实现
+- `examples/`：标准请求与返回示例
+- `docs/`：补充说明材料
 
-- core：核心逻辑目录，base.py定义抽象接口，impl.py实现 RAG 全流程；
+说明：
 
-- model：模块专属数据模型，定义 RAG 请求、响应的标准化格式；
-
-- prompt：RAG 专属 Prompt 模板管理，支持配置化切换模板；
-
-- utils：模块专属工具函数，上下文拼接、Prompt 渲染、检索结果过滤；
-
-- config：读取系统 RAG 配置，补充模块专属参数（如上下文长度、截断规则）；
-
-- tests：覆盖检索、生成、全流程、异常场景的测试用例；
-
-- README.md：详细说明模块功能、接口、使用方法、依赖项、扩展步骤。
+- 当前阶段可采用 `core/impl.py` 单文件实现；
+- 若重排与引用逻辑复杂，建议拆分 `rerank/` 或 `chunking/`；
+- 新增扩展目录必须在 `README.md` 中说明职责与边界。
 
 # 4. 核心数据模型设计
 
-本模块定义统一的 RAG 请求 / 响应模型，所有接口均基于该模型交互，确保模块内部及与外部模块的数据格式统一，遵循系统整体数据规范。
-
-## 4.1 RAG 请求模型（RAGRequest）
+## 4.1 RAGRequest
 
 ```python
-from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 @dataclass
 class RAGRequest:
-    """RAG增强生成统一请求模型"""
-    # 用户问题/查询（必填）
     query: str
-    # 返回最相似的片段数量（默认5）
     top_k: int = 5
-    # 生成大模型名称（默认使用系统配置）
-    llm_model_name: Optional[str] = None
-    # 向量模型名称（默认使用系统配置）
-    embedding_model_name: Optional[str] = None
-    # 上下文最大长度（默认使用系统配置）
-    max_context_length: Optional[int] = None
+    session_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
 ```
 
-## 4.2 检索结果模型（RetrievedChunk）
+说明：
+
+- `query` 为核心输入；
+- `top_k` 表示最终进入答案生成的检索片段数量或候选控制参数；
+- `session_id` 在 RAG 场景下可为空；
+- `trace_id` 由应用层生成并经接口层、调度层透传；
+- rewrite、filter、source 等扩展信息统一通过 `extra_params` 传入。
+
+## 4.2 RetrievedChunk
 
 ```python
-from typing import Dict, Optional, float
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass
 class RetrievedChunk:
-    """RAG检索结果标准化模型"""
-    vector_id: str
-    score: float          # 相似度得分（0~1）
-    doc_id: str           # 文档ID（关联文档存储）
-    chunk_id: str         # 文本片段ID
-    file_name: str        # 源文件名
-    content: Optional[str] = None  # 片段文本内容
+    chunk_id: str
+    doc_id: str
+    file_name: str
+    chunk_index: int
+    content: str
+    score: float
+    start_char: Optional[int] = None
+    end_char: Optional[int] = None
 ```
 
-## 4.3 RAG 响应模型（RAGResponse）
+说明：
+
+- 检索结果必须以 chunk 级对象表达；
+- `content` 为该 chunk 的文本内容；
+- `start_char / end_char` 用于稳定引用；
+- 不允许仅返回 `doc_id` 而缺少 `chunk_id / chunk_index / content`。
+
+## 4.3 Citation
 
 ```python
-from typing import List, Optional, Dict
 from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class Citation:
+    chunk_id: str
+    doc_id: str
+    file_name: str
+    start_char: Optional[int] = None
+    end_char: Optional[int] = None
+    score: Optional[float] = None
+```
+
+## 4.4 RAGResponse
+
+```python
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
 
 @dataclass
 class RAGResponse:
-    """RAG增强生成统一响应模型，遵循系统统一异常码规范"""
-    # 响应码：SUCCESS（成功）、系统异常码（失败）
     code: str
-    # 响应信息：成功为"ok"，失败为具体错误信息
     message: str
-    # 响应数据
-    data: Optional[Dict] = None
-    # 调用耗时（秒，可选）
-    cost_time: Optional[float] = None
-    # 链路追踪ID（可选）
-    trace_id: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+    trace_id: str = ""
+    retryable: bool = False
+    details: Optional[Dict[str, Any]] = None
+```
+
+建议 `data` 中至少包含：
+
+```json
+{
+  "answer": "最终回答文本 [CIT:doc123#c000010]",
+  "citations": [
+    {
+      "chunk_id": "doc123#c000010",
+      "doc_id": "doc123",
+      "file_name": "xxx.md",
+      "start_char": 1200,
+      "end_char": 1680,
+      "score": 0.87
+    }
+  ],
+  "retrieved_chunks": [
+    {
+      "chunk_id": "doc123#c000010",
+      "doc_id": "doc123",
+      "file_name": "xxx.md",
+      "chunk_index": 10,
+      "score": 0.87
+    }
+  ]
+}
 ```
 
 # 5. 核心接口设计（抽象基类）
 
-## 5.1 RAG 抽象基类（BaseRAG）
-
-定义模块核心接口，强制所有实现类必须实现，保障模块一致性、可替换性：
+## 5.1 BaseRAG
 
 ```python
 from abc import ABC, abstractmethod
-from typing import Dict
-from rag_module.model.data_model import RAGRequest, RAGResponse
+from typing import Any, Dict, List
 
 class BaseRAG(ABC):
-    """RAG模块抽象基类，所有RAG实现类必须继承此类"""
-
     @abstractmethod
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
+    def retrieve(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        检索步骤：根据用户问题检索相关文本片段
-        :param query: 用户问题
-        :param top_k: 返回片段数量
-        :return: 标准化检索结果列表
-        :raises RAGException: 检索失败时抛出标准化异常
+        执行检索并返回 chunk 级结果
         """
         pass
 
     @abstractmethod
-    def generate(self, query: str, contexts: List[str]) -> str:
+    def generate(self, request: Dict[str, Any], retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        生成步骤：根据检索上下文生成增强回答
-        :param query: 用户问题
-        :param contexts: 检索到的文本片段列表
-        :return: 生成的回答文本
-        :raises RAGException: 生成失败时抛出标准化异常
+        基于检索结果生成回答
         """
         pass
 
     @abstractmethod
-    def run(self, query: str, top_k: int = 5) -> Dict:
+    def run(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
-        RAG全流程执行入口（对外核心接口）
-        :param query: 用户问题
-        :param top_k: 返回片段数量
-        :return: 标准化RAG响应结果
-        :raises RAGException: 流程执行失败时抛出标准化异常
-        """
-        pass
-
-    @abstractmethod
-    def call_rag(self, request: RAGRequest) -> RAGResponse:
-        """
-        统一RAG调用接口（对外标准化入口）
-        :param request: RAG请求模型
-        :return: RAG响应模型
+        执行完整 RAG 流程
         """
         pass
 ```
 
-# 6. 核心实现设计
+约束：
 
-## 6.1 标准 RAG 实现类（SimpleRAG）
+- `retrieve()` 必须返回 chunk 级结果；
+- `generate()` 必须可生成 citations；
+- `run()` 不负责做业务语义校验；
+- 输入输出必须兼容系统统一结构。
 
-继承抽象基类，实现完整 RAG 全流程，串联所有依赖模块，是系统默认使用的 RAG 实现类，基础代码构建如下：
+# 6. 核心实现设计（SimpleRAG）
+
+## 6.1 类职责说明
+
+`SimpleRAG` 是系统默认 RAG 实现，负责：
+
+- 接收标准化 RAG 请求；
+- 进行 query 规范化与向量化；
+- 执行 chunk 级向量检索；
+- 拼装上下文并调用 LLM 生成回答；
+- 输出 citations 与统一响应结构。
+
+本实现必须保持：
+
+- 无 HTTP 依赖；
+- 可并发复用；
+- `trace_id` 全流程透传；
+- 以 chunk 级结果为检索、引用与回答的核心单元。
+
+## 6.2 构造函数建议
 
 ```python
-from typing import List, Dict
-from rag_module.core.base import BaseRAG
-from rag_module.model.data_model import RAGRequest, RAGResponse
-from embedding_module.core.impl import STEmbedding
-from vector_db_module.core.impl import FaissVectorDB
-from document_store_module.core.impl import LocalDocumentStore
-from llm_adapter_module.core.impl import LLMService
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import RAGException
+from embedding_module.core.base import BaseEmbedding
+from vector_db_module.core.base import BaseVectorDB
 
 class SimpleRAG(BaseRAG):
-    """标准RAG实现类：串联检索+生成全流程，系统默认实现"""
-
-    def __init__(self, llm_client):
-        """
-        初始化RAG模块，注入大模型客户端，加载系统配置
-        :param llm_client: 大模型客户端（由外部注入，解耦依赖）
-        """
-        # 基础支撑层初始化
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        self.config.load_config()
-
-        # 核心依赖模块初始化
-        self.embedding = STEmbedding()                # 向量生成模块
-        self.vector_db = FaissVectorDB()              # 向量数据库模块
-        self.doc_store = LocalDocumentStore()          # 文档存储模块
-        self.llm = llm_client                         # 大模型客户端（外部注入）
-
-        # 读取系统RAG核心配置
-        self.default_top_k = self.config.get_config("rag.default_top_k", 5)
-        self.max_context_length = self.config.get_config("rag.max_context_length", 4096)
-        self.context_truncate_length = self.config.get_config("rag.context_truncate_length", 1200)
-
-        self.logger.info("RAG模块初始化完成，加载系统默认配置")
-
-    def retrieve(self, query: str, top_k: int = 5) -> List[Dict]:
-        """实现抽象方法：检索步骤，问题向量化+向量检索+结果格式化"""
-        pass
-
-    def generate(self, query: str, contexts: List[str]) -> str:
-        """实现抽象方法：生成步骤，上下文拼接+Prompt渲染+大模型生成"""
-        pass
-
-    def run(self, query: str, top_k: int = 5) -> Dict:
-        """实现抽象方法：RAG全流程执行，检索→获取原文→生成→结果封装"""
-        pass
-
-    def call_rag(self, request: RAGRequest) -> RAGResponse:
-        """实现抽象方法：标准化RAG调用入口，请求校验+异常封装"""
-        pass
+    def __init__(
+        self,
+        llm_client,
+        embedding: BaseEmbedding | None = None,
+        vector_db: BaseVectorDB | None = None,
+        doc_store = None,
+        reranker = None,
+    ):
+        self.llm_client = llm_client
+        self.embedding = embedding
+        self.vector_db = vector_db
+        self.doc_store = doc_store
+        self.reranker = reranker
 ```
+
+说明：
+
+- 不在构造函数内硬编码创建默认实现；
+- 默认实现由 bootstrap 注入；
+- `doc_store` 仅用于补充必要片段或元数据，不应成为“取整篇文档再截断”的主路径；
+- `reranker` 可为空，未启用时直接按检索顺序使用。
+
+## 6.3 run() 处理顺序（强制）
+
+```text
+1. 读取 query / top_k / trace_id / extra_params
+2. 调用 retrieve() 获取 chunk 级检索结果
+3. 可选：执行 rerank
+4. 调用 generate() 基于 chunk 结果生成回答
+5. 生成 citations
+6. 返回统一响应
+7. 异常时返回标准错误响应
+```
+
+## 6.4 Query Normalize / Rewrite 规则
+
+### 6.4.1 Query Normalize
+
+当前版本至少执行：
+
+- 去首尾空白；
+- 统一换行；
+- 长度截断（防止异常长输入）；
+- 必要时简单去噪。
+
+### 6.4.2 Query Rewrite（可选）
+
+当前版本可不强制实现完整 rewrite，但若实现，必须输出结构：
+
+```json
+{
+  "rewrite_query": "用于检索的改写问题",
+  "keywords": ["关键字1"],
+  "filters": {
+    "doc_id": "...",
+    "source": "..."
+  }
+}
+```
+
+说明：
+
+- rewrite 结果必须能直接送入 embedding；
+- 若未实现 rewrite，默认使用 normalize 后的 query 直接检索。
+
+## 6.5 retrieve() 设计（必须改）
+
+### 6.5.1 输入要求
+
+- 输入 `query` 已由接口层保证合法；
+- 本模块不重新校验 query 是否为空；
+- `trace_id` 必须透传到 embedding 与 vector_db 调用链路（如支持）。
+
+### 6.5.2 执行要求
+
+```text
+1. normalize query
+2. embedding.embed_text(query)
+3. vector_db.query(...)
+4. 返回 chunk 级检索结果列表
+```
+
+### 6.5.3 返回约束
+
+`retrieve()` 返回的每个元素至少包含：
+
+- `chunk_id`
+- `doc_id`
+- `file_name`
+- `chunk_index`
+- `content`
+- `score`
+
+若缺少以上字段，不视为合格的 chunk 级结果。
+
+### 6.5.4 禁止事项
+
+- 不允许仅返回 `doc_id`
+- 不允许把整篇文档内容作为默认检索返回单元
+- 不允许在 retrieve() 完成后再按 `doc_id` 去 document_store 取整篇内容并整体截断作为主上下文
+
+## 6.6 rerank 规则（可选）
+
+若启用 rerank：
+
+- 输入为 retrieve() 的候选 chunks；
+- 输出仍必须保持 chunk 级对象；
+- 不得丢失 `chunk_id / doc_id / file_name / chunk_index / content`；
+- 默认 `top_k_rerank` 建议 8；
+- 未启用时，按 retrieve 结果顺序进入 context assemble。
+
+## 6.7 Context Assemble 规则（强制）
+
+### 6.7.1 拼装原则
+
+- 以 chunk 为最小上下文单元；
+- 按 rank 依次加入；
+- 达到 `max_context_tokens` 即停止；
+- 每个 chunk 可按 `max_chunk_in_prompt_tokens` 截断；
+- 不再以“整篇文档”为上下文主路径。
+
+### 6.7.2 相邻 chunk 合并（可选）
+
+- 若来自同一文档且 chunk_index 相邻，可在保留引用映射的前提下合并显示；
+- 合并后仍必须保留 chunk 级 citation 映射。
+
+### 6.7.3 结果去重
+
+- `chunk_id` 去重；
+- 避免同一内容重复进入 prompt。
+
+## 6.8 generate() 设计（必须改）
+
+### 6.8.1 输入
+
+- 标准化请求
+- chunk 级检索结果列表
+
+### 6.8.2 生成要求
+
+- 必须基于 chunk 内容组装 prompt；
+- 输出回答时应生成 citations；
+- 若模型本身不直接支持引用插入，可由后处理逻辑补 `[CIT:chunk_id]`。
+
+### 6.8.3 返回要求
+
+输出结果应至少包含：
+
+- `answer`
+- `citations`
+
+示例：
+
+```json
+{
+  "answer": "本系统采用分层架构+模块化设计……[CIT:doc123#c000010]",
+  "citations": [
+    {
+      "chunk_id": "doc123#c000010",
+      "doc_id": "doc123",
+      "file_name": "系统设计说明书.md",
+      "start_char": 1200,
+      "end_char": 1680,
+      "score": 0.87
+    }
+  ]
+}
+```
+
+## 6.9 citations 规则（强制）
+
+### 6.9.1 Answer 中的引用标记
+
+- 文内引用格式：`[CIT:chunk_id]`
+- 多引用格式：`[CIT:chunkA,chunkB]`
+
+### 6.9.2 citations 字段要求
+
+每条 citation 至少包含：
+
+- `chunk_id`
+- `doc_id`
+- `file_name`
+
+推荐补充：
+
+- `start_char`
+- `end_char`
+- `score`
+
+### 6.9.3 兼容规则
+
+- 若暂时无法在 answer 中插入引用标记，也必须返回 `citations` 字段；
+- 最终目标是 answer 与 citations 同时可用。
+
+## 6.10 trace_id 规则（强制）
+
+- `trace_id` 由应用层生成，经接口层与调度层透传到本模块；
+- 本模块不得重新生成新的业务 `trace_id`；
+- embedding、检索、生成、异常日志都应尽量附带同一 `trace_id`；
+- 最终响应必须保留该 `trace_id`。
+
+## 6.11 索引链路边界（修订重点）
+
+本模块与索引构建链路关系如下：
+
+- 本模块负责“消费已构建好的 chunk 索引”；
+- 本模块不直接负责 parser -> chunker -> embedding -> vector_db 的离线构建主流程；
+- 若短期将 chunking 作为模块内组件实现，也仅限于为开发与联调提供兼容能力；
+- 正式索引构建应通过独立 index_service 或统一索引流程完成。
+
+## 6.12 错误处理与统一返回
+
+### 6.12.1 错误码约定
+
+| 错误码 | 说明 |
+| :--- | :--- |
+| `SUCCESS` | 执行成功 |
+| `EMBEDDING_CONFIG_MISSING` | embedding 配置缺失 |
+| `EMBEDDING_INIT_FAILED` | embedding 初始化失败 |
+| `VECTOR_QUERY_FAILED` | 向量检索失败 |
+| `RAG_RUN_FAILED` | RAG 执行失败 |
+| `UNKNOWN_ERROR` | 未知异常兜底 |
+
+### 6.12.2 返回约束
+
+- 所有成功与失败响应都必须返回 `trace_id`
+- 若失败且属于可重试错误，必须正确设置 `retryable`
+- `details` 需尽量结构化，如包含 `top_k`、`embedding_dim`、`stage` 等信息
 
 # 7. 模块调用示例
 
+## 7.1 基础组装示例
+
 ```python
+from bootstrap import build_embedding, build_vector_db, build_llm_client
 from rag_module.core.impl import SimpleRAG
-from llm_adapter_module.core.impl import LLMService
-from rag_module.model.data_model import RAGRequest
 
-# 1. 初始化大模型客户端
-llm_service = LLMService()
+embedding = build_embedding()
+vector_db = build_vector_db()
+llm_client = build_llm_client()
 
-# 2. 初始化RAG模块（注入大模型客户端）
-rag = SimpleRAG(llm_client=llm_service)
-
-# 3. 直接调用全流程接口
-query = "RAG系统核心业务层设计包含哪些模块？"
-result = rag.run(query, top_k=5)
-
-# 4. 标准化接口调用（推荐）
-request = RAGRequest(
-    query="RAG系统核心业务层设计包含哪些模块？",
-    top_k=5
+rag = SimpleRAG(
+    llm_client=llm_client,
+    embedding=embedding,
+    vector_db=vector_db
 )
-response = rag.call_rag(request)
+```
 
-# 5. 处理响应
-if response.code == "SUCCESS":
-    print(f"用户问题：{response.data['query']}")
-    print(f"RAG回答：{response.data['answer']}")
-    print(f"检索到{response.data['contexts_count']}个相关片段")
+## 7.2 标准 RAG 调用示例
+
+```python
+request = {
+    "query": "RAG 系统架构是什么？",
+    "top_k": 5,
+    "trace_id": "trace_demo_001",
+    "extra_params": {}
+}
+
+result = rag.run(request)
+```
+
+## 7.3 Agent 工具调用示例（概念性）
+
+```python
+def rag_search_tool(payload):
+    return rag.run({
+        "query": payload["query"],
+        "top_k": payload.get("top_k", 5),
+        "trace_id": payload.get("trace_id"),
+        "extra_params": payload.get("extra_params", {})
+    })
 ```
 
 # 8. 测试规范
 
-## 8.1 测试范围
+## 8.1 测试范围（强制）
 
-- 检索步骤：问题向量化、向量检索、结果格式化；
+| 测试类型 | 测试内容 |
+| :--- | :--- |
+| 检索结果结构测试 | retrieve() 是否返回 chunk 级结果 |
+| chunk 引用测试 | answer 与 citations 是否正确输出 |
+| 上下文拼装测试 | context assemble 是否按 chunk 构造且长度受控 |
+| trace 透传测试 | `trace_id` 是否贯穿 embedding / 检索 / 生成 / 响应 |
+| rerank 测试 | 启用 rerank 时是否仍保持 chunk 级结构 |
+| 错误处理测试 | embedding 初始化失败、vector query 失败、生成失败等场景 |
+| 禁止整篇回退测试 | 不应默认将整篇文档取回后截断作为主路径 |
+| 统一响应测试 | 返回值是否符合统一响应结构 |
 
-- 生成步骤：上下文拼接、Prompt 渲染、大模型生成；
-
-- 全流程执行：检索 + 生成端到端测试；
-
-- 异常场景：问题为空、检索无结果、大模型调用失败、配置缺失；
-
-- 配置切换：向量模型、大模型、检索参数切换测试。
-
-## 8.2 测试用例基础框架
+## 8.2 Mock 示例
 
 ```python
-import unittest
-from rag_module.core.impl import SimpleRAG
-from llm_adapter_module.core.impl import LLMService
-from exception_module.core.impl import RAGException
+class MockEmbedding:
+    def embed_text(self, text):
+        return [0.1, 0.2, 0.3]
 
-class TestRAGModule(unittest.TestCase):
-    """RAG模块单元测试，覆盖核心功能与异常场景"""
+class MockVectorDB:
+    def query(self, embedding, top_k=5, filters=None):
+        return [
+            {
+                "chunk_id": "doc1#c000001",
+                "doc_id": "doc1",
+                "file_name": "demo.md",
+                "chunk_index": 1,
+                "content": "系统采用分层架构设计。",
+                "score": 0.91,
+                "start_char": 0,
+                "end_char": 18
+            }
+        ]
 
-    def setUp(self):
-        """测试前置：初始化RAG实例、大模型服务、测试数据"""
-        self.llm_service = LLMService()
-        self.rag = SimpleRAG(llm_client=self.llm_service)
-        self.test_query = "RAG系统核心业务层设计包含哪些模块？"
-        self.empty_query = ""
-
-    def test_rag_retrieve(self):
-        """测试RAG检索步骤，验证检索结果格式与数量"""
-        retrieved = self.rag.retrieve(self.test_query, top_k=3)
-        self.assertEqual(len(retrieved), 3)
-        self.assertIn("doc_id", retrieved[0])
-
-    def test_rag_full_run(self):
-        """测试RAG全流程执行，验证响应格式与答案生成"""
-        result = self.rag.run(self.test_query)
-        self.assertEqual(result["code"], "SUCCESS")
-        self.assertIn("answer", result["data"])
-
-    def test_empty_query_run(self):
-        """测试空问题RAG调用，验证异常抛出"""
-        with self.assertRaises(RAGException):
-            self.rag.run(self.empty_query)
-
-    def test_no_retrieve_result(self):
-        """测试无检索结果场景，验证生成逻辑与响应"""
-        pass
-
-if __name__ == "__main__":
-    unittest.main()
+class MockLLM:
+    def generate(self, prompt):
+        return "系统采用分层架构设计。[CIT:doc1#c000001]"
 ```
 
-# 9. 交付物清单（强制）
+# 9. 模块配置管理
 
-1. core/base.py：抽象基类，定义 RAG 核心接口；
+建议配置示例如下：
 
-2. core/impl.py：具体实现类（标准 RAG 全流程）；
+```yaml
+rag:
+  top_k_retrieve: 50
+  top_k_rerank: 8
+  max_context_tokens: 3000
+  max_chunk_in_prompt_tokens: 600
+  enable_rerank: false
+  enable_rewrite: false
+```
 
-3. model/data_model.py：RAG 请求 / 响应标准化数据模型；
+说明：
 
-4. prompt/prompt_template.py：RAG 增强生成 Prompt 模板；
+- `top_k_retrieve` 为召回阶段参数；
+- `top_k_rerank` 为重排后进入上下文拼装的候选数量；
+- `max_context_tokens` 控制 prompt 上下文长度；
+- `max_chunk_in_prompt_tokens` 控制单 chunk 最大进入 prompt 的长度；
+- rewrite / rerank 可通过配置控制开关。
 
-5. utils/tool_functions.py：上下文拼接、Prompt 渲染、检索结果处理工具；
+# 10. 交付物清单（强制）
 
-6. config/config.py：模块配置读取逻辑；
+模块开发完成后，需提交以下交付物：
 
-7. tests/test_impl.py：核心功能测试用例；
+| 交付物 | 说明 |
+| :--- | :--- |
+| `core/base.py` | 抽象基类，定义 RAG 核心接口 |
+| `core/impl.py` | 默认 RAG 实现 |
+| `model/data_model.py` | RAG 数据模型 |
+| `prompt/prompt_template.py` | Prompt 模板 |
+| `utils/tool_functions.py` | 上下文拼装、citations、辅助函数 |
+| `config/config.py` | 模块配置读取逻辑 |
+| `tests/test_impl.py` | 核心测试用例 |
+| `README.md` | 模块说明文档 |
+| `requirements.txt` | 依赖包清单 |
 
-8. README.md：模块说明文档（适配初学者）；
+可选扩展交付物（按复杂度选择）：
 
-9. requirements.txt：依赖包清单（无额外专属依赖，复用系统依赖）。
+- `rerank/*`
+- `chunking/*`
+- `examples/*`
+- `docs/*`
 
-# 10. 可替换性约束（强制）
+若使用可选扩展目录，必须在 `README.md` 中说明职责与边界，并纳入测试覆盖。
 
-1. 上层模块（协同调度、Agent）仅依赖BaseRAG抽象接口，禁止直接引用具体实现类；
+# 11. 可替换性约束
 
-2. 新增 RAG 实现（如多轮对话 RAG、知识库分类 RAG）仅需实现BaseRAG抽象接口，无需修改上层代码；
+| 约束项 | 说明 |
+| :--- | :--- |
+| 上游调用 | 调度层只能依赖 `BaseRAG` 抽象接口 |
+| 下游依赖 | 本模块优先依赖 `BaseEmbedding`、`BaseVectorDB`、抽象 LLM 客户端 |
+| chunk 约束 | 检索、引用、上下文拼装都必须以 chunk 为最小单元 |
+| trace 约束 | `trace_id` 由应用层生成并经接口层、调度层透传，本模块不得重新生成 |
+| 索引边界 | 本模块消费索引，不直接承担离线索引构建主流程 |
+| 统一结构 | 请求与响应结构必须严格遵循系统总设计 v1.1 |
 
-3. 检索结果、生成结果、全流程响应格式必须严格遵循系统统一标准；
+# 12. 常见问题（FAQ）
 
-4. 异常必须遵循系统统一异常码规范，抛出RAGException；
+| 问题 | 说明 |
+| :--- | :--- |
+| 为什么不能直接按 doc_id 取整篇文档再截断？ | 因为这会破坏 chunk 级检索与引用，导致召回精度、引用稳定性和评测一致性下降。 |
+| citations 必须返回吗？ | 必须。即使 answer 中暂时未插入 `[CIT:chunk_id]`，也必须返回结构化 `citations` 字段。 |
+| rewrite / rerank 是否强制？ | 当前版本不强制，但如果启用，必须保持 chunk 级结果与统一结构不变。 |
+| RAG 模块是否负责索引构建？ | 不负责离线索引构建主流程；本模块主要消费已构建好的 chunk 索引。 |
 
-5. 模块依赖仅通过抽象接口注入，支持无缝切换 Embedding、向量库、大模型实现。
+# 13. 附录：系统错误码关联
 
-# 11. 常见问题（FAQ）
+本模块直接使用或透传的核心错误码如下：
 
-1. 检索结果为空怎么办？答：检查向量数据库是否已构建索引，确认文档已完成向量化与入库；调整top_k参数，放宽检索范围。
+| 错误码 | 来源 | 适用场景 |
+| :--- | :--- | :--- |
+| `SUCCESS` | 本模块/下游 | 请求成功 |
+| `EMBEDDING_CONFIG_MISSING` | 本模块/下游 | embedding 配置缺失 |
+| `EMBEDDING_INIT_FAILED` | 本模块/下游 | embedding 初始化失败 |
+| `VECTOR_QUERY_FAILED` | 本模块/下游 | 向量检索失败 |
+| `RAG_RUN_FAILED` | 本模块 | RAG 执行过程失败 |
+| `UNKNOWN_ERROR` | 异常兜底 | 未知运行时异常 |
 
-2. 生成回答与检索内容无关？答：优化 Prompt 模板，强化 “仅根据上下文回答” 的约束；降低大模型temperature参数，提升回答事实性；检查上下文拼接是否正确。
-
-3. RAG 执行超时？答：检查大模型调用、向量检索的超时配置；缩短上下文长度，减少检索片段数量；优化文档分段长度。
-
-4. 检索结果与问题不匹配？答：切换向量模型（本地 / 远程），确保向量维度一致；优化文档分段，提升文本语义完整性；检查问题向量化是否正常。
-
-5. 上下文长度超出大模型限制？答：启用上下文截断功能，调整context_truncate_length参数；减少top_k检索数量，控制总上下文长度。
-
-返回[系统架构设计](RAG%E4%B8%8EAgent%E7%B3%BB%E7%BB%9F%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)

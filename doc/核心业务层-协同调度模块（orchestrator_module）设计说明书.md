@@ -1,554 +1,576 @@
-# 核心业务层 - 协同调度模块（orchestrator_module）设计说明书
+# 核心业务层-协同调度模块（orchestrator_module）设计说明书
 
-| 文档版本 | v1.0 |
+| 文档版本 | v1.1 |
 | :--- | :--- |
-| **最后更新** | 2026-02-28 |
-| **维护责任人** | 协同调度模块开发负责人 |
-| **状态** | 正式发布 |
+| 最后更新 | 2026-03-19 |
+| 维护责任人 | 协同调度模块开发负责人 |
+| 状态 | 修订版 |
 
----
+> 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1、接口层-请求响应处理模块修订版、应用层-API服务模块修订版，重点修正统一请求透传、trace_id/session_id 规则、hybrid 模式定义、模块依赖边界与统一响应格式。
 
-## 1. 文档概述
+# 1. 文档概述
 
-### 1.1 文档目的
-本文档为 RAG 与 Agent 系统核心业务层 - 协同调度模块的独立、完整设计说明书。文档严格遵循系统整体架构规范，明确模块功能、项目结构、接口定义、依赖关系、数据格式及开发要求。旨在指导开发人员（含初学者）进行该模块的独立开发、测试与集成，确保模块与系统无缝兼容、可扩展、可替换。
+## 1.1 文档目的
 
-### 1.2 适用人群
-- **开发人员**：作为协同调度模块开发、测试、维护的唯一标准依据。
-- **测试人员**：作为编写测试用例、验收模块功能的标准依据。
-- **项目管理人员**：参考本说明书进行模块开发进度管控与交付物验收。
+本文档为 RAG 与 Agent 系统核心业务层-协同调度模块（`orchestrator_module`）的独立设计说明书。
 
-### 1.3 核心需求回顾
+本模块位于**接口层**与**核心业务执行模块（RAG / Agent）**之间，是系统内部统一的业务路由与调度入口，负责：
+
+- 接收接口层传入的统一业务请求；
+- 根据 `type` 路由到 `rag / agent / hybrid` 对应执行链路；
+- 透传 `trace_id / session_id / extra_params`；
+- 对下游返回结果做统一封装与兜底处理；
+- 保证不同执行模式下输出结构一致；
+- 作为系统内部“业务分发中枢”，隔离接口层与具体业务执行器的耦合。
+
+本文档作为本模块开发、测试、联调与后续替换实现的唯一标准依据。
+
+## 1.2 适用人群
+
+适用于本模块开发人员、接口层开发人员、应用层开发人员、测试人员、架构设计人员及后续维护人员。
+
+## 1.3 核心需求回顾
+
 | 需求类型 | 具体要求 |
 | :--- | :--- |
-| **模块功能** | 实现系统核心业务入口调度，根据请求类型路由至 RAG 或 Agent 模块，支持 Hybrid 协同模式，统一异常处理与响应封装。 |
-| **开发语言** | Python 3.10+，与系统整体保持一致。 |
-| **开发模式** | 独立开发、互不依赖，基于本说明书即可完成开发，开发完成后通过统一接口集成至核心业务层。 |
-| **文档要求** | 详细、易懂，适配初学者，明确模块所有可提前定义的内容（接口、数据格式、项目结构等）。 |
-| **模块约束** | 需包含抽象基类（ABC），确保模块一致性；代码可与系统其他模块交换，数据格式符合系统统一标准。 |
+| 模块功能 | 作为核心业务层统一调度入口，负责 `rag / agent / hybrid` 三类请求的路由、调用与统一返回。 |
+| 开发语言 | Python 3.10+，最低 3.10，推荐 3.12，与系统整体保持一致。 |
+| 开发模式 | 独立开发、可替换实现、通过抽象接口集成。 |
+| 文档要求 | 与系统总设计 v1.1、接口层与应用层子设计保持一致。 |
+| 模块约束 | 本模块不负责 HTTP 协议处理，不负责请求语义校验，不直接依赖应用层；应优先依赖抽象接口或统一输出结构。 |
 
-### 1.4 术语定义
-| 术语 | 定义 |
-| :--- | :--- |
-| **协同调度** | 根据用户请求特征，决策并路由至 RAG 模块（普通问答）或 Agent 模块（复杂任务），或两者协同工作的核心机制。 |
-| **路由策略** | 决定请求流向的逻辑规则，包括基于显式类型（type 字段）或隐式意图识别的路由。 |
-| **Hybrid 模式** | Agent 与 RAG 协同工作模式，通常由 Agent 主导，在执行过程中调用 RAG 作为工具。 |
-| **ABC** | 抽象基类，定义模块的核心接口与方法，强制子类实现，保障模块一致性。 |
-| **标准化响应** | 模块输出统一格式结果，包含执行结果、状态码、错误信息，遵循系统统一异常码规范。 |
+# 2. 模块核心设计
 
----
+## 2.1 模块定位与职责
 
-## 2. 模块核心设计
+本模块属于系统**核心业务层**，位于**接口层**与**RAG / Agent 执行模块**之间，是系统内部统一的业务路由与调度中枢。
 
-### 2.1 模块定位与职责
-本模块属于系统**核心业务层**，是核心业务逻辑的统一入口与调度中心，串联 RAG 模块与 Agent 模块，完整实现请求分发与协同控制：
-- 接收接口层转发的标准化请求，完成参数校验、异常处理。
-- 根据请求类型（type）或意图，决策路由至 RAG 模块或 Agent 模块。
-- 支持 Hybrid 模式，协调 Agent 调用 RAG 工具的协同流程。
-- 统一封装 RAG/Agent 的执行结果，输出标准化响应。
-- 记录调度日志与链路追踪信息，便于问题排查。
-- 屏蔽底层模块差异，支持配置化切换路由策略、超时控制。
+本模块职责如下：
 
-### 2.2 输入输出规范
+- 接收接口层标准化后的请求；
+- 根据 `type` 进行业务模式分发；
+- 统一调度 RAG 模块、Agent 模块或 Hybrid 协作链路；
+- 向下游透传 `trace_id / session_id / extra_params / top_k` 等关键字段；
+- 对下游结果统一补齐标准输出字段；
+- 捕获调度级异常并转换为系统统一错误码；
+- 隔离接口层与具体业务执行器实现细节。
 
-#### 2.2.1 输入
-遵循系统统一请求格式（见架构设计说明书第 8 章）：
-| 参数名 | 类型 | 必填 | 说明 | 默认值 |
-| :--- | :--- | :--- | :--- | :--- |
-| `type` | str | 是 | 请求类型：`rag` / `agent` / `hybrid` | `rag` |
-| `query` | str | 条件必填 | 用户问题（type=rag 时必填） | - |
-| `task` | str | 条件必填 | 用户任务（type=agent/hybrid 时必填） | - |
-| `session_id` | str | 否 | 会话唯一标识 | 自动生成 |
-| `top_k` | int | 否 | 检索片段数量（rag 模式） | 5 |
-| `extra_params` | Dict | 否 | 额外扩展参数 | {} |
+本模块不负责：
 
-#### 2.2.2 输出
-标准化协同调度响应格式（遵循系统统一异常码规范）：
-```json
-{
-  "code": "SUCCESS",
-  "message": "调度执行成功",
-  "data": {
-    "route_type": "rag",
-    "result": { ... }  // RAG 或 Agent 的原始响应数据
-  },
-  "cost_time": 1.5,
-  "trace_id": "b3b1c6d7f2b24f5aa0d8e7c8b9a1c2d3"
-}
-```
+- 不负责 HTTP/HTTPS 协议处理；
+- 不负责业务语义级参数校验（由接口层 `request_response_module` 负责）；
+- 不负责鉴权、中间件、路由注册；
+- 不负责具体的向量检索、工具调用、Prompt 拼接与模型调用；
+- 不重新生成新的业务 `trace_id`；
+- 不在本模块内部硬编码实例化 RAG / Agent 默认实现。
 
-### 2.3 依赖关系
-本模块是核心业务层入口，依赖基础支撑层及核心业务层其他模块。
+## 2.2 模块边界
 
-#### 基础支撑层依赖
+### 2.2.1 本模块负责
+
+- `type=rag` 请求路由到 RAG 执行器；
+- `type=agent` 请求路由到 Agent 执行器；
+- `type=hybrid` 请求路由到 Hybrid 执行策略；
+- 在统一响应结构下汇总执行结果；
+- 将下游标准错误码透传或在必要时转为调度级错误码。
+
+### 2.2.2 本模块不负责
+
+- 不重新判断 `query / task / top_k` 是否为空或不合法；
+- 不重新生成 `session_id`（除非文档明确指定的 hybrid 兼容兜底场景）；
+- 不直接修改请求的业务语义；
+- 不在本模块编写 RAG 细节流程或 Agent 规划逻辑；
+- 不直接访问数据库、向量库、对象存储或 Web 框架对象。
+
+## 2.3 依赖关系
+
+### 2.3.1 上游依赖
+
 | 依赖模块 | 用途 |
 | :--- | :--- |
-| **通用工具模块** (`common_utils_module`) | 参数校验、时间处理。 |
-| **配置管理模块** (`config_module`) | 读取调度策略、超时配置、默认路由。 |
-| **日志模块** (`log_module`) | 记录调度全流程日志、异常信息（使用 `SystemLogger`）。 |
-| **异常处理模块** (`exception_module`) | 抛出标准化调度异常（`OrchestratorException`）。 |
+| `request_response_module` | 接收接口层标准化请求，并返回统一业务响应。 |
 
-#### 核心业务层依赖
+### 2.3.2 下游依赖
+
 | 依赖模块 | 用途 |
 | :--- | :--- |
-| **RAG 模块** (`rag_module`) | 执行普通问答检索增强生成流程（通过 `BaseRAG` 接口）。 |
-| **Agent 模块** (`agent_module`) | 执行复杂任务规划与工具调用流程（通过 `BaseAgent` 接口）。 |
+| `rag_module` | 执行 `type=rag` 的检索增强生成流程。 |
+| `agent_module` | 执行 `type=agent` 与 `type=hybrid` 的智能代理流程。 |
 
----
+### 2.3.3 基础依赖
 
-## 3. 统一项目结构规范
-
-严格遵循系统整体项目结构规范，模块根目录命名为 `orchestrator_module`（全小写，多单词用下划线连接），目录结构如下，开发者不得随意修改目录名称与层级。
-
-```
-orchestrator_module/                  # 模块根目录
-├── __init__.py                # 模块初始化文件，暴露核心类/方法
-├── core/                      # 核心逻辑目录（抽象基类 + 实现类）
-│   ├── __init__.py
-│   ├── base.py                # 抽象基类（ABC），定义调度核心接口
-│   └── impl.py                # 具体实现类，继承抽象基类
-├── model/                     # 数据模型目录（统一请求/响应模型）
-│   ├── __init__.py
-│   └── data_model.py          # 调度请求/响应标准化模型
-├── utils/                     # 模块专属工具函数
-│   ├── __init__.py
-│   └── tool_functions.py      # 路由决策、结果封装等工具
-├── config/                    # 模块专属配置
-│   ├── __init__.py
-│   └── config.py              # 读取全局配置，补充调度专属配置
-├── tests/                     # 测试用例目录
-│   ├── __init__.py
-│   └── test_impl.py           # 核心功能测试用例
-└── README.md                  # 模块说明文档（适配初学者）
-```
-
-### 3.1 目录结构说明
-| 目录/文件 | 说明 |
+| 依赖模块 | 用途 |
 | :--- | :--- |
-| `orchestrator_module` | 模块根目录，名称固定，与功能精准对应。 |
-| `__init__.py` | 每个目录必须包含，根目录暴露核心类（如 `SimpleOrchestrator`），方便其他模块调用。 |
-| `core` | 核心逻辑目录，`base.py` 定义抽象接口，`impl.py` 实现调度全流程。 |
-| `model` | 模块专属数据模型，定义调度请求、响应的标准化格式。 |
-| `utils` | 模块专属工具函数，路由决策、结果封装、异常转换等。 |
-| `config` | 读取系统调度配置，补充模块专属参数（如默认路由类型）。 |
-| `tests` | 覆盖路由决策、模块调用、全流程、异常场景的测试用例。 |
-| `README.md` | 详细说明模块功能、接口、使用方法、依赖项、扩展步骤。 |
+| `config_module` | 模块配置读取 |
+| `log_module` | 调度过程日志记录 |
+| `exception_module` | 调度异常封装 |
+| `common_utils_module` | 公共辅助函数 |
 
----
+说明：
 
-## 4. 核心数据模型设计
+- 本模块应优先依赖 `BaseRAG`、`BaseAgent` 等抽象接口；
+- 具体默认实现由 bootstrap 注入，不得在本模块内直接硬编码 `SimpleRAG()` 或 `SimpleAgent()`。
 
-本模块定义统一的调度请求/响应模型，所有接口均基于该模型交互，确保模块内部及与外部模块的数据格式统一，遵循系统整体数据规范。
+# 3. 统一项目结构规范
 
-### 4.1 调度请求模型（OrchestratorRequest）
+本模块遵循系统总设计 v1.1 的统一目录规范。
+
+## 3.1 必选目录与文件
+
+```text
+orchestrator_module/
+├── __init__.py
+├── core/
+│   ├── __init__.py
+│   ├── base.py
+│   └── impl.py
+├── model/
+│   ├── __init__.py
+│   └── data_model.py
+├── utils/
+│   ├── __init__.py
+│   └── tool_functions.py
+├── config/
+│   ├── __init__.py
+│   └── config.py
+├── tests/
+│   ├── __init__.py
+│   └── test_impl.py
+├── README.md
+└── requirements.txt
+```
+
+## 3.2 可选扩展目录
+
+本模块按复杂度与演进阶段，可选增加：
+
+- `strategies/`：不同 hybrid 调度策略
+- `examples/`：标准请求与返回示例
+- `docs/`：补充说明材料
+
+说明：
+
+- 当前阶段可采用 `core/impl.py` 单文件实现；
+- 当 Hybrid 策略复杂时，建议拆分 `strategies/`；
+- 新增扩展目录必须在 `README.md` 中说明职责与边界。
+
+# 4. 核心数据模型设计
+
+## 4.1 OrchestratorRequest
+
 ```python
-from typing import Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 @dataclass
 class OrchestratorRequest:
-    """协同调度统一请求模型"""
-    # 请求类型：rag / agent / hybrid
     type: str
-    # 用户问题（rag 模式必填）
     query: Optional[str] = None
-    # 用户任务（agent/hybrid 模式必填）
     task: Optional[str] = None
-    # 会话唯一标识（可选，为空则自动生成）
     session_id: Optional[str] = None
-    # 检索片段数量（rag 模式可选）
     top_k: int = 5
-    # 附加参数（可选，传递给底层模块）
-    extra_params: Optional[Dict[str, Any]] = None
+    trace_id: Optional[str] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict)
 ```
 
-### 4.2 调度响应模型（OrchestratorResponse）
+说明：
+
+- 输入结构必须与系统统一请求结构保持一致；
+- 本模块不新增破坏统一结构的专属字段；
+- 扩展参数统一通过 `extra_params` 透传。
+
+## 4.2 OrchestratorResponse
+
 ```python
-from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 @dataclass
 class OrchestratorResponse:
-    """协同调度统一响应模型，遵循系统统一异常码规范"""
-    # 响应码：SUCCESS 或系统异常码
     code: str
-    # 响应信息
     message: str
-    # 响应数据（包含路由类型与底层模块结果）
-     Optional[Dict[str, Any]] = None
-    # 实际路由类型（rag/agent/hybrid）
-    route_type: Optional[str] = None
-    # 调用耗时（秒，可选）
-    cost_time: Optional[float] = None
-    # 链路追踪 ID（可选）
-    trace_id: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+    trace_id: str = ""
+    retryable: bool = False
+    details: Optional[Dict[str, Any]] = None
 ```
 
----
+说明：
 
-## 5. 核心接口设计（抽象基类）
+- 本模块输出必须与系统统一响应结构兼容；
+- 若下游返回已是标准结构，本模块只做最小补齐；
+- 所有成功与失败响应都必须返回 `trace_id`。
 
-### 5.1 协同调度抽象基类（BaseOrchestrator）
-定义模块核心接口，强制所有实现类必须实现，保障模块一致性、可替换性。位于 `core/base.py`。
+## 4.3 HybridMode（可选枚举）
+
+```python
+from enum import Enum
+
+class HybridMode(str, Enum):
+    AGENT_DRIVEN = "agent_driven"
+```
+
+说明：
+
+- 当前版本建议只支持 `agent_driven` 一种 hybrid 模式；
+- 未来若扩展，可增加 `rag_first`、`planner_driven` 等策略，但必须保持统一请求/响应结构不变。
+
+# 5. 核心接口设计（抽象基类）
+
+## 5.1 BaseOrchestrator
 
 ```python
 from abc import ABC, abstractmethod
-from typing import Dict, Any
-from orchestrator_module.model.data_model import OrchestratorRequest, OrchestratorResponse
+from typing import Any, Dict
 
 class BaseOrchestrator(ABC):
-    """协同调度模块抽象基类，所有调度实现类必须继承此类"""
-
     @abstractmethod
     def route(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
-        路由决策与执行：根据请求内容路由到 RAG/Agent/协同，并执行对应流程
-        :param request: 原始请求字典（含 type, query, task 等）
-        :return: 标准化响应结果（Dict 格式）
-        :raises OrchestratorException: 路由失败或执行失败时抛出标准化异常
+        根据请求类型路由并执行对应业务链路
+        :param request: 标准化请求字典
+        :return: 统一响应字典
         """
         pass
 
     @abstractmethod
-    def call_orchestrator(self, request: OrchestratorRequest) -> OrchestratorResponse:
+    def register_modules(self, rag_runner=None, agent_runner=None) -> None:
         """
-        统一调度调用接口（对外标准化入口）
-        :param request: 调度请求模型
-        :return: 调度响应模型
-        """
-        pass
-
-    @abstractmethod
-    def register_module(self, module_type: str, module_instance: Any) -> bool:
-        """
-        注册业务模块：动态注册 RAG 或 Agent 实例到调度器
-        :param module_type: 模块类型（rag/agent）
-        :param module_instance: 模块实例（需实现 BaseRAG 或 BaseAgent 接口）
-        :return: 注册成功返回 True，失败返回 False
+        注入或注册下游业务执行器
         """
         pass
 ```
 
----
+约束：
 
-## 6. 核心实现设计
+- `route()` 接收的必须是接口层已标准化后的请求；
+- `route()` 不负责做业务语义校验；
+- `register_modules()` 仅用于依赖注入，不负责实例化具体实现。
 
-### 6.1 标准协同调度实现类（SimpleOrchestrator）
-继承抽象基类，实现完整调度全流程，串联 RAG 与 Agent 模块，是系统默认使用的调度实现类。位于 `core/impl.py`。
+# 6. 核心实现设计（SimpleOrchestrator）
 
-**类定义基础结构：**
+## 6.1 类职责说明
+
+`SimpleOrchestrator` 是系统默认协同调度实现，负责：
+
+- 接收接口层统一请求；
+- 根据 `type` 分发执行；
+- 透传并保持 `trace_id / session_id / extra_params` 一致；
+- 统一封装 `rag / agent / hybrid` 返回结果；
+- 将调度级异常转为标准错误码。
+
+本实现必须保持：
+
+- 无 HTTP 依赖；
+- 无框架对象依赖；
+- 可并发复用；
+- 可通过构造函数注入下游执行器。
+
+## 6.2 构造函数建议
+
 ```python
-import time
-from typing import Dict, Any, Optional
-from .base import BaseOrchestrator
-from orchestrator_module.model.data_model import OrchestratorRequest, OrchestratorResponse
-from orchestrator_module.utils.tool_functions import validate_request_params
-
-# 依赖模块导入（遵循设计文档依赖关系，建议通过注入而非硬编码）
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import OrchestratorException
+from rag_module.core.base import BaseRAG
+from agent_module.core.base import BaseAgent
 
 class SimpleOrchestrator(BaseOrchestrator):
-    """标准协同调度实现类：基于请求类型的路由 + 模块调用，系统默认实现"""
-
-    def __init__(self, rag_runner=None, agent_runner=None):
-        """
-        初始化调度模块，加载系统配置，注册业务模块实例
-        :param rag_runner: RAG 模块实例（需实现 BaseRAG 接口）
-        :param agent_runner: Agent 模块实例（需实现 BaseAgent 接口）
-        """
-        # 基础支撑层初始化
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        self.config.load_config()
-
-        # 业务模块注册表
-        self.modules = {}
-        if rag_runner:
-            self.register_module("rag", rag_runner)
-        if agent_runner:
-            self.register_module("agent", agent_runner)
-
-        # 读取系统调度核心配置
-        self.default_type = self.config.get_config("orchestrator.default_type", "rag")
-        self.timeout = int(self.config.get_config("orchestrator.timeout", 60))
-
-        self.logger.info("协同调度模块初始化完成，加载系统默认配置")
-
-    def route(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """实现抽象方法：路由决策与执行"""
-        pass
-
-    def call_orchestrator(self, request: OrchestratorRequest) -> OrchestratorResponse:
-        """实现抽象方法：标准化调度调用入口"""
-        pass
-
-    def register_module(self, module_type: str, module_instance: Any) -> bool:
-        """实现抽象方法：注册业务模块"""
-        pass
-
-    def _execute_rag(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """私有方法：执行 RAG 流程"""
-        pass
-    
-    def _execute_agent(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """私有方法：执行 Agent 流程"""
-        pass
+    def __init__(
+        self,
+        rag_runner: BaseRAG | None = None,
+        agent_runner: BaseAgent | None = None,
+    ):
+        self.rag_runner = rag_runner
+        self.agent_runner = agent_runner
 ```
 
-### 6.2 工具函数（utils/tool_functions.py）
-提供调度相关的辅助函数。
+说明：
 
-**函数定义基础结构：**
-```python
-from typing import Dict, Any
+- 不在构造函数内硬编码实例化默认实现；
+- 默认实现由 bootstrap 层注入；
+- 若未注入对应执行器，执行对应类型请求时应返回标准错误。
 
-def validate_request_params(request: Dict[str, Any]) -> bool:
-    """
-    校验请求参数完整性
-    :param request: 请求字典
-    :return: 校验通过返回 True，否则抛出异常
-    """
-    # 逻辑定义：
-    # 1. 检查 type 是否合法
-    # 2. 检查 rag 模式下 query 是否存在
-    # 3. 检查 agent 模式下 task 是否存在
-    pass
+## 6.3 route() 处理顺序（强制）
 
-def wrap_response_data(route_type: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    封装响应数据，添加路由类型标识
-    :param route_type: 路由类型
-    :param result: 底层模块返回结果
-    :return: 封装后的数据字典
-    """
-    pass
+```text
+1. 读取 request['type']
+2. 透传 trace_id / session_id / top_k / extra_params
+3. 根据 type 分发：
+   - rag -> _execute_rag()
+   - agent -> _execute_agent()
+   - hybrid -> _execute_hybrid()
+4. 对下游结果进行统一补齐：
+   - 缺失 trace_id 时补齐透传值
+   - 缺失 retryable 时根据 code 计算
+5. 返回统一响应
+6. 异常时调用调度级异常处理逻辑，返回 ORCHESTRATOR_RUN_FAILED
 ```
 
----
+## 6.4 rag 路由规则
 
-## 7. 模块调用示例
+### 6.4.1 输入要求
 
-### 7.1 基础调用示例
+- 由接口层保证 `query` 已合法；
+- 本模块不重新校验 `query` 业务语义；
+- `session_id` 在 `rag` 场景可为空。
+
+### 6.4.2 执行方式
+
 ```python
+def _execute_rag(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    return self.rag_runner.run(request)
+```
+
+说明：
+
+- 本模块不负责改写 query；
+- 不在此处做检索、重排、Prompt 拼装；
+- 下游 RAG 模块应返回统一响应结构。
+
+## 6.5 agent 路由规则
+
+### 6.5.1 输入要求
+
+- 由接口层保证 `task` 已合法；
+- `session_id` 应已由接口层补齐；
+- 本模块不重新生成新的 `session_id`。
+
+### 6.5.2 执行方式
+
+```python
+def _execute_agent(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    return self.agent_runner.execute(request)
+```
+
+## 6.6 hybrid 路由规则（修订重点）
+
+### 6.6.1 Hybrid 定义（强制）
+
+当前版本中：
+
+**hybrid = Agent 主导 + 可调用 RAG 工具能力的执行模式**
+
+说明：
+
+- Hybrid 不是独立的第三套业务执行器；
+- Hybrid 不是调度层自己手工拼接“先 RAG 再 Agent”的硬编码流程；
+- Hybrid 应由 Agent 作为主执行器，在其内部通过工具或能力调用 RAG；
+- 协同调度模块只负责将 `type=hybrid` 路由到 Agent 执行器，并显式标明执行模式。
+
+### 6.6.2 推荐执行方式
+
+```python
+def _execute_hybrid(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    hybrid_request = dict(request)
+    hybrid_request.setdefault("extra_params", {})
+    hybrid_request["extra_params"]["execution_mode"] = "hybrid"
+    return self.agent_runner.execute(hybrid_request)
+```
+
+### 6.6.3 设计原因
+
+采用该定义的原因：
+
+- 保持调度层简单，不把复杂业务流程堆到 orchestrator；
+- 与总设计中“Agent 可调用 RAG 工具能力”的方向一致；
+- 避免出现“hybrid 等于另写一套执行器”的重复实现；
+- 便于后续扩展不同 hybrid 策略。
+
+## 6.7 trace_id / session_id 规则（强制）
+
+### 6.7.1 trace_id
+
+- `trace_id` 由应用层入口生成并透传到接口层；
+- 接口层将 `trace_id` 传入本模块；
+- 本模块只透传，不得重新生成新的业务 `trace_id`；
+- 若下游遗漏 `trace_id`，本模块允许将当前请求中的 `trace_id` 补回响应。
+
+### 6.7.2 session_id
+
+- `rag`：可为空，不强制补齐；
+- `agent / hybrid`：应由接口层补齐后传入；
+- 本模块默认不重新生成新的 `session_id`；
+- 仅在兼容历史实现时，允许做兜底补齐，但必须保留文档说明，不作为主路径。
+
+## 6.8 错误处理与统一返回
+
+### 6.8.1 错误码约定
+
+| 错误码 | 说明 |
+| :--- | :--- |
+| `SUCCESS` | 执行成功 |
+| `ORCHESTRATOR_RUN_FAILED` | 调度级执行失败或未知路由异常 |
+| `BAD_REQUEST` | 请求类型无法识别（理论上应由接口层提前拦截） |
+| `RAG_RUN_FAILED` | 下游 RAG 失败（透传） |
+| `AGENT_TIMEOUT` | 下游 Agent 超时（透传） |
+| `TOOL_CALL_FAILED` | 下游 Agent 工具调用失败（透传） |
+| `UNKNOWN_ERROR` | 未知异常兜底 |
+
+### 6.8.2 返回约束
+
+- 所有成功与失败响应都必须返回 `trace_id`
+- 本模块不决定 HTTP 状态码
+- 若下游已经返回标准结构，本模块只做最小补齐
+- `retryable` 可根据错误码表统一计算
+
+# 7. 模块调用示例
+
+## 7.1 基础组装示例
+
+```python
+from bootstrap import build_rag_runner, build_agent_runner
 from orchestrator_module.core.impl import SimpleOrchestrator
-from orchestrator_module.model.data_model import OrchestratorRequest
 
-# 1. 初始化 RAG 与 Agent 实例（假设已实现）
-# rag_instance = SimpleRAG(llm_client=...)
-# agent_instance = SimpleAgent(tools=...)
+rag_runner = build_rag_runner()
+agent_runner = build_agent_runner()
 
-# 2. 初始化调度器（注入依赖）
-orchestrator = SimpleOrchestrator(rag_runner=rag_instance, agent_runner=agent_instance)
-
-# 3. 标准化接口调用（RAG 模式）
-request = OrchestratorRequest(
-    type="rag",
-    query="RAG 系统架构是什么？",
-    top_k=5
+orchestrator = SimpleOrchestrator(
+    rag_runner=rag_runner,
+    agent_runner=agent_runner
 )
-response = orchestrator.call_orchestrator(request)
-print(f"路由类型：{response.route_type}, 结果：{response.data}")
-
-# 4. 标准化接口调用（Agent 模式）
-request = OrchestratorRequest(
-    type="agent",
-    task="请整理一份 RAG 系统开发计划",
-    session_id="session_001"
-)
-response = orchestrator.call_orchestrator(request)
 ```
 
-### 7.2 动态注册模块示例
+## 7.2 接口层调用示例
+
 ```python
-from orchestrator_module.core.impl import SimpleOrchestrator
+request = {
+    "type": "rag",
+    "query": "RAG 系统架构是什么？",
+    "top_k": 5,
+    "trace_id": "trace_demo_001",
+    "extra_params": {}
+}
 
-# 1. 初始化空调度器
-orchestrator = SimpleOrchestrator()
-
-# 2. 动态注册 RAG 模块
-orchestrator.register_module("rag", rag_instance)
-
-# 3. 动态注册 Agent 模块
-orchestrator.register_module("agent", agent_instance)
+result = orchestrator.route(request)
 ```
 
----
+## 7.3 hybrid 调用示例
 
-## 8. 测试规范
+```python
+request = {
+    "type": "hybrid",
+    "task": "请基于知识库回答这个问题，并给出总结",
+    "session_id": "session_001",
+    "trace_id": "trace_demo_002",
+    "extra_params": {}
+}
 
-### 8.1 测试范围
+result = orchestrator.route(request)
+```
+
+# 8. 测试规范
+
+## 8.1 测试范围（强制）
+
 | 测试类型 | 测试内容 |
 | :--- | :--- |
-| **路由决策测试** | type 参数识别、默认类型 fallback、非法 type 处理。 |
-| **模块调用测试** | RAG 模块调用、Agent 模块调用、Hybrid 模式调用。 |
-| **全流程测试** | 请求→路由→执行→响应端到端测试。 |
-| **异常场景测试** | 模块未注册、参数缺失、底层模块异常、超时。 |
-| **注册功能测试** | 动态注册、重复注册、注销（若扩展）。 |
+| 路由测试 | `rag / agent / hybrid` 是否正确分发 |
+| trace 透传测试 | `trace_id` 是否原样透传并在响应中保留 |
+| session 规则测试 | `rag` 不强制要求 session；`agent/hybrid` 是否正确透传 session |
+| hybrid 语义测试 | `hybrid` 是否经由 Agent 主导执行，且正确带上 `execution_mode=hybrid` |
+| 异常处理测试 | 下游抛异常时是否返回 `ORCHESTRATOR_RUN_FAILED` |
+| 注入测试 | 未注册 rag_runner / agent_runner 时是否返回明确错误 |
+| 标准结构测试 | 返回值是否符合统一响应结构 |
 
-### 8.2 测试用例基础框架
-位于 `tests/test_impl.py`。
+## 8.2 Mock 测试示例
+
 ```python
-import unittest
-from orchestrator_module.core.impl import SimpleOrchestrator
-from orchestrator_module.model.data_model import OrchestratorRequest
-from exception_module.core.impl import OrchestratorException
-
 class MockRAG:
-    def run(self, query, top_k):
-        return {"code": "SUCCESS", "data": {"answer": "mock rag"}}
+    def run(self, request):
+        return {
+            "code": "SUCCESS",
+            "message": "ok",
+            "data": {"mode": "rag"},
+            "trace_id": request.get("trace_id"),
+            "retryable": False,
+            "details": None
+        }
 
 class MockAgent:
-    def execute(self, task, session_id):
-        return {"code": "SUCCESS", "data": {"result": "mock agent"}}
-
-class TestOrchestratorModule(unittest.TestCase):
-    """协同调度模块单元测试类"""
-
-    def setUp(self):
-        """测试前置：初始化调度器实例、Mock 模块"""
-        self.rag_mock = MockRAG()
-        self.agent_mock = MockAgent()
-        self.orchestrator = SimpleOrchestrator(
-            rag_runner=self.rag_mock, 
-            agent_runner=self.agent_mock
-        )
-
-    def test_rag_route(self):
-        """测试 RAG 模式路由"""
-        request = {"type": "rag", "query": "test", "top_k": 5}
-        result = self.orchestrator.route(request)
-        self.assertEqual(result["code"], "SUCCESS")
-        self.assertEqual(result["data"]["route_type"], "rag")
-
-    def test_agent_route(self):
-        """测试 Agent 模式路由"""
-        request = {"type": "agent", "task": "test"}
-        result = self.orchestrator.route(request)
-        self.assertEqual(result["code"], "SUCCESS")
-        self.assertEqual(result["data"]["route_type"], "agent")
-
-    def test_invalid_type(self):
-        """测试非法 type 参数"""
-        request = {"type": "invalid", "query": "test"}
-        with self.assertRaises(OrchestratorException):
-            self.orchestrator.route(request)
-
-    def test_module_not_found(self):
-        """测试模块未注册场景"""
-        empty_orch = SimpleOrchestrator()
-        request = {"type": "rag", "query": "test"}
-        with self.assertRaises(OrchestratorException):
-            empty_orch.route(request)
-
-    def test_call_orchestrator_interface(self):
-        """测试标准化接口 call_orchestrator"""
-        request = OrchestratorRequest(type="rag", query="test")
-        response = self.orchestrator.call_orchestrator(request)
-        self.assertIn(response.code, ["SUCCESS", "ORCHESTRATOR_RUN_FAILED"])
-
-if __name__ == "__main__":
-    unittest.main()
+    def execute(self, request):
+        return {
+            "code": "SUCCESS",
+            "message": "ok",
+            "data": {
+                "mode": request.get("extra_params", {}).get("execution_mode", "agent")
+            },
+            "trace_id": request.get("trace_id"),
+            "retryable": False,
+            "details": None
+        }
 ```
 
----
+# 9. 模块配置管理
 
-## 9. 模块配置管理
+建议配置示例如下：
 
-### 9.1 配置项说明
-位于 `config/config.py`，读取全局配置中的 `orchestrator` 节点。
-
-**配置类基础结构：**
-```python
-from config_module.core.impl import ConfigManager
-
-class OrchestratorConfig:
-    """协同调度模块专属配置类"""
-
-    def __init__(self):
-        self.config_manager = ConfigManager()
-        self.config_manager.load_config()
-
-    def get_default_type(self) -> str:
-        """获取默认请求类型"""
-        return self.config_manager.get_config("orchestrator.default_type", "rag")
-
-    def get_timeout(self) -> int:
-        """获取调度超时时间（秒）"""
-        return int(self.config_manager.get_config("orchestrator.timeout", 60))
-```
-
-### 9.2 配置文件示例（系统全局 config.yaml）
 ```yaml
-# 协同调度模块配置
 orchestrator:
-  default_type: "rag"             # 默认请求类型（rag/agent/hybrid）
-  timeout: 60                     # 调度超时时间（秒）
-  enable_intelligent_route: false # 是否启用智能意图识别路由（未来扩展）
+  default_type: "rag"
+  enable_trace: true
+  hybrid_strategy: "agent_driven"
+  timeout: 60
 ```
 
----
+说明：
 
-## 10. 交付物清单（强制）
+- `default_type` 仅作兼容配置，主路径应由接口层保证传入合法 type；
+- `hybrid_strategy` 当前建议固定为 `agent_driven`；
+- `timeout` 为调度级兜底超时配置，具体业务超时仍应由下游执行器控制。
 
-模块开发完成后，需提交以下交付物，确保符合系统集成要求：
+# 10. 交付物清单（强制）
+
+模块开发完成后，需提交以下交付物：
 
 | 交付物 | 说明 |
 | :--- | :--- |
-| `core/base.py` | 抽象基类，定义调度核心接口。 |
-| `core/impl.py` | 具体实现类（标准调度全流程）。 |
-| `model/data_model.py` | 调度请求/响应标准化数据模型。 |
-| `utils/tool_functions.py` | 路由决策、结果封装工具。 |
-| `config/config.py` | 模块配置读取逻辑。 |
-| `tests/test_impl.py` | 核心功能测试用例。 |
-| `README.md` | 模块说明文档（适配初学者）。 |
-| `requirements.txt` | 依赖包清单（无额外专属依赖，复用系统依赖）。 |
+| `core/base.py` | 抽象基类，定义协同调度核心接口 |
+| `core/impl.py` | 默认调度实现 |
+| `model/data_model.py` | 调度层数据模型 |
+| `utils/tool_functions.py` | 请求透传、统一响应、错误码辅助工具 |
+| `config/config.py` | 模块配置读取逻辑 |
+| `tests/test_impl.py` | 核心测试用例 |
+| `README.md` | 模块说明文档 |
+| `requirements.txt` | 依赖包清单 |
 
----
+可选扩展交付物（按复杂度选择）：
 
-## 11. 可替换性约束（强制）
+- `strategies/*`
+- `examples/*`
+- `docs/*`
+
+若使用可选扩展目录，必须在 `README.md` 中说明职责与边界，并纳入测试覆盖。
+
+# 11. 可替换性约束
 
 | 约束项 | 说明 |
 | :--- | :--- |
-| **接口依赖** | 上层模块（接口层）仅依赖 `BaseOrchestrator` 抽象接口，禁止直接引用具体实现类。 |
-| **扩展实现** | 新增调度实现（如智能意图识别调度）仅需实现 `BaseOrchestrator` 抽象接口，无需修改上层代码。 |
-| **模块注册** | 业务模块（RAG/Agent）必须通过 `register_module` 注入，禁止在调度器内部硬编码实例化。 |
-| **响应格式** | 调度结果、标准化响应格式必须严格遵循系统统一标准。 |
-| **异常处理** | 异常必须遵循系统统一异常码规范，抛出 `OrchestratorException`。 |
+| 上游调用 | 接口层只能依赖 `BaseOrchestrator` 抽象接口 |
+| 下游调用 | 本模块优先依赖 `BaseRAG`、`BaseAgent`，不得依赖其私有实现细节 |
+| trace 约束 | `trace_id` 由应用层生成并经接口层透传，本模块不得重新生成 |
+| session 约束 | `session_id` 由接口层补齐，本模块仅透传 |
+| hybrid 约束 | Hybrid 采用 Agent 主导模式，不在调度层重写一套执行器 |
+| 统一结构 | 请求与响应结构必须严格遵循系统总设计 v1.1 |
 
----
+# 12. 常见问题（FAQ）
 
-## 12. 常见问题（FAQ）
-
-| 问题 | 解答 |
+| 问题 | 说明 |
 | :--- | :--- |
-| **路由类型不支持怎么办？** | 检查请求 `type` 参数是否为 `rag`/`agent`/`hybrid`；检查配置中是否启用了自定义路由类型。 |
-| **提示模块未注册？** | 确保在初始化 `SimpleOrchestrator` 时传入了 `rag_runner` 或 `agent_runner` 实例。 |
-| **Hybrid 模式如何工作？** | Hybrid 模式在调度层视为 Agent 模式，由 Agent 内部通过工具调用 RAG 实现协同，无需调度层特殊处理。 |
-| **如何扩展智能路由？** | 新增实现类继承 `BaseOrchestrator`，在 `route` 方法中接入意图识别模型，替代简单的 `type` 判断。 |
-| **调度超时如何处理？** | 检查 `orchestrator.timeout` 配置；优化底层 RAG/Agent 执行效率；在 `route` 方法中增加超时判断逻辑。 |
-| **如何调试路由流程？** | 查看日志模块中 `orchestrator_module` 相关日志，关注 `route_type` 与模块调用记录。 |
+| orchestrator 是否需要再做参数校验？ | 不需要。业务语义校验统一由接口层 `request_response_module` 负责。 |
+| hybrid 为什么不单独写一套执行器？ | 当前版本的 hybrid 定义为“Agent 主导 + 可调用 RAG 工具能力”，调度层只负责路由，不负责重写一套业务链路。 |
+| orchestrator 能否直接实例化 SimpleRAG / SimpleAgent？ | 不建议。默认实现应由 bootstrap 注入，以满足可替换性约束。 |
+| 为什么响应里必须保留 trace_id？ | 为了保证应用层、接口层、调度层、业务层日志能串成同一条链路。 |
 
----
+# 13. 附录：系统错误码关联
 
-## 13. 附录：系统错误码关联
+本模块直接使用或透传的核心错误码如下：
 
-本模块异常与系统错误码表的关联如下（补充至架构设计说明书第 10 章）：
-
-| 错误码 | 异常类 | 适用场景 |
+| 错误码 | 来源 | 适用场景 |
 | :--- | :--- | :--- |
-| `ORCHESTRATOR_RUN_FAILED` | OrchestratorException | 调度器整体执行失败 |
-| `MODULE_NOT_FOUND` | OrchestratorException | 调用的业务模块（RAG/Agent）未注册 |
-| `BAD_REQUEST` | OrchestratorException | 请求类型 type 不支持或参数缺失 |
-| `ORCHESTRATOR_TIMEOUT` | OrchestratorException | 调度执行超时 |
+| `SUCCESS` | 本模块/下游 | 请求成功 |
+| `BAD_REQUEST` | 理论上由接口层拦截 | type 非 rag/agent/hybrid |
+| `ORCHESTRATOR_RUN_FAILED` | 本模块 | 调度级未知异常或路由执行失败 |
+| `RAG_RUN_FAILED` | 下游透传 | RAG 执行失败 |
+| `AGENT_TIMEOUT` | 下游透传 | Agent 执行超时 |
+| `TOOL_CALL_FAILED` | 下游透传 | Agent 工具调用失败 |
+| `UNKNOWN_ERROR` | 异常兜底 | 未知运行时异常 |
 
----
-
-**文档版本**: v1.0  
-**最后更新**: 2026-02-28  
-**维护责任人**: 协同调度模块开发负责人
-
-返回[系统架构设计](RAG%E4%B8%8EAgent%E7%B3%BB%E7%BB%9F%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)

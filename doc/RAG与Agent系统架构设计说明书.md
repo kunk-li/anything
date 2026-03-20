@@ -1,5 +1,13 @@
 # RAG与Agent系统架构设计说明书
 
+| 文档版本  | v1.1       |
+|:------|:-----------|
+| 最后更新  | 2026-03-19 |
+| 维护责任人 | 架构负责人      |
+| 状态    | 修订版        |
+
+> 本修订版以当前代码仓目录结构与已实现模块为准，统一修正命名、索引链路、引用规范、接口边界与交付要求。
+
 # 1. 文档概述
 
 ## 1.1 文档目的
@@ -14,7 +22,10 @@
 
 - 系统功能：实现RAG检索增强生成与Agent智能代理核心能力，支持两者协同工作。
 
-- 开发语言：后端统一采用Python（版本3.10+，确保兼容性）。
+- 开发语言：后端统一采用 Python 3.10+。
+- 运行最低版本：Python 3.10。
+- 推荐版本：Python 3.12。
+- CI / 生产镜像建议同时验证 Python 3.10 与 3.12 兼容性。
 
 - 开发模式：多开发人员异地协同，各模块独立开发、互不影响，基于说明书即可完成各自任务。
 
@@ -54,42 +65,58 @@
 ## 2.3 系统交互流程
 
 ### 2.3.1 RAG 场景：文件内容向量化入库流程
-   1. 接入层接收用户上传文件，转发至数据层文件解析服务；
-   2. 文件解析服务完成文本提取、分段，生成 FileContent 对象；
-   3. 大模型统一服务接收向量化请求，调用向量模型适配器； 
-   4. 向量模型适配器对接第三方 Embedding 模型，生成文本向量； 
-   5. 基础数据模块将向量 + 文本元数据写入向量库 / 文本库，完成 RAG 知识库入库。
+
+1. 应用层接收用户上传文件，通过接口层触发索引构建流程;
+2. 文件解析服务完成文本提取、分段，生成标准化文档结构（包含 content、file_name、meta 等字段）；
+3. 大模型统一服务接收向量化请求，调用向量模型适配器；
+4. 向量模型适配器对接第三方 Embedding 模型，生成文本向量；
+5. 基础数据模块将向量 + 文本元数据写入向量库 / 文本库，完成 RAG 知识库入库。
+
 ### 2.3.2 Agent+RAG 场景：文件内容智能问答流程
-   1. 接入层接收用户问题 + 上传文件，转发至应用层 Agent 模块；
-   2. Agent 模块调用数据层文件解析服务，获取文件标准化文本；
-   3. Agent 模块触发 RAG 检索：调用数据层向量模型适配器，将用户问题向量化，检索向量库匹配文件片段；
-   4. Agent 模块拼接「检索结果 + 用户问题」，调用数据层聊天模型适配器；
-   5. 聊天模型适配器对接对话大模型，生成推理结果，经 Agent 模块优化后返回至接入层。
+
+1. 应用层接收用户问题 + 上传文件，通过接口层转发至协同调度模块；
+2. Agent 模块调用数据层文件解析服务，获取文件标准化文本；
+3. Agent 模块触发 RAG 检索：调用数据层向量模型适配器，将用户问题向量化，检索向量库匹配文件片段；
+4. Agent 模块拼接「检索结果 + 用户问题」，调用数据层聊天模型适配器；
+5. 聊天模型适配器对接对话大模型，生成推理结果，经 Agent 模块优化后返回至接入层。
 
 # 3. 统一项目结构规范
 
 为确保各模块项目结构一致，所有模块（基础支撑层、数据层、核心业务层、接口层、应用层）均采用以下统一目录结构，开发者需严格遵循，不得随意修改目录名称与层级，初学者可直接复制该结构搭建项目。
+每个模块必须包含以下必选目录与文件：
 
 ```
-# 模块统一目录结构（每个模块独立一个目录，模块名称替换为具体模块名，如common_utils、rag_module）
-module_name/                  # 模块根目录（模块名称全小写，多单词用下划线连接，如vector_db_module）
-├── __init__.py               # 模块初始化文件，暴露模块核心类/方法（必须包含，不能为空）
-├── core/                     # 核心逻辑目录（存放模块核心实现，含ABC抽象类）
+module_name/
+├── __init__.py
+├── core/
 │   ├── __init__.py
-│   ├── base.py               # 抽象基类（ABC）文件，定义模块核心接口（必须包含）
-│   └── impl.py               # 具体实现类文件，继承base.py中的抽象类（必须包含）
-├── utils/                    # 模块工具目录（存放模块专属工具函数，无则空目录）
+│   ├── base.py
+│   └── impl.py
+├── config/
 │   ├── __init__.py
-│   └── tool_functions.py     # 工具函数文件
-├── config/                   # 模块配置目录（存放模块专属配置，无则空目录）
+│   └── config.py 或 config.yaml
+├── tests/
 │   ├── __init__.py
-│   └── config.py             # 配置文件（读取基础配置，可添加模块专属配置）
-├── tests/                    # 测试目录（存放模块单元测试、集成测试用例，必须包含）
-│   ├── __init__.py
-│   ├── test_base.py          # 抽象类测试用例（可选，初学者可简化）
-│   └── test_impl.py          # 具体实现类测试用例（必须包含，覆盖核心功能）
-└── README.md                 # 模块说明文档（必须包含，说明模块功能、接口、使用方法，适配初学者）
+│   └── test_impl.py
+├── README.md
+└── requirements.txt（若模块无专属依赖，可为空或省略）
 ```
+
+可选扩展目录（按模块职责选择）：
+
+- model/：数据模型，如 request/response/dataclass
+- utils/：工具函数
+- tools/：工具注册与工具实现
+- adapters/：输入/输出/渲染适配器
+- storage/：本地历史、缓存、轻量存储
+- prompt/：Prompt 模板
+- examples/：批处理、脚本、演示样例
+- router/、middleware/：仅应用层 API 模块可使用
+
+说明：
+
+- “统一结构”要求的是必选目录一致，不禁止模块根据职责增加可选扩展目录。
+- 若模块新增可选扩展目录，必须在 README 中说明职责与边界。
 
 ## 3.1 目录结构说明
 
@@ -116,25 +143,24 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 - 编码格式：统一使用UTF-8编码，缩进采用4个空格（禁止使用Tab），每行代码长度不超过120字符，过长代码需合理换行，确保代码可读性，便于团队成员查阅和修改。
 
-- 依赖管理：模块的所有依赖项统一写入根目录的requirements.txt文件，明确标注依赖包名称与版本号，避免版本冲突；若时间相关方法需额外依赖（如pytz用于时区处理），需在此文件中明确标注，便于其他开发者快速安装依赖，避免因依赖缺失导致模块无法正常运行。
+-
+依赖管理：模块的所有依赖项统一写入根目录的requirements.txt文件，明确标注依赖包名称与版本号，避免版本冲突；若时间相关方法需额外依赖（如pytz用于时区处理），需在此文件中明确标注，便于其他开发者快速安装依赖，避免因依赖缺失导致模块无法正常运行。
 
 - 代码文件：每个代码文件顶部需添加模块说明注释，注明文件功能、作者及创建日期，便于后续维护和追溯，提升代码可维护性。
 
 ### 3.2.2 命名规范
 
-- 类名：采用大驼峰命名法（如BaseUtils、CommonUtils、TextTool），类名需清晰体现类的功能，避免模糊命名，确保开发者能通过类名快速了解类的用途。
-
-- 方法名/函数名：采用小驼峰命名法（如textClean、formatConvert、md5Encrypt、getCurrentTime、timeDiffCalculate），命名需简洁明了、贴合功能，避免使用无意义的命名（如func1、method2），提升代码可读性。
-
-- 变量名：采用小驼峰命名法（如text、data、encryptedText、startTime、endTime），变量名需与变量用途高度一致，避免使用单个字母（如a、b、c）作为变量名（循环变量除外），确保变量含义清晰。
-
-- 常量名：全大写，多单词用下划线连接（如DEFAULT_ENCODING、TIME_FORMAT、DEFAULT_TIME_ZONE），常量需放在类的顶部或单独的常量文件中，统一管理，便于后续修改和维护。
-
-- 模块名/目录名：全小写，多单词用下划线连接（如common_utils_module、text_tool），与模块/目录功能对应，便于识别和导入。
+- 类名：PascalCase（如 `RequestHandler`、`FastAPIService`、`LocalStateStore`）
+- 方法名/函数名：snake_case（如 `validate_request`、`create_app`、`save_state`）
+- 变量名：snake_case（如 `trace_id`、`session_id`、`top_k`）
+- 常量名：全大写下划线（如 `DEFAULT_TIMEOUT`、`SUPPORTED_FILE_TYPES`）
+- 模块名/目录名：全小写下划线（如 `vector_db_module`、`request_response_module`）
+- JSON 字段名：统一采用 snake_case
 
 ### 3.2.3 注释规范
 
-- 类注释：使用文档字符串（"""），详细说明类的功能、核心作用及适用场景，若有参数或返回值需明确标注；其中，工具类需明确说明其整合的功能范围，尤其是通用辅助工具类，需明确时间相关方法的涵盖范围，便于开发者快速了解类的用途。
+- 类注释：使用文档字符串（"""
+  ），详细说明类的功能、核心作用及适用场景，若有参数或返回值需明确标注；其中，工具类需明确说明其整合的功能范围，尤其是通用辅助工具类，需明确时间相关方法的涵盖范围，便于开发者快速了解类的用途。
 
 - 方法/函数注释：使用文档字符串，详细说明方法功能、参数（名称、类型、含义、默认值）、返回值（类型、含义）及异常（异常类型、触发条件）；时间相关方法需明确标注时间格式、时区等关键信息，避免使用歧义，确保开发者能正确调用。
 
@@ -143,6 +169,7 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 - 注释语言：统一使用中文注释，语言简洁、准确，避免使用模糊、歧义的表述，确保注释的实用性，便于所有团队成员理解。
 
 多进程编码规范：进程锁需确保“获取-释放”成对出现，避免死锁；每个进程的日志句柄需单独初始化，避免共用；日志写入完成后及时释放资源，减少内存占用。
+
 # 4. 各模块详细设计（按分层顺序）
 
 ## 4.1 基础支撑层模块设计
@@ -150,35 +177,43 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 基础支撑层是所有模块的依赖，提供通用能力，需最先开发，包含4个独立模块，各模块独立开发，互不依赖（除配置管理模块可被其他模块依赖）。
 
 ### 4.1.1 通用工具模块（common_utils_module）
-详细设计见[通用工具模块（common_utils_module）设计文档](./基础支撑层-通用工具模块（common_utils_module）设计文档.md)
+
+详细设计见[基础支撑层-通用工具模块（common_utils_module）设计文档](%E5%9F%BA%E7%A1%80%E6%94%AF%E6%92%91%E5%B1%82-%E9%80%9A%E7%94%A8%E5%B7%A5%E5%85%B7%E6%A8%A1%E5%9D%97%EF%BC%88common_utils_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)
 
 ### 4.1.2 配置管理模块（config_module）
-详细设计见[配置管理模块（config_module）设计文档](./基础支撑层-配置管理模块（config_module）设计文档.md)
+
+详细设计见[基础支撑层-配置管理模块（config_module）设计文档](%E5%9F%BA%E7%A1%80%E6%94%AF%E6%92%91%E5%B1%82-%E9%85%8D%E7%BD%AE%E7%AE%A1%E7%90%86%E6%A8%A1%E5%9D%97%EF%BC%88config_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)
 
 ### 4.1.3 日志模块（log_module）
-详细设计见[日志模块（log_module）设计文档](./基础支撑层-日志模块（log_module）设计文档.md)
+
+详细设计见[基础支撑层-日志模块（log_module）设计文档](%E5%9F%BA%E7%A1%80%E6%94%AF%E6%92%91%E5%B1%82-%E6%97%A5%E5%BF%97%E6%A8%A1%E5%9D%97%EF%BC%88log_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)
 
 ### 4.1.4 异常处理模块（exception_module）
-详细设计见[异常处理模块（exception_module）设计文档](./基础支撑层-异常处理模块（exception_module）设计文档.md)
 
+详细设计见[基础支撑层-异常处理模块（exception_module）设计文档](%E5%9F%BA%E7%A1%80%E6%94%AF%E6%92%91%E5%B1%82-%E5%BC%82%E5%B8%B8%E5%A4%84%E7%90%86%E6%A8%A1%E5%9D%97%EF%BC%88exception_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)
 
 ## 4.2 数据层模块设计
 
 数据层负责系统所有数据的存储与读取，包含5个独立模块，依赖基础支撑层的通用工具、配置管理、日志、异常处理模块，各模块独立开发，互不依赖。
 
 ### 4.2.1 文档解析模块（document_parser_module）
-详细设计见[文档解析模块（document_parser_module）设计说明书](数据层-文档解析模块（document_parser_module）设计说明书.md)
+
+详细设计见[数据层-文档解析模块（document_parser_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E6%96%87%E6%A1%A3%E8%A7%A3%E6%9E%90%E6%A8%A1%E5%9D%97%EF%BC%88document_parser_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.2.2 文档存储模块（document_store_module）
-详细设计见[文档存储模块（document_store_module）设计说明书](数据层-文档存储模块（document_store_module）设计说明书.md)
+
+详细设计见[数据层-文档存储模块（document_store_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E6%96%87%E6%A1%A3%E5%AD%98%E5%82%A8%E6%A8%A1%E5%9D%97%EF%BC%88document_store_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.2.3 向量数据库模块（vector_db_module）
+
 详细设计见[数据层-向量数据库模块（vector_db_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%90%91%E9%87%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E6%A8%A1%E5%9D%97%EF%BC%88vector_db_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ### 4.2.4 状态存储模块（state_store_module）
+
 详细设计见[数据层-状态存储模块（state_store_module）设计说明书](%E6%95%B0%E6%8D%AE%E5%B1%82-%E7%8A%B6%E6%80%81%E5%AD%98%E5%82%A8%E6%A8%A1%E5%9D%97%EF%BC%88state_store_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
-### 4.2.5 大模型对接模块（state_store_module）
+### 4.2.5 大模型对接模块（llm_adapter_module）
+
 详细设计见[数据层-大模型对接模块（llm_adapter_module）设计说明书.md](%E6%95%B0%E6%8D%AE%E5%B1%82-%E5%A4%A7%E6%A8%A1%E5%9E%8B%E5%AF%B9%E6%8E%A5%E6%A8%A1%E5%9D%97%EF%BC%88llm_adapter_module%EF%BC%89%E8%AE%BE%E8%AE%A1%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
 
 ## 4.3 核心业务层模块设计
@@ -225,129 +260,109 @@ module_name/                  # 模块根目录（模块名称全小写，多单
 
 # 5. 系统集成与启动规范（必须包含）
 
-为确保“各模块独立开发、最终可无缝集成”，系统需提供一个统一集成入口（建议放在应用层或单独bootstrap目录）。
+## 5.1 设计原则
 
-## 5.1 工具与LLM注入规范（关键）
+- 统一通过 bootstrap 入口完成依赖注入
+- 应用层只依赖接口层抽象接口
+- 接口层只依赖协同调度抽象接口
+- 核心业务层优先依赖抽象接口或统一输出结构，不直接依赖下层具体实现类
+- 示例实现允许直接注入默认实现；生产实现必须支持替换
 
-### 5.1.1 LLM客户端统一接口（建议）
+## 5.2 推荐组装方式
+
+- build_basic_support()
+- build_data_layer()
+- build_business_layer()
+- build_interface_layer()
+- build_application_layer()
 
 ```python
-from abc import ABC, abstractmethod
+def build_handler() -> BaseRequestHandler:
+    llm_client = build_llm_client()
+    vector_db = build_vector_db()
+    doc_store = build_document_store()
+    state_store = build_state_store()
+
+    rag = SimpleRAG(
+        llm_client=llm_client,
+        vector_db=vector_db,
+        doc_store=doc_store
+    )
+
+    agent = SimpleAgent(
+        tools=build_tools(rag=rag),
+        state_store=state_store
+    )
+
+    orchestrator = SimpleOrchestrator(
+        rag_runner=rag,
+        agent_runner=agent
+    )
+
+    return RequestHandler(orchestrator=orchestrator)
 
 
-class BaseLLMClient(ABC):
-    @abstractmethod
-    def generate(self, prompt: str) -> str:
-        pass
+def build_api_app():
+    handler = build_handler()
+    return FastAPIService(handler=handler).create_app()
 
-
+def build_console_app():
+    handler = build_handler()
+    return ConsoleApp(handler=handler)
 ```
 
-### 5.1.2 示例LLM实现（OpenAI/本地模型均可替换）
+## 5.3 安全要求
 
+- 示例中不得再使用 `eval`
+- 计算器工具需使用安全表达式解析方式或白名单运算实现
+
+# 6. 数据构建与索引流程规范（修订）
+
+## 6.1 标准索引链路（强制）
+
+1. document_parser.parse_file / parse_folder
+2. document_store.create_document / save_document
+3. chunker.chunk_document
+4. embedding.embed_texts
+5. vector_db.upsert_vectors
+
+## 6.2 关键约束
+
+- 必须先切 chunk，再生成向量
+- vector_id 推荐等于 chunk_id
+- 向量 metadata 至少包含：doc_id、chunk_id、file_name、chunk_index
+- 原始文档与 chunk 必须可回溯
+
+说明：
+chunker 为索引构建阶段的标准能力，可作为独立模块实现，也可先作为 rag_module 的内部组件实现；
+无论实现位置如何，均必须遵循第 11 章 Chunking 规范。
 ```python
-class DummyLLMClient:
-    def generate(self, prompt: str) -> str:
-        return "【示例回答】" + prompt[:200]
-```
+for p in parsed_list:
+    doc = store.create_document(p["content"], p["file_name"])
+    store.save_document(doc)
 
-### 5.1.3 Agent工具实现示例
+    chunks = chunker.chunk_document(
+        doc_id=doc["doc_id"],
+        content=doc["content"],
+        file_name=doc["file_name"]
+    )
 
-```python
-def rag_search_tool_factory(rag_instance):
-    def _tool(inp: dict):
-        query = inp.get("query", "")
-        top_k = int(inp.get("top_k", 5))
-        return rag_instance.run(query, top_k=top_k)
+    vectors = embedding.embed_texts([c["content"] for c in chunks])
 
-    return _tool
-
-
-def calculator_tool(inp: dict):
-    # 注意：生产需做表达式安全校验，此处仅示例
-    expr = inp.get("expression", "")
-    return {"code": "SUCCESS", "message": "ok", "data": {"result": str(eval(expr))}}
-```
-
-## 5.2 系统启动组装示例（bootstrap.py）
-
-```python
-from rag_module.core.impl import SimpleRAG
-from agent_module.core.impl import SimpleAgent
-from orchestrator_module.core.impl import SimpleOrchestrator
-from request_response_module.core.impl import RequestHandler
-
-from your_llm_client import DummyLLMClient
-from your_tools import rag_search_tool_factory, calculator_tool
-
-
-def build_handler() -> RequestHandler:
-    llm = DummyLLMClient()
-    rag = SimpleRAG(llm_client=llm)
-
-    tools = {
-        "rag_search": rag_search_tool_factory(rag),
-        "calculator": calculator_tool,
-        "llm_generate": lambda inp: {"code": "SUCCESS", "message": "ok", "data": {"text": llm.generate(inp["prompt"])}}
-    }
-    agent = SimpleAgent(tools=tools)
-
-    orchestrator = SimpleOrchestrator(rag_runner=rag, agent_runner=agent)
-    handler = RequestHandler(orchestrator=orchestrator)
-    return handler
-```
-
-# 6. 数据构建与索引流程规范（RAG必须）
-
-没有“索引构建”，RAG无法检索。本节为完整性必须补充。
-
-## 6.1 流程
-
-1. document_parser.parse_file(s) 解析文件为文本（不落盘）
-2. document_store.create_document + save_document 生成doc_id并落盘保存解析后的文本
-3. embedding.embed_text(s) 生成向量
-4. vector_db.upsert_vectors 写入向量，并写入 metadata（至少包含doc_id）
-
-## 6.2 索引构建脚本示例（build_index.py）
-
-```python
-from document_parser_module.core.impl import LocalDocumentParser
-from document_store_module.core.impl import LocalDocumentStore
-from embedding_module.core.impl import STEmbedding
-from vector_db_module.core.impl import FaissVectorDB
-
-
-def build(folder_path: str):
-    parser = LocalDocumentParser()
-    store = LocalDocumentStore()
-    emb = STEmbedding()
-    vdb = FaissVectorDB()
-
-    parsed_list = parser.parse_folder(folder_path)
-
-    vectors = []
-    for p in parsed_list:
-        # 1) 生成doc_id并落盘保存（存储模块只做存储）
-        doc = store.create_document(p["content"], p["file_name"])
-        store.save_document(doc)
-
-        # 2) 生成向量并写入向量库
-        vec = emb.embed_text(doc["content"][:2000])  # 简化：截断避免太长
-        vectors.append({
-            "vector_id": doc["doc_id"],  # 简化：vector_id=doc_id，便于追踪
+    upsert_items = []
+    for chunk, vec in zip(chunks, vectors):
+        upsert_items.append({
+            "vector_id": chunk["chunk_id"],
             "embedding": vec,
             "metadata": {
-                "doc_id": doc["doc_id"],
-                "file_name": doc["file_name"]
+                "doc_id": chunk["doc_id"],
+                "chunk_id": chunk["chunk_id"],
+                "file_name": chunk["meta"]["file_name"],
+                "chunk_index": chunk["meta"]["chunk_index"]
             }
         })
 
-    vdb.upsert_vectors(vectors)
-    print(f"索引构建完成：{len(vectors)}条")
-
-
-if __name__ == "__main__":
-    build("data_docs")
+    vdb.upsert_vectors(upsert_items)
 ```
 
 # 7. 开发与交付规范（补全闭环）
@@ -360,43 +375,36 @@ if __name__ == "__main__":
 * README.md（面向初学者）
 * requirements.txt（固定版本）
 
+若模块使用 model / utils / tools / adapters / storage / prompt / examples 等扩展目录，
+则对应目录也必须纳入测试覆盖范围，并在 README 中说明职责。
+
 ## 7.2 可替换性约束（强制）
 
 * 上层模块只能依赖下层模块的 抽象接口或统一输出结构
 * 禁止跨模块直接引用对方的 impl.py 内部私有方法
 * 替换向量库/Embedding/LLM时，上层不改代码（只改注入与配置）
 
-# 8. 统一请求格式（系统对外唯一标准）
-
-## 8.1 RAG请求
+# 8. 统一请求格式（系统对外唯一标准，修订）
 
 ```json
 {
-  "type": "rag",
-  "query": "问题内容",
-  "top_k": 5
+  "type": "rag|agent|hybrid",
+  "query": "string|null",
+  "task": "string|null",
+  "session_id": "string|null",
+  "top_k": 5,
+  "trace_id": "string|null",
+  "extra_params": {}
 }
 ```
 
-## 8.2 Agent请求
+规则：
 
-```json
-{
-  "type": "agent",
-  "task": "请根据知识库整理一份要点",
-  "session_id": "s001"
-}
-```
-
-## 8.3 Hybrid请求（协同）
-
-```json
-{
-  "type": "hybrid",
-  "task": "先查资料再总结成三点",
-  "session_id": "s002"
-}
-```
+- rag：query 必填
+- agent/hybrid：task 必填
+- session_id：rag 可选，agent/hybrid 推荐传入；若未传，由接口层补齐
+- trace_id：由应用层入口生成并透传
+- extra_params：用于扩展参数透传，不允许各层自定义改名
 
 # 9. 安全性设计
 
@@ -452,63 +460,14 @@ security:
 
 ## 10.2 统一响应结构（Response Envelope）
 
-### 10.2.1 成功返回
+- 所有成功响应与失败响应都必须返回 trace_id
+- trace_id 由应用层入口生成（API 中间件 / Console 入口）
+- 下游模块只能透传，不得重新生成新的 trace_id
+- details 字段必须使用结构化模板，不允许随意拼接非结构化错误文本
 
-所有成功请求统一返回：
-
-```json
-{
-  "code": "SUCCESS",
-  "message": "ok",
-  "data": {},
-  "trace_id": "b3b1c6d7f2b24f5aa0d8e7c8b9a1c2d3",
-  "retryable": false,
-  "details": null
-}
-```
-
-字段说明：
-
-- code：业务码，成功固定为 SUCCESS
-
-- message：面向用户的简短描述，成功固定为 ok
-
-- data：业务返回数据
-
-- trace_id：链路追踪 ID（建议所有响应都返回；服务端错误必须返回）
-
-- retryable：是否建议调用方重试
-
-- details：结构化扩展信息（成功通常为 null）
-
-## 10.2.2 失败返回
-
-所有失败请求统一返回：
-
-```json
-{
-  "code": "PARAM_MISSING",
-  "message": "缺少必填参数：xxx",
-  "data": null,
-  "trace_id": "b3b1c6d7f2b24f5aa0d8e7c8b9a1c2d3",
-  "retryable": false,
-  "details": {
-    "field": "xxx",
-    "expected": "string",
-    "example": "rag"
-  }
-}
-```
-
-建议约定：
-
-- data 在失败时固定为 null
-
-- message 保持简短；复杂信息放到 details
-
-- trace_id 用于排障，调用方应在报错/工单中附带该字段
-
-- retryable=true 时，调用方应采用指数退避并限制最大重试次数
+HTTP 状态码只由应用层负责映射；
+业务错误码由接口层及下游模块返回；
+接口层不直接决定 HTTP 状态码。
 
 ## 10.3 HTTP 状态码与业务码映射规则
 
@@ -659,17 +618,18 @@ security:
 
         - 调用方不应重试，应修正请求或配置
 
-## 10.7 日志与追踪要求（trace_id）
+## 10.7 日志与追踪要求补充说明
 
-- 所有服务端错误（HTTP 5xx/504）必须返回 trace_id，并在日志中打印：
-
-    - trace_id、code、关键入参摘要（脱敏）、异常栈、阶段信息（stage）
-
-- 建议所有请求（包括成功）都返回 trace_id，便于端到端问题定位。
+- trace_id 写日志 
+- trace_id 贯穿应用层→接口层→业务层→数据层 
+- 成功/失败都要记录关键日志字段
 
 # 11. Chunking 规范（索引构建与引用的统一前提）
 
 本章节定义“文本切分（Chunking）”的统一规则。所有索引、引用、评测都依赖该规范；否则会出现“向量命中但无法定位原文/无法稳定引用”的问题。
+说明：
+第 11、12 章的 Chunking 与引用规范优先级高于第 6 章中的旧示例。
+若旧示例与本章节冲突，以本章节为准。
 
 ## 11.1 Chunk 的标准结构（强制）
 
@@ -919,6 +879,14 @@ Rewrite 必须输出结构：
 
 - 响应：与各模块 run/execute 输出一致（成功 SUCCESS，失败见第 10 章）
 
+- /invoke 的业务参数校验由 request_response_module 负责
+
+- API 服务模块只负责 HTTP 协议层校验：鉴权、请求体大小、JSON 解析、上传格式、路由分发
+
+- /documents/upload 仅负责上传与落盘，不等同于索引完成
+
+- 若启用自动索引，必须通过 index_service 或统一索引任务入口完成，不得在 API 层直接编排 parser/embedding/vector_db 逻辑
+
 ### 13.2.1 示例
 
 RAG
@@ -1037,7 +1005,8 @@ curl -X POST /invoke -H "Content-Type: application/json" -d '{"type":"agent","ta
 
 ## 14.1 环境准备
 
-Python版本：3.12+（推荐3.10.12）
+- 开发语言：Python
+- 运行版本：最低 3.10，推荐 3.12
 
 依赖安装：各模块根目录的requirements.txt已列出依赖，可使用以下命令统一安装：
 
@@ -1111,13 +1080,16 @@ def health():
 | 索引构建吞吐           | 	> 10MB/s | 	文档解析+向量化        |
 
 ## 15.2 容量估算
-- 向量存储：每条向量约 维度 * 4字节 + metadata。若100万文档，维度768，FAISS索引内存约 100w * 768 * 4 ≈ 3GB，加上metadata需预留额外空间。
+
+- 向量存储：每条向量约 维度 * 4字节 + metadata。若100万文档，维度768，FAISS索引内存约 100w * 768 * 4 ≈
+  3GB，加上metadata需预留额外空间。
 
 - 文档存储：按平均文档大小估算，例如1GB原始文档，存储为文本后约需2GB（含备份）。
 
 - 状态存储：每个会话状态大小约几KB，按并发会话数估算。
 
 ## 15.3 扩展性设计
+
 - 向量库：若使用FAISS本地模式，单机内存有限，可考虑分片或改用分布式向量库（Milvus、Pinecone）。
 
 - 文档存储：可对接对象存储（如S3）以支持海量文档。
@@ -1130,30 +1102,32 @@ def health():
 
 - 请求层：
 
-  - http_requests_total{path,method,code}
+    - http_requests_total{path,method,code}
 
-  - http_request_duration_seconds_bucket{path,method}
+    - http_request_duration_seconds_bucket{path,method}
 
 - RAG：
 
-  - rag_retrieve_latency_seconds
+    - rag_retrieve_latency_seconds
 
-  - rag_rerank_latency_seconds
+    - rag_rerank_latency_seconds
 
-  - rag_generate_latency_seconds
+    - rag_generate_latency_seconds
 
-  - rag_context_tokens
+    - rag_context_tokens
 
 - Agent：
 
-  - agent_steps_total
-    
-  - agent_tool_calls_total{tool,code}
-    
-  - agent_timeout_total
+    - agent_steps_total
+
+    - agent_tool_calls_total{tool,code}
+
+    - agent_timeout_total
 
 # 16. 监控与告警
+
 ## 16.1 关键指标采集
+
 - 业务指标：RAG请求量、成功率、平均延迟；Agent任务完成数、工具调用成功率。
 
 - 系统指标：CPU、内存、磁盘、网络IO。
@@ -1161,11 +1135,13 @@ def health():
 - 依赖指标：向量库查询延迟、LLM API调用延迟与错误率。
 
 ## 16.2 日志聚合
+
 日志模块需支持将日志输出到JSON格式，便于采集。可集成Filebeat + Elasticsearch或Loki。
 
 审计日志单独输出到audit.log文件。
 
 ## 16.3 告警规则示例
+
 - RAG错误率 > 5% 持续5分钟 → 告警
 
 - 向量库查询延迟 > 1s 持续10分钟 → 告警
@@ -1173,20 +1149,45 @@ def health():
 - LLM API调用失败率 > 10% → 告警
 
 ## 16.4 健康检查与探针
+
 API服务需提供就绪探针（/ready）和存活探针（/live），用于容器编排。
 
 # 17. 数据隐私与合规
+
 ## 17.1 数据生命周期管理
+
 - 文档数据：用户上传的文档应在指定时间后自动删除（如30天），支持通过API手动删除。
 
 - 会话状态：Agent会话状态可配置过期时间（如24小时），过期后自动清理。
 
 - 向量数据：删除文档时需同步删除对应向量（通过vector_db的delete接口实现）。
 
+说明：
+
+- 本系统允许存在“示例实现”和“生产实现”两级能力边界。
+- 示例实现（如本地 Faiss Flat）可不支持 delete，并返回 VECTOR_DELETE_NOT_SUPPORTED。
+- 生产实现必须支持按 vector_id 或 doc_id 级别删除，满足数据生命周期管理要求。
+
 ## 17.2 敏感内容过滤
+
 可在RAG生成后或Agent输出前，集成敏感词过滤模块，对答案进行脱敏或拦截。
 
 ## 17.3 GDPR合规
+
 支持用户“被遗忘权”：提供接口删除与特定用户相关的所有数据（文档、会话、向量）。
 
 数据跨境：若使用海外LLM服务，需告知用户并获取同意。
+
+
+# 附录A 当前代码仓结构映射（v1.1）
+- basic_support/ → 基础支撑层
+- data_layer/ → 数据层
+- business/ → 核心业务层
+- interface/ → 接口层
+- application/ → 应用层
+- doc/ → 总设计与子设计文档目录
+
+# 附录B 设计文档冲突处理规则
+1. 总设计文档 > 子模块设计文档 > README > 代码注释
+2. 若总设计中的旧示例与新规范冲突，以规范章节为准
+3. 若代码实现与文档不一致，以修订后的总设计为准并同步修正文档
