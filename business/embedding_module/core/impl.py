@@ -19,11 +19,11 @@ from ..utils.tool_functions import (
     validate_vector_dim,
 )
 
-from common_utils_module.core.impl import CommonUtils  # type: ignore
-from config_module.core.impl import ConfigManager  # type: ignore
-from log_module.core.impl import SystemLogger  # type: ignore
-from exception_module.core.impl import RAGException  # type: ignore
-from llm_adapter_module.core.impl import LLMService  # type: ignore
+from common_utils_module import CommonUtils  # type: ignore
+from config_module import ConfigManager  # type: ignore
+from log_module import SystemLogger  # type: ignore
+from exception_module import RAGException  # type: ignore
+from llm_adapter_module import LLMService  # type: ignore
 from sentence_transformers import SentenceTransformer  # type: ignore
 
 
@@ -297,7 +297,7 @@ class LLMEmbedding(_BaseEmbeddingImpl):
             self.logger.exception("远程单条文本向量化失败")
             raise RAGException("EMBEDDING_CALL_FAILED", f"远程单条文本向量化失败：{exc}") from exc
 
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def embed_texts(self, texts: List[str]) -> list[list[float]] | None:
         try:
             cleaned = clean_texts(texts)
             vectors = self._call_remote(cleaned)
@@ -313,7 +313,7 @@ class LLMEmbedding(_BaseEmbeddingImpl):
         except RAGException:
             raise
         except Exception as exc:
-            self.logger.exception("远程批量文本向量化失败")
+            self.logger.error("远程批量文本向量化失败")
             raise RAGException("EMBEDDING_CALL_FAILED", f"远程批量文本向量化失败：{exc}") from exc
 
     def call_embedding(self, request: EmbeddingRequest) -> EmbeddingResponse:
@@ -354,5 +354,5 @@ class LLMEmbedding(_BaseEmbeddingImpl):
 
             raise RAGException("PARAM_INVALID", "input_type 仅支持 SINGLE 或 BATCH")
         except Exception as exc:
-            self.logger.exception("远程统一向量化调用失败")
+            self.logger.error("远程统一向量化调用失败")
             return self._build_error_response(exc, start_time, trace_id)

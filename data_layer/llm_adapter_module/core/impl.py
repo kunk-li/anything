@@ -440,3 +440,24 @@ class LLMService(BaseLLMService):
             model_param=model_param if isinstance(model_param, LLMParam) else (LLMParam() if model_param is None else LLMParam(**model_param)),
         )
         return self.call_llm(req)
+
+    def generate(self, prompt: str, trace_id: str = None) -> str:
+        """
+        给上层统一使用的最小文本生成入口
+        返回纯文本，不返回 LLMResponse 对象
+        """
+        request = LLMRequest(
+            request_type="CHAT",
+            input_text=prompt,
+            model_name="default",
+            model_param=LLMParam(),
+        )
+
+        resp = self.call_llm(request)
+
+        # 成功时返回 chat_result
+        if getattr(resp, "code", None) == "SUCCESS":
+            return getattr(resp, "chat_result", "") or ""
+
+        # 失败时直接抛异常，便于上层看见真实错误
+        raise RuntimeError(f"{getattr(resp, 'code', 'UNKNOWN_ERROR')}: {getattr(resp, 'message', '')}")

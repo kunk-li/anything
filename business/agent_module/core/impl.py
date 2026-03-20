@@ -1,264 +1,596 @@
 # -*- coding: utf-8 -*-
 """
 Agent 模块具体实现类
-实现完整 Agent 全流程，串联所有依赖模块，是系统默认使用的 Agent 实现类
+负责任务解析、工具调用、状态记录与结果聚合
 """
 
 import time
 import uuid
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, List, Optional
 
 from .base import BaseAgent
-from ..model.data_model import (
-    AgentRequest,
-    AgentResponse,
-    TaskPlan,
-    TaskStep,
-    ToolResult,
-    StateEvent
-)
-from ..tools.tool_registry import ToolRegistry
-from ..utils.tool_functions import parse_task_by_rules, aggregate_results
 
-# 依赖模块导入（遵循设计文档依赖关系）
-from state_store_module.core.impl import LocalStateStore
 from common_utils_module.core.impl import CommonUtils
 from config_module.core.impl import ConfigManager
 from log_module.core.impl import SystemLogger
-from exception_module.core.impl import AgentException
+from exception_module.core.impl import ExceptionHandler
 
 
 class SimpleAgent(BaseAgent):
-    """标准 Agent 实现类：基于规则的任务拆解 + 工具调用，系统默认实现"""
+    """标准 Agent 实现：任务解析 -> 工具调用 -> 状态记录 -> 结果聚合"""
 
-    def __init__(self, tools: Optional[Dict[str, Callable]] = None):
-        """
-        初始化 Agent 模块，加载系统配置，注册默认工具
-        :param tools: 初始工具字典（可选），格式：{"tool_name": callable}
-        """
-        # 基础支撑层初始化
+    def __init__(
+        self,
+        state_store=None,
+        tool_registry=None,
+        timeout: int = 60,
+        max_retries: int = 2,
+        session_prefix: str = "session",
+    ):
         self.utils = CommonUtils()
         self.logger = SystemLogger()
         self.config = ConfigManager()
-        self.config.load_config()
+        if hasattr(self.config, "load_config"):
+            self.config.load_config()
+        elif hasattr(self.config, "load"):
+            self.config.load()
+        self.exception_handler = ExceptionHandler()
 
-        # 状态存储模块初始化
-        self.state_store = LocalStateStore()
+        self.state_store = state_store
+        self.tool_registry = tool_registry
+        self.timeout = int(self.config.get_config("agent.timeout", timeout))
+        self.max_retries = int(self.config.get_config("agent.max_retries", max_retries))
+        self.session_prefix = self.config.get_config("agent.session_prefix", session_prefix)
+        self.default_execution_mode = self.config.get_config("agent.default_execution_mode", "agent")
 
-        # 工具注册表初始化
-        self.tool_registry = ToolRegistry()
+        self.logger.info("Agent 模块初始化完成")
 
-        # 注册初始工具（若传入）
-        if tools:
-            for tool_name, tool_func in tools.items():
-                self.tool_registry.register(tool_name, tool_func)
+    def register_tool(self, name: str, tool: Any) -> None:
+        """注册工具"""
+        if self.tool_registry is None:
+            self.tool_registry = {}
+        if hasattr(self.tool_registry, "register"):
+            self.tool_registry.register(name, tool)
+        else:
+            self.tool_registry[name] = tool
 
-        # 读取系统 Agent 核心配置
-        self.max_retries = int(self.config.get_config("agent.max_retries", 3))
-        self.timeout = int(self.config.get_config("agent.timeout", 30))
-        self.session_prefix = self.config.get_config(
-            "agent.session_prefix",
-            "agent_session"
-        )
-
-        self.logger.info("Agent 模块初始化完成，加载系统默认配置")
-
-    def parse_task(self, task: str) -> Dict[str, Any]:
-        """实现抽象方法：任务解析，基于规则拆解任务为子步骤"""
-        try:
-            # 1. 基于关键词规则解析任务（可扩展为 LLM 解析）
-            plan_dict = parse_task_by_rules(task)
-
-            # 2. 记录任务解析事件到状态存储
-            session_id = self._get_or_create_session()
-            event = StateEvent(
-                event_type="plan",
-                data=plan_dict,
-                timestamp=self.utils.get_assist_tool().get_current_time()
-            )
-            self.state_store.append_event(session_id, {
-                "event_type": event.event_type,
-                "data": event.data,
-                "timestamp": event.timestamp
-            })
-
-            return plan_dict
-
-        except Exception as e:
-            self.logger.error(f"Agent 任务解析失败：{str(e)}")
-            raise AgentException("AGENT_TASK_PARSE_FAILED", f"任务解析失败：{str(e)}")
-
-    def execute(self, task: str, session_id: Optional[str] = None) -> Dict[str, Any]:
-        """实现抽象方法：任务执行，调用工具并汇总结果"""
+    def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """执行 Agent 任务，统一接收标准 request dict"""
         start_time = time.time()
-        session_id = session_id or self._get_or_create_session()
+
+        task = request.get("task")
+        trace_id = request.get("trace_id")
+        extra_params = request.get("extra_params") or {}
+
+        # session_id 主路径由上游传入；这里只做一次兼容兜底
+        session_id = request.get("session_id") or self._fallback_session_id()
+
+        timeout = int(request.get("timeout") or self.timeout)
+        max_retries = int(request.get("max_retries") or self.max_retries)
+        execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
 
         try:
-            # 1. 参数校验
-            if not task or not task.strip():
-                raise AgentException("PARAM_MISSING", "任务描述不能为空")
+            self.logger.info(
+                f"Agent执行开始：session_id={session_id}, trace_id={trace_id}, mode={execution_mode}"
+            )
 
-            # 2. 任务解析
-            plan_dict = self.parse_task(task)
-            plan_steps = plan_dict.get("plan", [])
+            self._append_state_event(
+                session_id=session_id,
+                event_type="task_started",
+                trace_id=trace_id,
+                payload={
+                    "task": task,
+                    "execution_mode": execution_mode,
+                    "timeout": timeout,
+                    "max_retries": max_retries,
+                },
+            )
 
-            # 3. 执行子步骤
-            results = []
-            for step in plan_steps:
-                # 超时检查
-                if time.time() - start_time > self.timeout:
-                    raise AgentException("AGENT_TIMEOUT", "Agent 执行超时")
+            plan = self.parse_task(
+                task=task,
+                session_id=session_id,
+                trace_id=trace_id,
+                extra_params=extra_params,
+            )
 
-                tool_name = step.get("tool")
-                tool_input = step.get("input", {})
+            self._append_state_event(
+                session_id=session_id,
+                event_type="task_parsed",
+                trace_id=trace_id,
+                payload={
+                    "task": task,
+                    "step_count": len(plan.get("steps", [])),
+                },
+            )
 
-                # 工具调用（含重试机制）
-                tool_result = self._call_tool_with_retry(
-                    tool_name,
-                    tool_input,
-                    session_id
+            tool_results = []
+            for step in plan.get("steps", []):
+                step_id = step.get("step_id")
+                tool_name = step.get("tool_name")
+
+                self._append_state_event(
+                    session_id=session_id,
+                    event_type="step_started",
+                    trace_id=trace_id,
+                    payload={
+                        "step_id": step_id,
+                        "tool_name": tool_name,
+                    },
                 )
-                results.append({
-                    "tool": tool_name,
-                    "output": tool_result
-                })
 
-            # 4. 结果汇总
-            aggregated_result = aggregate_results(results)
+                result = self._call_tool_with_retry(
+                    step=step,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    max_retries=max_retries,
+                )
+                tool_results.append(result)
 
-            # 5. 结果封装
-            cost_time = time.time() - start_time
+                if result.get("success"):
+                    self._append_state_event(
+                        session_id=session_id,
+                        event_type="step_finished",
+                        trace_id=trace_id,
+                        payload={
+                            "step_id": step_id,
+                            "tool_name": tool_name,
+                        },
+                    )
+                else:
+                    self._append_state_event(
+                        session_id=session_id,
+                        event_type="step_failed",
+                        trace_id=trace_id,
+                        payload={
+                            "step_id": step_id,
+                            "tool_name": tool_name,
+                            "error": result.get("error"),
+                        },
+                    )
+
+            aggregated = self.aggregate_results(
+                task=task,
+                session_id=session_id,
+                trace_id=trace_id,
+                tool_results=tool_results,
+                execution_mode=execution_mode,
+            )
+
+            self._append_state_event(
+                session_id=session_id,
+                event_type="task_completed",
+                trace_id=trace_id,
+                payload={
+                    "success_steps": len([r for r in tool_results if r.get("success")]),
+                    "failed_steps": len([r for r in tool_results if not r.get("success")]),
+                },
+            )
+
+            if self.state_store is not None:
+                self._save_state_safe(
+                    session_id=session_id,
+                    state={
+                        "status": "completed",
+                        "task": task,
+                        "execution_mode": execution_mode,
+                        "updated_at": time.time(),
+                    },
+                    trace_id=trace_id,
+                )
+
             return {
                 "code": "SUCCESS",
-                "message": "Agent 执行成功",
-                "data": {
-                    "task": task,
-                    "session_id": session_id,
-                    "plan": plan_dict,
-                    "results": results,
-                    "aggregated_result": aggregated_result
-                },
-                "cost_time": cost_time
+                "message": "ok",
+                "data": aggregated,
+                "trace_id": trace_id,
+                "retryable": False,
+                "details": None,
+                "cost_time": round(time.time() - start_time, 3),
             }
 
-        except AgentException:
-            raise
         except Exception as e:
-            self.logger.error(f"Agent 执行失败：{str(e)}")
-            raise AgentException("AGENT_EXECUTE_FAILED", str(e))
+            self.logger.error(f"Agent执行异常：{str(e)}, trace_id={trace_id}, session_id={session_id}")
 
-    def call_agent(self, request: AgentRequest) -> AgentResponse:
-        """实现抽象方法：标准化 Agent 调用入口，请求校验 + 异常封装"""
+            self._append_state_event(
+                session_id=session_id,
+                event_type="task_failed",
+                trace_id=trace_id,
+                payload={"error": str(e)},
+            )
+
+            return self._handle_exception(
+                exception=e,
+                trace_id=trace_id,
+                session_id=session_id,
+                task=task,
+            )
+
+    def parse_task(
+        self,
+        task: str,
+        session_id: str,
+        trace_id: Optional[str] = None,
+        extra_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """解析任务并生成执行计划。当前版本采用规则式解析。"""
+        extra_params = extra_params or {}
+        execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
+
+        steps: List[Dict[str, Any]] = []
+
+        if execution_mode == "hybrid":
+            steps.append(
+                {
+                    "step_id": "s1",
+                    "tool_name": "rag_search",
+                    "description": "先做知识库检索",
+                    "input_data": {
+                        "query": task,
+                        "top_k": extra_params.get("top_k", 5),
+                        "trace_id": trace_id,
+                        "extra_params": extra_params,
+                    },
+                }
+            )
+            steps.append(
+                {
+                    "step_id": "s2",
+                    "tool_name": "llm_generate",
+                    "description": "基于检索结果生成总结",
+                    "input_data": {
+                        "prompt": task,
+                        "trace_id": trace_id,
+                        "extra_params": extra_params,
+                    },
+                }
+            )
+        else:
+            steps.append(
+                {
+                    "step_id": "s1",
+                    "tool_name": "llm_generate",
+                    "description": "执行通用文本生成",
+                    "input_data": {
+                        "prompt": task,
+                        "trace_id": trace_id,
+                        "extra_params": extra_params,
+                    },
+                }
+            )
+
+        return {
+            "session_id": session_id,
+            "task": task,
+            "steps": steps,
+        }
+
+    def aggregate_results(
+            self,
+            task: str,
+            session_id: str,
+            trace_id: Optional[str],
+            tool_results: List[Dict[str, Any]],
+            execution_mode: str,
+    ) -> Dict[str, Any]:
+        """聚合工具结果，输出统一结构"""
+
+        steps = []
+        summaries = []
+
+        rag_answer = ""
+        llm_answer = ""
+
+        final_citations = []
+        final_retrieved_chunks = []
+
+        for item in tool_results:
+            tool_name = item.get("tool_name")
+            success = item.get("success", False)
+            output = item.get("output")
+
+            steps.append(
+                {
+                    "step_id": item.get("step_id"),
+                    "tool_name": tool_name,
+                    "success": success,
+                }
+            )
+
+            if not success:
+                summaries.append(
+                    {
+                        "tool_name": tool_name,
+                        "summary": f"失败：{item.get('error', 'unknown error')}",
+                    }
+                )
+                continue
+
+            # 统一提取 output.data
+            data = output.get("data") if isinstance(output, dict) else None
+
+            # rag_search：只提取结构化结果，不把整段回答直接拼到最终 answer
+            if tool_name == "rag_search":
+                if isinstance(data, dict):
+                    rag_answer = data.get("answer", "") or ""
+                    final_citations = data.get("citations", []) or []
+                    final_retrieved_chunks = data.get("retrieved_chunks", []) or []
+
+                summaries.append(
+                    {
+                        "tool_name": tool_name,
+                        "summary": self._summarize_tool_output(output),
+                    }
+                )
+                continue
+
+            # llm_generate：作为 hybrid 的最终答案主来源
+            if tool_name == "llm_generate":
+                if isinstance(data, dict):
+                    llm_answer = (
+                            data.get("answer")
+                            or data.get("text")
+                            or data.get("content")
+                            or ""
+                    )
+                else:
+                    llm_answer = str(output)
+
+                summaries.append(
+                    {
+                        "tool_name": tool_name,
+                        "summary": self._summarize_tool_output(output),
+                    }
+                )
+                continue
+
+            # 其他工具：保留摘要
+            summaries.append(
+                {
+                    "tool_name": tool_name,
+                    "summary": self._summarize_tool_output(output),
+                }
+            )
+
+        # 根据模式决定最终 answer
+        if execution_mode == "hybrid":
+            # hybrid：优先 llm_generate，其次 rag_answer
+            final_answer = llm_answer or rag_answer or "任务执行完成，但未生成可展示内容。"
+        else:
+            # agent：优先 llm_generate，其次回退到首个成功结果摘要
+            final_answer = llm_answer or rag_answer
+            if not final_answer:
+                success_summaries = [x["summary"] for x in summaries if not x["summary"].startswith("失败：")]
+                final_answer = success_summaries[0] if success_summaries else "任务执行完成，但未生成可展示内容。"
+
+        return {
+            "answer": final_answer,
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "execution_mode": execution_mode,
+            "steps": steps,
+            "tool_results_summary": summaries,
+            "citations": final_citations,
+            "retrieved_chunks": final_retrieved_chunks,
+        }
+
+    def _call_tool_with_retry(
+        self,
+        step: Dict[str, Any],
+        session_id: str,
+        trace_id: Optional[str],
+        max_retries: int,
+    ) -> Dict[str, Any]:
+        """按重试策略调用工具"""
+        step_id = step.get("step_id")
+        tool_name = step.get("tool_name")
+        payload = dict(step.get("input_data") or {})
+        payload.setdefault("session_id", session_id)
+        payload.setdefault("trace_id", trace_id)
+
+        tool = self._get_tool(tool_name)
+        if tool is None:
+            return {
+                "step_id": step_id,
+                "tool_name": tool_name,
+                "success": False,
+                "output": None,
+                "error": f"工具不存在：{tool_name}",
+                "code": "TOOL_NOT_FOUND",
+            }
+
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                output = tool(payload)
+
+                is_success = True
+                if isinstance(output, dict):
+                    code = output.get("code")
+                    if code and code != "SUCCESS":
+                        is_success = False
+
+                return {
+                    "step_id": step_id,
+                    "tool_name": tool_name,
+                    "success": is_success,
+                    "output": output,
+                    "error": None if is_success else (
+                        output.get("message", "tool returned non-success code")
+                        if isinstance(output, dict) else "tool returned non-success result"
+                    ),
+                    "attempt": attempt + 1,
+                }
+            except Exception as e:
+                last_error = str(e)
+                self.logger.warning(
+                    f"工具调用失败：tool={tool_name}, attempt={attempt + 1}, trace_id={trace_id}, error={last_error}"
+                )
+
+        return {
+            "step_id": step_id,
+            "tool_name": tool_name,
+            "success": False,
+            "output": None,
+            "error": last_error or "tool call failed",
+            "code": "TOOL_CALL_FAILED",
+            "attempt": max_retries + 1,
+        }
+
+    def _get_tool(self, name: str):
+        """从注册表获取工具，兼容 dict 和 ToolRegistry 两种风格"""
+        if self.tool_registry is None:
+            return None
+        if hasattr(self.tool_registry, "get"):
+            return self.tool_registry.get(name)
+        if isinstance(self.tool_registry, dict):
+            return self.tool_registry.get(name)
+        return None
+
+    def _append_state_event(
+        self,
+        session_id: str,
+        event_type: str,
+        trace_id: Optional[str],
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """安全写入状态事件：失败不阻断主任务"""
+        if self.state_store is None:
+            return
+
+        event = {
+            "session_id": session_id,
+            "event_type": event_type,
+            "trace_id": trace_id,
+            "payload": payload or {},
+            "created_at": time.time(),
+        }
+
         try:
-            # 1. 调用全流程
-            result_dict = self.execute(
-                task=request.task,
-                session_id=request.session_id
-            )
-
-            # 2. 转换为 AgentResponse 模型
-            trace_id = self.utils.get_assist_tool().get_current_time(
-                format_="YYYYMMDDHHmmss"
-            )
-
-            response = AgentResponse(
-                code=result_dict["code"],
-                message=result_dict["message"],
-                data=result_dict.get("data"),
-                cost_time=result_dict.get("cost_time"),
-                trace_id=trace_id
-            )
-            return response
-
-        except AgentException as e:
-            trace_id = self.utils.get_assist_tool().get_current_time(
-                format_="YYYYMMDDHHmmss"
-            )
-            return AgentResponse(
-                code=e.code,
-                message=e.message,
-                data=None,
-                trace_id=trace_id
-            )
+            if hasattr(self.state_store, "append_event"):
+                self.state_store.append_event(session_id, event)
         except Exception as e:
-            trace_id = self.utils.get_assist_tool().get_current_time(
-                format_="YYYYMMDDHHmmss"
-            )
-            return AgentResponse(
-                code="AGENT_EXECUTE_FAILED",
-                message=str(e),
-                data=None,
-                trace_id=trace_id
+            self.logger.warning(
+                f"状态事件写入失败（已忽略）：session_id={session_id}, event_type={event_type}, error={str(e)}"
             )
 
-    def register_tool(self, tool_name: str, tool_func: Callable,
-                      description: str, input_schema: Dict) -> bool:
-        """实现抽象方法：注册工具到工具池"""
+    def _save_state_safe(
+        self,
+        session_id: str,
+        state: Dict[str, Any],
+        trace_id: Optional[str],
+    ) -> None:
+        """安全保存聚合状态：失败不阻断主任务"""
+        if self.state_store is None:
+            return
         try:
-            self.tool_registry.register(
-                tool_name,
-                tool_func,
-                description,
-                input_schema
+            if hasattr(self.state_store, "save_state"):
+                self.state_store.save_state(session_id, state)
+        except Exception as e:
+            self.logger.warning(
+                f"状态保存失败（已忽略）：session_id={session_id}, trace_id={trace_id}, error={str(e)}"
             )
-            self.logger.info(f"工具注册成功：{tool_name}")
-            return True
-        except Exception as e:
-            self.logger.error(f"工具注册失败：{tool_name}, {str(e)}")
-            return False
 
-    def unregister_tool(self, tool_name: str) -> bool:
-        """实现抽象方法：从工具池移除工具"""
-        try:
-            self.tool_registry.unregister(tool_name)
-            self.logger.info(f"工具注销成功：{tool_name}")
-            return True
-        except Exception as e:
-            self.logger.error(f"工具注销失败：{tool_name}, {str(e)}")
-            return False
-
-    def _get_or_create_session(self) -> str:
-        """私有方法：获取或创建会话 ID"""
+    def _fallback_session_id(self) -> str:
+        """仅兼容兜底使用，不作为主路径"""
         return f"{self.session_prefix}_{uuid.uuid4().hex[:12]}"
 
-    def _call_tool_with_retry(self, tool_name: str, tool_input: Dict,
-                              session_id: str) -> Dict:
-        """私有方法：工具调用（含重试机制）"""
-        last_err = None
+    def _summarize_tool_output(self, output: Any) -> str:
+        """将工具输出压缩为简短摘要"""
+        if isinstance(output, dict):
+            if "data" in output and isinstance(output["data"], dict):
+                data = output["data"]
+                if "answer" in data:
+                    return str(data["answer"])[:80]
+                if "text" in data:
+                    return str(data["text"])[:80]
+                if "content" in data:
+                    return str(data["content"])[:80]
+            if "answer" in output:
+                return str(output["answer"])[:80]
+            if "text" in output:
+                return str(output["text"])[:80]
+            if "content" in output:
+                return str(output["content"])[:80]
+            return str(output)[:80]
+        return str(output)[:80]
 
-        for attempt in range(self.max_retries):
-            try:
-                # 1. 获取工具函数
-                tool_func = self.tool_registry.get(tool_name)
-                if not tool_func:
-                    raise AgentException("TOOL_NOT_FOUND", f"工具不存在：{tool_name}")
+    def _handle_exception(
+        self,
+        exception: Exception,
+        trace_id: Optional[str],
+        session_id: Optional[str],
+        task: Optional[str],
+    ) -> Dict[str, Any]:
+        """统一异常处理"""
+        try:
+            if hasattr(self.exception_handler, "handle"):
+                error_info = self.exception_handler.handle(exception, trace_id=trace_id)
+            else:
+                error_info = self.exception_handler.handle_exception(exception)
 
-                # 2. 调用工具
-                result = tool_func(tool_input)
+            return {
+                "code": error_info.get("code", "AGENT_RUN_FAILED"),
+                "message": error_info.get("message", "Agent执行失败"),
+                "data": None,
+                "trace_id": trace_id,
+                "retryable": error_info.get("retryable", False),
+                "details": error_info.get("details") or {
+                    "session_id": session_id,
+                    "task": task,
+                    "stage": "agent",
+                },
+            }
+        except Exception:
+            return {
+                "code": "AGENT_RUN_FAILED",
+                "message": "Agent执行失败",
+                "data": None,
+                "trace_id": trace_id,
+                "retryable": False,
+                "details": {
+                    "session_id": session_id,
+                    "task": task,
+                    "stage": "agent",
+                },
+            }
 
-                # 3. 记录工具调用事件
-                event = StateEvent(
-                    event_type="tool",
-                    data={
-                        "tool": tool_name,
-                        "input": tool_input,
-                        "output": result
-                    },
-                    timestamp=self.utils.get_assist_tool().get_current_time()
-                )
-                self.state_store.append_event(session_id, {
-                    "event_type": event.event_type,
-                    "data": event.data,
-                    "timestamp": event.timestamp
-                })
+    def call_agent(
+            self,
+            task: str,
+            session_id: Optional[str] = None,
+            trace_id: Optional[str] = None,
+            extra_params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        兼容旧抽象接口：将旧风格调用转成统一 request dict，再复用 execute()
+        """
+        request = {
+            "type": "agent",
+            "task": task,
+            "trace_id": trace_id,
+            "extra_params": extra_params or {},
+        }
 
-                return result
+        if session_id:
+            request["session_id"] = session_id
 
-            except Exception as e:
-                last_err = str(e)
-                self.logger.warning(
-                    f"工具调用失败：{tool_name}, 尝试 {attempt + 1}/{self.max_retries}, err={last_err}"
-                )
+        return self.execute(request)
 
-        # 所有重试均失败
-        raise AgentException("TOOL_CALL_FAILED", f"工具调用失败：{tool_name}, err={last_err}")
+    def unregister_tool(self, name: str) -> bool:
+        """
+        注销工具，兼容 dict 和 ToolRegistry 两种风格
+        """
+        if self.tool_registry is None:
+            return False
+
+        if hasattr(self.tool_registry, "unregister"):
+            result = self.tool_registry.unregister(name)
+            return bool(result) if result is not None else True
+
+        if isinstance(self.tool_registry, dict):
+            if name in self.tool_registry:
+                del self.tool_registry[name]
+                return True
+            return False
+
+        return False
