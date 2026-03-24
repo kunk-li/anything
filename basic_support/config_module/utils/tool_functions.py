@@ -7,9 +7,6 @@ import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple
 
-
-
-
 ENC_PREFIX = "ENC::"
 ENV_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+)\}$")
 

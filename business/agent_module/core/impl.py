@@ -6,7 +6,7 @@ Agent 模块具体实现类
 
 import time
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 
 from .base import BaseAgent
 
@@ -20,12 +20,12 @@ class SimpleAgent(BaseAgent):
     """标准 Agent 实现：任务解析 -> 工具调用 -> 状态记录 -> 结果聚合"""
 
     def __init__(
-        self,
-        state_store=None,
-        tool_registry=None,
-        timeout: int = 60,
-        max_retries: int = 2,
-        session_prefix: str = "session",
+            self,
+            state_store=None,
+            tool_registry=None,
+            timeout: int = 60,
+            max_retries: int = 2,
+            session_prefix: str = "session",
     ):
         self.utils = CommonUtils()
         self.logger = SystemLogger()
@@ -45,14 +45,15 @@ class SimpleAgent(BaseAgent):
 
         self.logger.info("Agent 模块初始化完成")
 
-    def register_tool(self, name: str, tool: Any) -> None:
+    def register_tool(self, name: str, tool_func: Callable,
+                      description: str, input_schema: Dict) -> None:
         """注册工具"""
         if self.tool_registry is None:
             self.tool_registry = {}
         if hasattr(self.tool_registry, "register"):
-            self.tool_registry.register(name, tool)
+            self.tool_registry.register(name, tool_func)
         else:
-            self.tool_registry[name] = tool
+            self.tool_registry[name] = tool_func
 
     def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """执行 Agent 任务，统一接收标准 request dict"""
@@ -206,11 +207,11 @@ class SimpleAgent(BaseAgent):
             )
 
     def parse_task(
-        self,
-        task: str,
-        session_id: str,
-        trace_id: Optional[str] = None,
-        extra_params: Optional[Dict[str, Any]] = None,
+            self,
+            task: str,
+            session_id: str,
+            trace_id: Optional[str] = None,
+            extra_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """解析任务并生成执行计划。当前版本采用规则式解析。"""
         extra_params = extra_params or {}
@@ -374,11 +375,11 @@ class SimpleAgent(BaseAgent):
         }
 
     def _call_tool_with_retry(
-        self,
-        step: Dict[str, Any],
-        session_id: str,
-        trace_id: Optional[str],
-        max_retries: int,
+            self,
+            step: Dict[str, Any],
+            session_id: str,
+            trace_id: Optional[str],
+            max_retries: int,
     ) -> Dict[str, Any]:
         """按重试策略调用工具"""
         step_id = step.get("step_id")
@@ -447,11 +448,11 @@ class SimpleAgent(BaseAgent):
         return None
 
     def _append_state_event(
-        self,
-        session_id: str,
-        event_type: str,
-        trace_id: Optional[str],
-        payload: Optional[Dict[str, Any]] = None,
+            self,
+            session_id: str,
+            event_type: str,
+            trace_id: Optional[str],
+            payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         """安全写入状态事件：失败不阻断主任务"""
         if self.state_store is None:
@@ -474,10 +475,10 @@ class SimpleAgent(BaseAgent):
             )
 
     def _save_state_safe(
-        self,
-        session_id: str,
-        state: Dict[str, Any],
-        trace_id: Optional[str],
+            self,
+            session_id: str,
+            state: Dict[str, Any],
+            trace_id: Optional[str],
     ) -> None:
         """安全保存聚合状态：失败不阻断主任务"""
         if self.state_store is None:
@@ -515,11 +516,11 @@ class SimpleAgent(BaseAgent):
         return str(output)[:80]
 
     def _handle_exception(
-        self,
-        exception: Exception,
-        trace_id: Optional[str],
-        session_id: Optional[str],
-        task: Optional[str],
+            self,
+            exception: Exception,
+            trace_id: Optional[str],
+            session_id: Optional[str],
+            task: Optional[str],
     ) -> Dict[str, Any]:
         """统一异常处理"""
         try:

@@ -41,8 +41,8 @@ llm:
   temperature: 0.7
 
   common:
-    timeout: 30
-    max_retry: 3
+    timeout: 15
+    max_retry: 1
 
   default_vector_model: "text-embedding-3-small"
   default_chat_model: "qwen3.5-flash-2026-02-23"
@@ -58,7 +58,7 @@ llm:
     qwen3.5-flash-2026-02-23:
       request_type: "CHAT"
       adapter_class: "OpenAIChatAdapter"
-      api_key: "${DASHCOPE_API_KEY}"
+      api_key: "${DASHSCOPE_API_KEY}"
       api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     gpt-4o-mini:

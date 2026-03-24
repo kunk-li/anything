@@ -24,11 +24,10 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    def execute(self, task: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """
         任务执行：执行完整任务流程，调用工具并汇总结果
-        :param task: 用户任务描述
-        :param session_id: 会话唯一标识（可选）
+        :param request: 请求信息
         :return: 标准化 Agent 响应结果（Dict 格式）
         :raises AgentException: 执行失败时抛出标准化异常
         """
