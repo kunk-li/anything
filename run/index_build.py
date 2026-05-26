@@ -45,6 +45,15 @@ def parse_sources(parser: Any, source_type: str, source_path: str) -> List[Dict[
 
 
 def create_and_save_document(store: Any, item: Dict[str, Any]) -> Dict[str, Any]:
+    """按 BaseDocumentStore 抽象契约创建并持久化文档。
+
+    契约（见 data_layer/document_store_module/core/base.py）：
+        create_document(content, file_name, file_type, content_hash) -> Dict[str, str]
+        save_document(document) -> bool
+
+    create_document 签名不含 meta；解析阶段产出的 meta 在 document 创建后
+    再合并进 document["meta"]，便于下游 chunker / 引用回溯使用。
+    """
     if store is None:
         raise RuntimeError("document_store 未构建成功")
 
@@ -56,51 +65,14 @@ def create_and_save_document(store: Any, item: Dict[str, Any]) -> Dict[str, Any]
     file_type = Path(file_name).suffix.lower().lstrip(".") or "txt"
     content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
 
-    if not hasattr(store, "create_document"):
-        raise RuntimeError("document_store 不支持 create_document")
+    document = store.create_document(
+        content=content,
+        file_name=file_name,
+        file_type=file_type,
+        content_hash=content_hash,
+    )
 
-    document = None
-
-    # 1. 最可能的真实签名：content, file_name, file_type, content_hash
-    try:
-        document = store.create_document(
-            content=content,
-            file_name=file_name,
-            file_type=file_type,
-            content_hash=content_hash,
-        )
-    except TypeError:
-        pass
-
-    # 2. 带 meta/source 的扩展签名
-    if document is None:
-        try:
-            document = store.create_document(
-                content=content,
-                file_name=file_name,
-                file_type=file_type,
-                content_hash=content_hash,
-                meta=meta,
-                source=source,
-            )
-        except TypeError:
-            pass
-
-    # 3. 位置参数版本
-    if document is None:
-        try:
-            document = store.create_document(content, file_name, file_type, content_hash)
-        except TypeError:
-            pass
-
-    # 4. 再兜底一次：content, file_name, file_type, content_hash, meta
-    if document is None:
-        try:
-            document = store.create_document(content, file_name, file_type, content_hash, meta)
-        except TypeError as e:
-            raise RuntimeError(f"document_store.create_document 签名仍不兼容：{str(e)}") from e
-
-    # 补齐后续 chunk/build 需要的字段
+    # 补齐后续 chunk / 引用回溯需要的 meta 字段（create_document 契约不含 meta）
     if isinstance(document, dict):
         document.setdefault("content", content)
         document.setdefault("file_name", file_name)
@@ -112,11 +84,7 @@ def create_and_save_document(store: Any, item: Dict[str, Any]) -> Dict[str, Any]
         for k, v in meta.items():
             document["meta"].setdefault(k, v)
 
-    if hasattr(store, "save_document"):
-        try:
-            store.save_document(document)
-        except TypeError:
-            store.save_document(document=document)
+    store.save_document(document)
 
     return document
 
