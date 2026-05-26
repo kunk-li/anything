@@ -220,77 +220,38 @@ class SimpleRAG(BaseRAG):
             filters: Optional[Dict[str, Any]],
             trace_id: Optional[str],
     ) -> List[Dict[str, Any]]:
-        """查询向量数据库，兼容多种 query 签名"""
+        """按 BaseVectorDB.query 抽象契约调用向量库检索。
+
+        契约（见 data_layer/vector_db_module/core/base.py:BaseVectorDB.query）：
+            query(query_vector: List[float], top_k: int = 5, filters: Optional[Dict] = None) -> List[Dict]
+        """
         if self.vector_db is None:
             return []
 
         try:
-            result = None
-
-            # 1. 兼容新风格：query(embedding=..., top_k=..., filters=...)
-            try:
-                result = self.vector_db.query(
-                    embedding=query_embedding,
-                    top_k=top_k,
-                    filters=filters,
-                )
-            except TypeError:
-                pass
-
-            # 2. 兼容常见风格：query(query_vector=..., top_k=..., filters=...)
-            if result is None:
-                try:
-                    result = self.vector_db.query(
-                        query_vector=query_embedding,
-                        top_k=top_k,
-                        filters=filters,
-                    )
-                except TypeError:
-                    pass
-
-            # 3. 兼容更旧风格：query(vector=..., top_k=...)
-            if result is None:
-                try:
-                    result = self.vector_db.query(
-                        vector=query_embedding,
-                        top_k=top_k,
-                    )
-                except TypeError:
-                    pass
-
-            # 4. 兼容位置参数：query(query_embedding, top_k)
-            if result is None:
-                try:
-                    result = self.vector_db.query(query_embedding, top_k)
-                except TypeError:
-                    pass
-
-            # 5. 兼容位置参数：query(query_embedding)
-            if result is None:
-                try:
-                    result = self.vector_db.query(query_embedding)
-                except TypeError as e:
-                    raise RuntimeError(f"vector_db.query 签名不兼容：{str(e)}") from e
-
-            # 统一返回结构
-            if isinstance(result, dict):
-                data = result.get("data")
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict) and "items" in data:
-                    return data.get("items") or []
-                if "items" in result:
-                    return result.get("items") or []
-                return []
-
-            if isinstance(result, list):
-                return result
-
-            return []
-
+            result = self.vector_db.query(
+                query_vector=query_embedding,
+                top_k=top_k,
+                filters=filters,
+            )
         except Exception as e:
             self.logger.warning(f"向量检索失败：trace_id={trace_id}, error={str(e)}")
             raise RuntimeError("向量检索失败") from e
+
+        # BaseVectorDB.query 契约返回 List[Dict]
+        if isinstance(result, list):
+            return result
+
+        # 兜底：极少数旧实现可能返回 {"data": [...]} 或 {"items": [...]}，保留最小兼容
+        if isinstance(result, dict):
+            data = result.get("data")
+            if isinstance(data, list):
+                return data
+            items = result.get("items")
+            if isinstance(items, list):
+                return items
+
+        return []
 
     def _normalize_retrieved_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """将向量库结果标准化为 chunk 级结构"""

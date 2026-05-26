@@ -71,7 +71,7 @@ class TestFaissVectorDB(unittest.TestCase):
             {"vector_id": "v3", "embedding": [0.1] * 64, "metadata": {"doc_id": "d2", "chunk_id": "c1"}},
         ]
         self.db.upsert_vectors(test_vectors)
-        res = self.db.query([0.1] * 64, top_k=10, filter={"doc_id": "d1"})
+        res = self.db.query([0.1] * 64, top_k=10, filters={"doc_id": "d1"})
         self.assertTrue(all(r["metadata"]["doc_id"] == "d1" for r in res))
         self.assertEqual(len(res), 2)
 

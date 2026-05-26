@@ -203,7 +203,7 @@ class FaissVectorDB(BaseVectorDB):
                 self.logger.error(f"upsert_vectors failed: {e}", logger_name="vector_db_module")
             raise VectorDBException("VECTOR_INSERT_FAILED", f"向量插入/更新失败：{str(e)}")
 
-    def query(self, query_vector: List[float], top_k: int = 5, filter: Optional[Dict] = None) -> List[Dict]:
+    def query(self, query_vector: List[float], top_k: int = 5, filters: Optional[Dict] = None) -> List[Dict]:
         """向量相似度检索。"""
         try:
             if top_k <= 0:
@@ -216,7 +216,7 @@ class FaissVectorDB(BaseVectorDB):
                 raise ValueError(f"query vector dimension mismatch: expected {self.dim}, got {q.shape[0]}")
             q = normalize_embeddings(q).astype("float32", copy=False)
 
-            # 为支持 filter，先多取一些候选再过滤
+            # 为支持 filters，先多取一些候选再过滤
             oversample = max(top_k * 10, top_k)
             oversample = min(oversample, int(self.index.ntotal))
             scores, idxs = self.index.search(q.reshape(1, -1), oversample)
@@ -229,7 +229,7 @@ class FaissVectorDB(BaseVectorDB):
                     continue
                 vid = self.id_map[idx]
                 meta = self.meta_map.get(vid, {})
-                if not match_metadata_filter(meta, filter):
+                if not match_metadata_filter(meta, filters):
                     continue
                 # IndexFlatIP + 归一化 => 余弦相似度范围 [-1,1]，此处按文档约定映射到 [0,1]
                 cos = float(score)
@@ -240,7 +240,7 @@ class FaissVectorDB(BaseVectorDB):
 
             if self.logger:
                 self.logger.debug(
-                    f"query: top_k={top_k}, filter={filter}, returned={len(results)}",
+                    f"query: top_k={top_k}, filters={filters}, returned={len(results)}",
                     logger_name="vector_db_module",
                 )
             return results
@@ -251,7 +251,7 @@ class FaissVectorDB(BaseVectorDB):
                 self.logger.error(f"query failed: {e}", logger_name="vector_db_module")
             raise VectorDBException("VECTOR_QUERY_FAILED", f"向量检索失败：{str(e)}")
 
-    def delete(self, vector_ids: Optional[List[str]] = None, filter: Optional[Dict] = None) -> bool:
+    def delete(self, vector_ids: Optional[List[str]] = None, filters: Optional[Dict] = None) -> bool:
         """删除向量。
 
         说明：
