@@ -6,33 +6,20 @@
 
 from typing import Dict, Any, Tuple, Optional
 
+from schema_module import validate_request_dict
 
-def validate_request_params(request: Dict[str, Any]) -> Tuple[bool, str]:
+
+def validate_request_params(request: Dict[str, Any]) -> Tuple[bool, str, str]:
+    """校验请求参数（走 schema_module.RequestEnvelope 强校验）。
+
+    返回三元组 (is_valid, error_message, error_code)。
+    error_code 直接对齐文档错误码表：
+        - SUCCESS / BAD_REQUEST / PARAM_MISSING / PARAM_INVALID
+
+    上游 RequestHandler.validate_request 已经支持三元组返回，
+    返回类型从 (bool, str) 升级为 (bool, str, str) 不破坏调用契约。
     """
-    校验请求参数完整性
-    :param request: 请求字典
-    :return: 元组（校验是否通过，错误信息）
-    """
-    req_type = request.get("type", "rag")
-
-    # 1. 检查 type 是否合法
-    if req_type not in ["rag", "agent", "hybrid"]:
-        return False, f"不支持的请求类型：{req_type}"
-
-    # 2. 检查 rag 模式下 query 是否存在
-    if req_type == "rag" and not request.get("query"):
-        return False, "RAG 模式必须提供 query 参数"
-
-    # 3. 检查 agent 模式下 task 是否存在
-    if req_type in ["agent", "hybrid"] and not request.get("task"):
-        return False, "Agent 模式必须提供 task 参数"
-
-    # 4. 检查 top_k 范围
-    top_k = request.get("top_k", 5)
-    if not isinstance(top_k, int) or top_k < 1 or top_k > 50:
-        return False, "top_k 参数必须为 1-50 之间的整数"
-
-    return True, ""
+    return validate_request_dict(request)
 
 
 def build_error_details(code: str, request: Dict[str, Any]) -> Optional[Dict]:
