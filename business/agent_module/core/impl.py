@@ -46,14 +46,19 @@ class SimpleAgent(BaseAgent):
         self.logger.info("Agent 模块初始化完成")
 
     def register_tool(self, name: str, tool_func: Callable,
-                      description: str, input_schema: Dict) -> None:
-        """注册工具"""
+                      description: str, input_schema: Dict) -> bool:
+        """注册工具（实现 BaseAgent.register_tool 契约）。
+
+        description 与 input_schema 当前未使用，预留给后续 LLM 驱动决策时
+        作为工具元信息传给规划器（见 Task #9 计划）。
+        """
         if self.tool_registry is None:
             self.tool_registry = {}
         if hasattr(self.tool_registry, "register"):
             self.tool_registry.register(name, tool_func)
         else:
             self.tool_registry[name] = tool_func
+        return True
 
     def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """执行 Agent 任务，统一接收标准 request dict"""
