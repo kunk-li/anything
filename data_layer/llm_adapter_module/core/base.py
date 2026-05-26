@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Dict, Tuple
+from typing import Any, List, Dict, Tuple, Optional
 
 from llm_adapter_module.model.data_model import LLMRequest, LLMResponse, MediaContent, MultimodalResult, FileContent
 
@@ -80,3 +80,22 @@ class BaseLLMService(ABC):
     @abstractmethod
     def validate_request(self, request: LLMRequest) -> Tuple[bool, str]:
         pass
+
+    @abstractmethod
+    def generate(self, prompt: str, trace_id: Optional[str] = None) -> str:
+        """统一文本生成入口（强制签名，所有实现必须严格匹配）。
+
+        作为 LLMRequest/LLMResponse 之外的简化对接点，便于上层 RAG/Agent
+        无需构造完整 LLMRequest 即可拿到纯文本回答。
+
+        参数：
+            prompt: 用户输入的提示词
+            trace_id: 可选追踪 ID，便于全链路日志检索
+
+        返回：
+            模型生成的纯文本回答（非空字符串）
+
+        异常：
+            上游调用失败应抛出明确异常（如 RuntimeError），
+            禁止静默返回空串或错误占位文本，由上层决定如何回退。
+        """

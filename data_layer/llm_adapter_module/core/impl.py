@@ -441,10 +441,10 @@ class LLMService(BaseLLMService):
         )
         return self.call_llm(req)
 
-    def generate(self, prompt: str, trace_id: str = None) -> str:
-        """
-        给上层统一使用的最小文本生成入口
-        返回纯文本，不返回 LLMResponse 对象
+    def generate(self, prompt: str, trace_id: Optional[str] = None) -> str:
+        """统一文本生成入口（实现 BaseLLMService.generate 契约）。
+
+        返回纯文本，不返回 LLMResponse 对象。失败时直接抛 RuntimeError。
         """
         request = LLMRequest(
             request_type="CHAT",
