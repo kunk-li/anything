@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-RAG 模块初始化文件
-暴露核心类与方法，方便外部模块调用
+RAG 模块对外暴露
+
+仅导出抽象基类 + 默认实现。
+统一请求/响应数据契约请用 schema_module.RequestEnvelope / ResponseEnvelope,
+不再保留 RAGRequest / RAGResponse / RetrievedChunk 旧 dataclass(已删除,
+原本是死代码)。
 """
 
 from .core.base import BaseRAG
 from .core.impl import SimpleRAG
-from .model.data_model import RAGRequest, RAGResponse, RetrievedChunk
 
 __all__ = [
     "BaseRAG",
     "SimpleRAG",
-    "RAGRequest",
-    "RAGResponse",
-    "RetrievedChunk"
 ]
