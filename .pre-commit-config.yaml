@@ -1,0 +1,44 @@
+# pre-commit hooks - 本地提交前自动守护契约与快速单测
+#
+# 启用方式:
+#   pip install pre-commit
+#   pre-commit install
+#
+# 之后每次 git commit 会自动跑下方 hooks; 失败则阻止提交.
+# 显式跑一次: pre-commit run --all-files
+
+repos:
+  # 标准 hooks (语法 / 文件结尾 / 大文件检测)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        # ci.yml 的 GitHub Actions 表达式 ${{ ... }} 不是合法 yaml literal,
+        # 需 --unsafe 或排除
+        args: [--allow-multiple-documents]
+        exclude: ^\.github/workflows/
+      - id: end-of-file-fixer
+        exclude: ^(doc/|docs/|run/(logs|state_store|vector_store|documents)/)
+      - id: trailing-whitespace
+        exclude: ^(doc/|docs/|run/(logs|state_store|vector_store|documents)/)
+      - id: check-added-large-files
+        args: [--maxkb=2000]
+
+  # 项目自定义 hooks
+  - repo: local
+    hooks:
+      - id: abc-alignment
+        name: ABC 签名漂移检测
+        entry: python scripts/check_abc_alignment.py --ci
+        language: system
+        pass_filenames: false
+        # 只在 core/base.py / core/impl.py / __init__.py 改动时跑
+        files: '(core/base\.py|core/impl\.py|__init__\.py)$'
+
+      - id: fast-unit-tests
+        name: 快速单测(schema + deps + chunker)
+        entry: bash -c 'PYTHONPATH="basic_support:data_layer:business:interface:application:run:." python -m unittest discover -s basic_support/schema_module/tests && PYTHONPATH="basic_support:data_layer:business:interface:application:run:." python -m unittest discover -s basic_support/deps_module/tests && PYTHONPATH="basic_support:data_layer:business:interface:application:run:." python -m unittest discover -s data_layer/chunker_module/tests'
+        language: system
+        pass_filenames: false
+        # 只在 Python 代码改动时跑(纯文档/yaml 改动不触发)
+        files: '\.py$'
