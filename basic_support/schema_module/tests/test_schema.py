@@ -31,6 +31,41 @@ class TestRequestEnvelope(unittest.TestCase):
         self.assertEqual(env.query, "什么是 RAG？")
         self.assertEqual(env.top_k, 3)
 
+    def test_tenant_id_optional_default_none(self):
+        """不传 tenant_id 时 schema 接受为 None, 后续由 RequestHandler 补 default"""
+        env = RequestEnvelope.model_validate({"type": "rag", "query": "x"})
+        self.assertIsNone(env.tenant_id)
+
+    def test_tenant_id_valid_formats(self):
+        for tid in ("acme-corp", "tenant_a", "abc", "x" * 32, "tenant-001", "default"):
+            env = RequestEnvelope.model_validate({
+                "type": "rag", "query": "x", "tenant_id": tid,
+            })
+            self.assertEqual(env.tenant_id, tid)
+
+    def test_tenant_id_empty_string_treated_as_none(self):
+        env = RequestEnvelope.model_validate({
+            "type": "rag", "query": "x", "tenant_id": "",
+        })
+        self.assertIsNone(env.tenant_id)
+
+    def test_tenant_id_rejects_invalid_chars(self):
+        from pydantic import ValidationError
+        for bad in (
+            "Acme Corp",       # 大写 + 空格
+            "../../etc",       # path traversal 尝试
+            "tenant.id",       # 不允许的点
+            "tenant@a",        # 不允许的 @
+            "ab",              # < 3 字符
+            "x" * 33,          # > 32 字符
+            123,               # 非字符串
+            "tenant/a",        # path 分隔符
+        ):
+            with self.assertRaises(ValidationError, msg=f"should reject {bad!r}"):
+                RequestEnvelope.model_validate({
+                    "type": "rag", "query": "x", "tenant_id": bad,
+                })
+
     def test_valid_agent_request(self):
         env = RequestEnvelope.model_validate({
             "type": "agent",
@@ -93,6 +128,14 @@ class TestValidateRequestDict(unittest.TestCase):
         ok, msg, code = validate_request_dict({"type": "hybrid"})
         self.assertFalse(ok)
         self.assertEqual(code, "PARAM_MISSING")
+
+    def test_invalid_tenant_id_returns_param_invalid(self):
+        ok, msg, code = validate_request_dict({
+            "type": "rag", "query": "x", "tenant_id": "Bad Tenant!",
+        })
+        self.assertFalse(ok)
+        self.assertEqual(code, "PARAM_INVALID")
+        self.assertIn("tenant_id", msg)
 
 
 class TestResponseEnvelope(unittest.TestCase):

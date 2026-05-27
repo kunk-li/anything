@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
@@ -21,6 +22,10 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 # 请求类型枚举
 RequestType = Literal["rag", "agent", "hybrid"]
+
+# tenant_id 字符集白名单(详见 docs/multi-tenancy-design.md §2.1 / §9.2)
+# 严格 ASCII 防 path traversal; 长度 3-32
+TENANT_ID_PATTERN = re.compile(r"^[a-z0-9_-]{3,32}$")
 
 
 class RequestEnvelope(BaseModel):
@@ -31,6 +36,8 @@ class RequestEnvelope(BaseModel):
         - type=agent / hybrid → task 必填
         - top_k: 1~50 闭区间
         - session_id / trace_id 可选（缺失时由接口层补齐）
+        - tenant_id 可选,字符集 [a-z0-9_-] 3-32 字符
+          (缺失时由 RequestHandler 补齐为 "default", 详见 docs/multi-tenancy-design.md §4)
         - extra_params: 透传字段，不允许中途改名
     """
 
@@ -38,6 +45,7 @@ class RequestEnvelope(BaseModel):
     query: Optional[str] = None
     task: Optional[str] = None
     session_id: Optional[str] = None
+    tenant_id: Optional[str] = None
     top_k: int = Field(default=5, ge=1, le=50)
     trace_id: Optional[str] = None
     extra_params: Dict[str, Any] = Field(default_factory=dict)
@@ -51,6 +59,21 @@ class RequestEnvelope(BaseModel):
         """空字符串视作未提供，统一为 None 便于后续 required 校验。"""
         if isinstance(v, str) and v.strip() == "":
             return None
+        return v
+
+    @field_validator("tenant_id", mode="before")
+    @classmethod
+    def _normalize_tenant_id(cls, v: Any) -> Any:
+        """空字符串视为未提供 (跟 query/task 一样的清洗);
+        非空时严格校验字符集,防 path traversal。"""
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        if not isinstance(v, str) or not TENANT_ID_PATTERN.match(v):
+            raise ValueError(
+                f"tenant_id 必须是 3-32 位 [a-z0-9_-] 字符,实际收到: {v!r}"
+            )
         return v
 
     @model_validator(mode="after")
@@ -187,6 +210,9 @@ def validate_request_dict(request: Dict[str, Any]) -> Tuple[bool, str, str]:
         if loc and loc[0] == "type":
             return False, msg, "BAD_REQUEST"
         if loc and loc[0] == "top_k":
+            return False, msg, "PARAM_INVALID"
+        if loc and loc[0] == "tenant_id":
+            # tenant_id 字符集校验失败属于参数不合法,而非缺失
             return False, msg, "PARAM_INVALID"
         # type-level required（model_validator 抛出的业务规则错误）
         if err_type in ("value_error",) or "必须提供" in msg:

@@ -228,7 +228,7 @@ class RequestHandler(BaseRequestHandler):
         return "no_trace"
 
     def _standardize_request(self, request: Dict[str, Any], trace_id: str) -> Dict[str, Any]:
-        """标准化请求格式"""
+        """标准化请求格式 (RequestHandler 是 tenant_id 的单一补齐点,见 docs/multi-tenancy-design.md §4.4)"""
         standardized = dict(request)
 
         if "type" not in standardized or not standardized.get("type"):
@@ -241,6 +241,13 @@ class RequestHandler(BaseRequestHandler):
             standardized["extra_params"] = {}
 
         standardized["trace_id"] = trace_id
+
+        # tenant_id 单层补齐 (Task #33 PR1):
+        # - 上游 (ApiService 认证 middleware) 应该已经把 auth_tenant_id 注入 body
+        # - 直接调 RequestHandler 的场景 (smoke test / 内部调用) 走 default 兜底
+        # - 下游 (Orchestrator/RAG/Agent/数据层) 一律只读不再补
+        if not standardized.get("tenant_id"):
+            standardized["tenant_id"] = "default"
 
         req_type = standardized.get("type")
         if req_type in ["agent", "hybrid"] and not standardized.get("session_id"):

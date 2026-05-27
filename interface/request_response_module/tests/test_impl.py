@@ -171,6 +171,27 @@ class TestRequestHandlerStandardize(unittest.TestCase):
         std = self.handler._standardize_request({"type": "rag", "query": "x"}, trace_id="t1")
         self.assertEqual(std.get("trace_id"), "t1")
 
+    def test_tenant_id_filled_with_default_when_missing(self):
+        """tenant_id 缺失时 RequestHandler 应补为 'default' (单层补齐)"""
+        std = self.handler._standardize_request({"type": "rag", "query": "x"}, trace_id="t1")
+        self.assertEqual(std.get("tenant_id"), "default")
+
+    def test_tenant_id_preserved_when_explicitly_set(self):
+        """显式传入的 tenant_id 应保留 (上游 ApiService 已经认证后注入)"""
+        std = self.handler._standardize_request(
+            {"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+            trace_id="t1",
+        )
+        self.assertEqual(std.get("tenant_id"), "tenant-a")
+
+    def test_tenant_id_empty_string_treated_as_missing(self):
+        """tenant_id 空串视为未传, 走 default"""
+        std = self.handler._standardize_request(
+            {"type": "rag", "query": "x", "tenant_id": ""},
+            trace_id="t1",
+        )
+        self.assertEqual(std.get("tenant_id"), "default")
+
 
 if __name__ == "__main__":
     unittest.main()
