@@ -391,6 +391,10 @@
                 '<span class="message-loading">' +
                 '<span class="dot"></span><span class="dot"></span><span class="dot"></span>' +
                 ' 正在处理...</span>';
+        } else if (msg.role === 'assistant' && !msg.error && window.Markdown) {
+            // 助手成功响应走 markdown 渲染 (用户消息保持 plain text 防 XSS)
+            body.innerHTML = window.Markdown.render(msg.content || '');
+            window.Markdown.bindCopyButtons(body);
         } else {
             body.textContent = msg.content || '';
         }

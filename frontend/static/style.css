@@ -790,6 +790,127 @@ body {
     to { transform: translateX(0); opacity: 1; }
 }
 
+/* ============== Markdown 渲染 ============== */
+
+.message-body .md-h1,
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4 {
+    margin: 12px 0 6px;
+    color: var(--text);
+    font-weight: 600;
+    line-height: 1.3;
+}
+.message-body h1 { font-size: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.message-body h2 { font-size: 16px; }
+.message-body h3 { font-size: 14px; color: var(--accent); }
+.message-body h4 { font-size: 13px; color: var(--text-dim); }
+
+.message-body p { margin: 6px 0; }
+
+.message-body ul, .message-body ol {
+    margin: 6px 0;
+    padding-left: 24px;
+}
+.message-body li { margin: 3px 0; }
+
+.message-body blockquote {
+    border-left: 3px solid var(--accent);
+    background: var(--bg-elev2);
+    margin: 8px 0;
+    padding: 6px 12px;
+    color: var(--text-dim);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.message-body hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 12px 0;
+}
+
+.message-body a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent);
+}
+.message-body a:hover { border-bottom-style: solid; }
+
+.message-body strong { color: var(--text); font-weight: 600; }
+.message-body em { color: var(--text); font-style: italic; }
+
+/* inline code */
+.md-inline {
+    background: var(--code-bg);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    border: 1px solid var(--border);
+}
+
+/* code block */
+.md-code-block {
+    position: relative;
+    margin: 10px 0;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+.md-code-block pre {
+    margin: 0;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.md-code-block code {
+    background: transparent;
+    color: var(--text-dim);
+    padding: 0;
+    border: none;
+}
+.md-code-lang {
+    position: absolute;
+    top: 4px;
+    right: 60px;
+    background: var(--bg-elev);
+    color: var(--text-faint);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    pointer-events: none;
+    user-select: none;
+}
+.md-code-copy {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    transition: all var(--transition);
+}
+.md-code-copy:hover {
+    color: var(--text);
+    border-color: var(--accent);
+}
+
+/* 语法高亮 token */
+.hl-kw  { color: #c792ea; font-weight: 600; }
+.hl-str { color: #c3e88d; }
+.hl-num { color: #f78c6c; }
+.hl-cmt { color: var(--text-faint); font-style: italic; }
+
 /* ============== Scrollbars ============== */
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
