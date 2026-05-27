@@ -49,6 +49,9 @@ jobs:
           pip install -r requirements.txt
           # 测试 / 运行时额外依赖(主 requirements 中故意不 pin,以最大兼容性)
           pip install pydantic faiss-cpu sentence-transformers
+          # 文档解析可选依赖(document_parser_module 已用 try/except 包裹这些
+          # import,即使不装也能跑 ABC 守护;但装上让 smoke test 有完整解析能力)
+          pip install xmltodict PyPDF2 python-docx pandas python-pptx
 
       # =====================================================================
       # 阻塞性步骤 (失败则 CI 红): 单测 + ABC 守护

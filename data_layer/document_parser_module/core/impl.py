@@ -6,13 +6,34 @@ import re
 from html.parser import HTMLParser
 from typing import Dict, List
 
-import xmltodict
+# 第三方解析依赖 — 改为可选 import:
+# 这些库各自较重(pandas / PyPDF2 / python-docx / python-pptx),不应该让
+# document_parser_module 仅仅"被 import"(如 ABC 守护扫描) 就强制要求安装。
+# 真正使用对应解析能力时, 由 _parse_xxx 方法自己检查 None 并报错。
+try:
+    import xmltodict  # type: ignore
+except ImportError:
+    xmltodict = None  # type: ignore
 
-# 第三方解析依赖
-from PyPDF2 import PdfReader
-from docx import Document
-import pandas as pd
-from pptx import Presentation
+try:
+    from PyPDF2 import PdfReader  # type: ignore
+except ImportError:
+    PdfReader = None  # type: ignore
+
+try:
+    from docx import Document  # type: ignore
+except ImportError:
+    Document = None  # type: ignore
+
+try:
+    import pandas as pd  # type: ignore
+except ImportError:
+    pd = None  # type: ignore
+
+try:
+    from pptx import Presentation  # type: ignore
+except ImportError:
+    Presentation = None  # type: ignore
 
 from .base import BaseDocumentParser
 from ..config.config import DEFAULT_ENCODING, SUPPORTED_FILE_TYPES
