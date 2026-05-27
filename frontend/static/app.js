@@ -46,6 +46,10 @@
         langBtn: $('lang-btn'),
         sidebarToggle: $('sidebar-toggle'),
         sidebar: document.querySelector('.sidebar'),
+        previewDrawer: $('preview-drawer'),
+        previewTitle: $('preview-title'),
+        previewMeta: $('preview-meta'),
+        previewText: $('preview-text'),
     };
 
     // i18n shortcut
@@ -224,6 +228,10 @@
         els.settingsBtn.addEventListener('click', () => openDrawer('settings'));
         $$('[data-close="settings"]').forEach(el =>
             el.addEventListener('click', () => closeDrawer('settings'))
+        );
+        // 预览抽屉关闭按钮
+        $$('[data-close="preview"]').forEach(el =>
+            el.addEventListener('click', () => closeDrawer('preview'))
         );
         els.saveSettingsBtn.addEventListener('click', saveSettings);
         els.clearHistoryBtn.addEventListener('click', clearHistory);
@@ -474,8 +482,14 @@
                 const fn = c.file_name || c.doc_id || '?';
                 const score = c.score != null ? ` ${c.score.toFixed(2)}` : '';
                 chip.textContent = `[${i + 1}] ${fn}${score}`;
-                chip.title = `chunk_id=${c.chunk_id}\ndoc_id=${c.doc_id}`;
-                chip.addEventListener('click', () => focusChunk(c.chunk_id));
+                chip.title = `chunk_id=${c.chunk_id}\ndoc_id=${c.doc_id}\nclick: focus chunk · shift+click: preview source`;
+                chip.addEventListener('click', (e) => {
+                    if (e.shiftKey) {
+                        openPreview(c);
+                    } else {
+                        focusChunk(c.chunk_id);
+                    }
+                });
                 cites.appendChild(chip);
             });
             content.appendChild(cites);
@@ -570,8 +584,76 @@
             meta.textContent = parts.join(' · ');
             li.appendChild(meta);
 
+            // "查看原文" 按钮: 调 GET /documents/{doc_id}/preview
+            if (c.doc_id) {
+                const viewBtn = document.createElement('button');
+                viewBtn.className = 'chunk-view-btn';
+                viewBtn.textContent = t('preview.viewOriginal');
+                viewBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openPreview(c);
+                });
+                li.appendChild(viewBtn);
+            }
+
             els.chunkList.appendChild(li);
         });
+    }
+
+    /** 打开预览抽屉, 调 GET /documents/{doc_id}/preview */
+    async function openPreview(chunk) {
+        if (!chunk || !chunk.doc_id) return;
+        openDrawer('preview');
+        els.previewTitle.textContent = chunk.file_name || chunk.doc_id;
+        els.previewMeta.innerHTML = `<span class="chip">${t('preview.loading')}</span>`;
+        els.previewText.textContent = '';
+
+        const opts = {};
+        if (chunk.start_char != null) opts.start_char = chunk.start_char;
+        if (chunk.end_char != null) opts.end_char = chunk.end_char;
+        opts.context = 200;
+        // 透传 tenant_id (仅 internal IP 时后端才信任)
+        const tenant = (els.tenantInput.value || '').trim();
+        if (tenant) opts.tenant_id = tenant;
+
+        try {
+            const { payload, status } = await ApiClient.getDocumentPreview(chunk.doc_id, opts);
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                els.previewMeta.innerHTML = `<span class="chip" style="color:var(--danger);border-color:var(--danger);">${
+                    Markdown.escapeHtml(payload?.code || `HTTP ${status}`)
+                }</span>`;
+                els.previewText.textContent = payload?.message || t('preview.error');
+                return;
+            }
+            const d = payload.data;
+            els.previewTitle.textContent = d.file_name || chunk.doc_id;
+
+            // meta: 总长度 / 高亮范围 / 文件类型 chips
+            const chips = [];
+            if (d.file_type) chips.push(`<span class="chip">${Markdown.escapeHtml(d.file_type)}</span>`);
+            chips.push(`<span class="chip">${t('preview.totalChars')}: ${d.total_chars}</span>`);
+            chips.push(
+                `<span class="chip">${t('preview.range')}: ${d.snippet_start + d.highlight_start} - ${
+                    d.snippet_start + d.highlight_end
+                }</span>`
+            );
+            els.previewMeta.innerHTML = chips.join(' ');
+
+            // 渲染 snippet 把高亮区域包成 <mark>
+            const esc = Markdown.escapeHtml;
+            const before = esc(d.snippet.slice(0, d.highlight_start));
+            const hit = esc(d.snippet.slice(d.highlight_start, d.highlight_end));
+            const after = esc(d.snippet.slice(d.highlight_end));
+            els.previewText.innerHTML = `${before}<mark>${hit}</mark>${after}`;
+            // 滚到高亮位置
+            requestAnimationFrame(() => {
+                const mk = els.previewText.querySelector('mark');
+                if (mk) mk.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        } catch (err) {
+            els.previewMeta.innerHTML = `<span class="chip" style="color:var(--danger);border-color:var(--danger);">ERROR</span>`;
+            els.previewText.textContent = err.message || t('preview.error');
+        }
     }
 
     function focusChunk(chunkId) {

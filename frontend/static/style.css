@@ -745,6 +745,70 @@ body {
     font-size: 11px;
 }
 
+.chunk-view-btn {
+    margin-top: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 11px;
+    transition: all var(--transition);
+    width: 100%;
+}
+.chunk-view-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
+/* ============== Preview Drawer ============== */
+.preview-panel {
+    width: 560px;
+    max-width: 95vw;
+}
+@media (max-width: 640px) {
+    .preview-panel { width: 100%; }
+}
+.preview-meta {
+    margin-bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.preview-meta .chip {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+}
+.preview-text {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+    margin: 0;
+}
+.preview-text mark {
+    background: rgba(108, 139, 245, 0.3);
+    color: var(--text);
+    padding: 1px 2px;
+    border-radius: 2px;
+    border-left: 2px solid var(--accent);
+    border-right: 2px solid var(--accent);
+}
+
 .step-tool {
     color: var(--accent);
     font-weight: 600;

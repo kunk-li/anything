@@ -274,7 +274,17 @@ def build_application_layer(
     result: Dict[str, Any] = {}
 
     if build_api:
-        result["api_service"] = ApiService(handler=handler, deps=deps)
+        # 给 GET /documents/{doc_id}/preview 注入按租户构造 doc_store 的工厂。
+        # 每次 preview 请求按请求的 tenant_id 现 new (轻量, hash_map 加载 ~ms),
+        # 失败时 ApiService 返回 PREVIEW_NOT_SUPPORTED, 不影响其他端点。
+        def _doc_store_factory(tenant_id: str):
+            return LocalDocumentStore(deps=deps, tenant_id=tenant_id)
+
+        result["api_service"] = ApiService(
+            handler=handler,
+            deps=deps,
+            document_store_factory=_doc_store_factory,
+        )
 
     if build_console:
         console_app = ConsoleApp(

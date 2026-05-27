@@ -103,6 +103,22 @@ const ApiClient = (() => {
         return _doFetch('GET', `/index/job/${encodeURIComponent(jobId)}`);
     }
 
+    /**
+     * 文档预览: GET /documents/{doc_id}/preview
+     * @param {string} docId
+     * @param {Object} opts {start_char, end_char, context, tenant_id?}
+     */
+    async function getDocumentPreview(docId, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.start_char != null) params.set('start_char', opts.start_char);
+        if (opts.end_char != null) params.set('end_char', opts.end_char);
+        if (opts.context != null) params.set('context', opts.context);
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        const path = `/documents/${encodeURIComponent(docId)}/preview${qs ? '?' + qs : ''}`;
+        return _doFetch('GET', path);
+    }
+
     function configure(opts = {}) {
         if (opts.baseUrl !== undefined) settings.baseUrl = opts.baseUrl;
         if (opts.apiKey !== undefined) settings.apiKey = opts.apiKey;
@@ -119,6 +135,7 @@ const ApiClient = (() => {
         uploadDocument,
         buildIndex,
         getIndexJob,
+        getDocumentPreview,
         configure,
         getSettings,
     };

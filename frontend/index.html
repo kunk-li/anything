@@ -178,6 +178,21 @@
         </div>
     </div>
 
+    <!-- ============== Preview Modal ============== -->
+    <div class="drawer" id="preview-drawer" hidden>
+        <div class="drawer-backdrop" data-close="preview"></div>
+        <div class="drawer-panel preview-panel">
+            <div class="drawer-header">
+                <h3 id="preview-title" data-i18n="preview.title">文档预览</h3>
+                <button class="icon-btn" data-close="preview" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <div class="preview-meta" id="preview-meta"></div>
+                <pre class="preview-text" id="preview-text"></pre>
+            </div>
+        </div>
+    </div>
+
     <!-- ============== Toast ============== -->
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 

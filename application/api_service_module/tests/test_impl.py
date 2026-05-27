@@ -559,6 +559,105 @@ class TestQuotaAndTenantNotFound(unittest.TestCase):
         self.assertEqual(rb1.status_code, 200)
 
 
+class TestDocumentPreview(unittest.TestCase):
+    """GET /documents/{doc_id}/preview — 跟 chunk 跳转回原文功能配套"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+
+    def test_preview_not_supported_when_factory_missing(self):
+        """没注入 document_store_factory 时返回 501 PREVIEW_NOT_SUPPORTED"""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.get("/documents/00000000-0000-4000-8000-000000000000/preview")
+        self.assertEqual(r.status_code, 501)
+        self.assertEqual(r.json()["code"], "PREVIEW_NOT_SUPPORTED")
+
+    def test_preview_returns_snippet_with_highlight(self):
+        """注入 factory 后, 正常 doc 应返回 snippet + highlight 偏移"""
+        class _FakeStore:
+            def get_document(self, doc_id):
+                if doc_id == "missing":
+                    return None
+                # 模拟 1000 char 长的文档内容
+                return {
+                    "doc_id": doc_id,
+                    "file_name": "demo.md",
+                    "file_type": "md",
+                    "content": "X" * 1000,
+                }
+
+        svc = ApiService(handler=self.handler, document_store_factory=lambda tid: _FakeStore())
+        svc.auth_enabled = False
+        # tenant 校验放过
+        svc._known_tenants.add("default")
+        client = TestClient(svc.app)
+
+        r = client.get(
+            "/documents/00000000-0000-4000-8000-000000000000/preview"
+            "?start_char=500&end_char=520&context=100"
+        )
+        self.assertEqual(r.status_code, 200)
+        payload = r.json()
+        self.assertEqual(payload["code"], "SUCCESS")
+        d = payload["data"]
+        self.assertEqual(d["file_name"], "demo.md")
+        self.assertEqual(d["total_chars"], 1000)
+        # snippet_start = 500 - 100 = 400, snippet_end = 520 + 100 = 620
+        self.assertEqual(d["snippet_start"], 400)
+        self.assertEqual(d["snippet_end"], 620)
+        # 偏移 (相对 snippet)
+        self.assertEqual(d["highlight_start"], 100)
+        self.assertEqual(d["highlight_end"], 120)
+        self.assertEqual(len(d["snippet"]), 220)
+
+    def test_preview_404_when_doc_missing(self):
+        """doc 不存在 -> 404 DOCUMENT_NOT_FOUND (§9.3 防枚举, 不区分跨租户/不存在)"""
+        class _Empty:
+            def get_document(self, doc_id):
+                return None
+
+        svc = ApiService(handler=self.handler, document_store_factory=lambda tid: _Empty())
+        svc.auth_enabled = False
+        svc._known_tenants.add("default")
+        client = TestClient(svc.app)
+        r = client.get("/documents/00000000-0000-4000-8000-000000000000/preview")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["code"], "DOCUMENT_NOT_FOUND")
+
+    def test_preview_invalid_doc_id(self):
+        """非法 doc_id (raise ValueError) -> 400 PARAM_INVALID"""
+        class _Raises:
+            def get_document(self, doc_id):
+                raise ValueError("doc_id格式非法,需为UUID4")
+
+        svc = ApiService(handler=self.handler, document_store_factory=lambda tid: _Raises())
+        svc.auth_enabled = False
+        svc._known_tenants.add("default")
+        client = TestClient(svc.app)
+        r = client.get("/documents/not-a-uuid/preview")
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["code"], "PARAM_INVALID")
+
+    def test_preview_unknown_tenant_404(self):
+        """未知 tenant -> 404 TENANT_NOT_FOUND (§9.3 同桶防枚举)"""
+        class _Store:
+            def get_document(self, doc_id):
+                return {"content": "x", "file_name": "a.md"}
+
+        svc = ApiService(handler=self.handler, document_store_factory=lambda tid: _Store())
+        svc.auth_enabled = False
+        svc.internal_whitelist = ["testclient"]  # 允许 query tenant
+        # _known_tenants 默认仅 {default}
+        client = TestClient(svc.app)
+        r = client.get(
+            "/documents/00000000-0000-4000-8000-000000000000/preview?tenant_id=tenant-ghost"
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["code"], "TENANT_NOT_FOUND")
+
+
 class TestFrontendMount(unittest.TestCase):
     """Web UI 挂载: GET / 返回 index.html, /static/* 提供静态资源"""
 

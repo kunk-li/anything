@@ -27,7 +27,19 @@ from observability_module import (
 class ApiService:
     """标准 API 服务实现：只负责 HTTP 协议层，不承载业务语义校验"""
 
-    def __init__(self, handler, deps: Optional[BasicDeps] = None):
+    def __init__(
+        self,
+        handler,
+        deps: Optional[BasicDeps] = None,
+        document_store_factory=None,
+    ):
+        """
+        Args:
+            document_store_factory: Callable[[str tenant_id], doc_store_instance]
+                给 GET /documents/{doc_id}/preview 用 — 按租户动态构造 LocalDocumentStore。
+                不传时该端点返回 SERVICE_UNAVAILABLE (前端 chunk 跳转预览功能降级)。
+        """
+        self.document_store_factory = document_store_factory
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils
@@ -559,6 +571,154 @@ class ApiService:
                     "data": {
                         "file_name": file.filename,
                         "stored_path": str(file_path),
+                    },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": None,
+                },
+                headers={"X-Request-Id": trace_id},
+            )
+
+        @self.app.get("/documents/{doc_id}/preview")
+        async def get_document_preview(
+            doc_id: str,
+            request: Request,
+            start_char: int = 0,
+            end_char: int = 0,
+            context: int = 200,
+        ):
+            """文档预览 — 按 chunk 的 [start_char, end_char] 范围抠一段带上下文的原文。
+
+            Query params:
+                start_char: chunk 起始字符位置 (来自 RetrievedChunk.start_char)
+                end_char:   chunk 结束字符位置
+                context:    高亮区上下文前后各 N 字符 (默认 200, 上限 2000)
+
+            响应 data:
+                doc_id, file_name, file_type, total_chars,
+                snippet (字符串), snippet_start, snippet_end,
+                highlight_start, highlight_end (相对于 snippet 的偏移)
+
+            §9.3 防越权: tenant 取自认证产物;
+            未认证且非 internal IP 时,body/query 的 tenant_id 已被剥除,走 default。
+            """
+            trace_id = request.state.trace_id
+
+            if self.document_store_factory is None:
+                # 工厂未注入 -> 该功能不可用 (纯 API 部署没装上文档预览)
+                return JSONResponse(
+                    status_code=501,
+                    content={
+                        "code": "PREVIEW_NOT_SUPPORTED",
+                        "message": "文档预览未启用 (document_store_factory 未注入)",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
+            # tenant 解析: auth 优先, 否则 query 参数 tenant_id (仅 internal IP), 否则 default
+            tid = self._resolve_tenant_from_auth(request)
+            if not tid:
+                qtid = request.query_params.get("tenant_id")
+                if qtid and self._is_internal_ip(request):
+                    tid = qtid
+                else:
+                    tid = "default"
+
+            if not self._is_known_tenant(tid):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "code": "TENANT_NOT_FOUND",
+                        "message": "tenant 不存在或无权访问",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
+            try:
+                store = self.document_store_factory(tid)
+            except Exception as e:
+                self.logger.error(f"document_store_factory 失败: tenant={tid} err={e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "code": "UNKNOWN_ERROR",
+                        "message": "文档存储初始化失败",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
+            # get_document 自动隔离到 <storage>/<tid>/ 子目录
+            try:
+                doc = store.get_document(doc_id)
+            except ValueError:
+                # 非法 doc_id (非 uuid4)
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "PARAM_INVALID",
+                        "message": "doc_id 格式非法",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": {"field": "doc_id"},
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            if not doc:
+                # §9.3 防枚举: 跨租户 / 不存在统一 DOCUMENT_NOT_FOUND
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "code": "DOCUMENT_NOT_FOUND",
+                        "message": "文档不存在",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": {"doc_id": doc_id},
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
+            content_str = str(doc.get("content") or "")
+            total = len(content_str)
+
+            # 清洗 + 兜底: 把窗口卡在 [0, total]
+            ctx = max(0, min(int(context or 200), 2000))
+            s = max(0, int(start_char or 0))
+            e = max(s, int(end_char or s))
+            s = min(s, total)
+            e = min(e, total)
+            snippet_start = max(0, s - ctx)
+            snippet_end = min(total, e + ctx)
+            snippet = content_str[snippet_start:snippet_end]
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "code": "SUCCESS",
+                    "message": "ok",
+                    "data": {
+                        "doc_id": doc_id,
+                        "file_name": doc.get("file_name"),
+                        "file_type": doc.get("file_type"),
+                        "total_chars": total,
+                        "snippet": snippet,
+                        "snippet_start": snippet_start,
+                        "snippet_end": snippet_end,
+                        "highlight_start": s - snippet_start,
+                        "highlight_end": e - snippet_start,
                     },
                     "trace_id": trace_id,
                     "retryable": False,

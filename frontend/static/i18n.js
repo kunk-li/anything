@@ -93,6 +93,14 @@ const I18n = (() => {
             'action.copyResp': '复制响应',
             'confirm.clearHistory': '确定清空所有对话历史?',
             'health.checkAgain.title': '点击重新检测',
+
+            // preview
+            'preview.title': '文档预览',
+            'preview.loading': '加载预览中...',
+            'preview.error': '加载预览失败',
+            'preview.totalChars': '总长度',
+            'preview.range': '高亮范围',
+            'preview.viewOriginal': '查看原文',
         },
         en: {
             'app.title': 'Anything',
@@ -164,6 +172,13 @@ const I18n = (() => {
             'action.copyResp': 'Copy response',
             'confirm.clearHistory': 'Clear all chat history?',
             'health.checkAgain.title': 'Click to re-check',
+
+            'preview.title': 'Document preview',
+            'preview.loading': 'Loading preview...',
+            'preview.error': 'Failed to load preview',
+            'preview.totalChars': 'Total chars',
+            'preview.range': 'Highlight range',
+            'preview.viewOriginal': 'View source',
         },
     };
 
