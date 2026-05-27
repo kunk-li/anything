@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from bootstrap import build_data_layer
-from chunking_utils import chunk_document, build_upsert_items
+from chunker_module import chunk_document, build_upsert_items
 
 
 def parse_sources(parser: Any, source_type: str, source_path: str) -> List[Dict[str, Any]]:
