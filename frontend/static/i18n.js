@@ -37,6 +37,9 @@ const I18n = (() => {
             // composer
             'composer.send': '发送',
             'composer.topk': 'top_k',
+            'composer.stream': '流式',
+            'composer.stream.title': '勾选后用 WebSocket 流式接收答案 (打字机效果)',
+            'composer.stop': '停止',
             'composer.placeholder.rag': '输入问题, 在已索引文档里检索答案... (Ctrl+Enter 发送)',
             'composer.placeholder.agent': '描述一个任务, Agent 会拆解为工具调用步骤... (Ctrl+Enter 发送)',
             'composer.placeholder.hybrid': '同时使用检索与推理 (任务描述)... (Ctrl+Enter 发送)',
@@ -120,6 +123,9 @@ const I18n = (() => {
 
             'composer.send': 'Send',
             'composer.topk': 'top_k',
+            'composer.stream': 'Stream',
+            'composer.stream.title': 'Use WebSocket streaming (typewriter effect)',
+            'composer.stop': 'Stop',
             'composer.placeholder.rag': 'Ask a question; will search indexed docs... (Ctrl+Enter to send)',
             'composer.placeholder.agent': 'Describe a task; agent breaks it into tool calls... (Ctrl+Enter to send)',
             'composer.placeholder.hybrid': 'Task description with both retrieval and reasoning... (Ctrl+Enter to send)',

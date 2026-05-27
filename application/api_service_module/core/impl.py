@@ -12,7 +12,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, Request, HTTPException, UploadFile, File
+import asyncio
+
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -495,6 +497,180 @@ class ApiService:
             finally:
                 # 无论成功 / 异常, 都必须 reset ContextVar, 防泄漏到下个请求
                 reset_current_tenant(tenant_token)
+
+        @self.app.websocket("/invoke/stream")
+        async def invoke_stream(ws: WebSocket):
+            """WebSocket 流式回答端点 (V1: 简化版 — 后端先拿完整答案再切片发).
+
+            协议:
+                Client -> Server (一次性 send_json):
+                    RequestEnvelope (同 POST /invoke), 可带 X-API-Key
+                    认证头通过 query string 'api_key' 或子协议传递 (浏览器 ws 不支持自定义 header)
+                Server -> Client (流式 send_json):
+                    {type: 'start',     trace_id, tenant_id}
+                    {type: 'chunk',     text}              # 重复 N 次
+                    {type: 'metadata',  citations, retrieved_chunks, steps}
+                    {type: 'done',      code, cost_time, trace_id}
+                    {type: 'error',     code, message}    # 出错时替代 done
+
+            限制 (V1 / TODO 改造为真实 LLM 流式):
+                - 实际是同步跑完 handler.handle 后才切片, total 延迟跟非流式一致
+                - 当 LLMService 升级到 token stream 后, 这里把 handler 换成 handler.handle_stream 即可
+
+            参考: docs/multi-tenancy-design.md §7.3 OTel 在 WS 上的传播本期不实现
+                  (浏览器 WS API 没自定义 header, 后续需要换 querystring 模式)
+            """
+            # 鉴权 (querystring 风格, 因为浏览器 WS 不能自定义 header)
+            api_key_qs = ws.query_params.get("api_key", "")
+            if self.auth_enabled and self.auth_type == "apikey":
+                if not api_key_qs or api_key_qs not in self._key_to_tenant:
+                    await ws.close(code=4401, reason="AUTH_REQUIRED")
+                    return
+
+            await ws.accept()
+            trace_id = ws.headers.get("X-Request-Id") or self._generate_trace_id()
+            tenant_token = None
+            try:
+                # 1. 收一条请求消息
+                try:
+                    body = await ws.receive_json()
+                except Exception:
+                    await ws.send_json({
+                        "type": "error", "code": "BAD_REQUEST",
+                        "message": "首条消息必须是 JSON object",
+                        "trace_id": trace_id,
+                    })
+                    return
+
+                if not isinstance(body, dict):
+                    await ws.send_json({
+                        "type": "error", "code": "BAD_REQUEST",
+                        "message": "请求体必须是 JSON object",
+                        "trace_id": trace_id,
+                    })
+                    return
+
+                # 2. tenant reconcile — 复用 _resolve_tenant_from_auth 但走 ws.query_params
+                auth_tid = self._key_to_tenant.get(api_key_qs) if api_key_qs else None
+                body_tid = body.get("tenant_id")
+                if auth_tid:
+                    body["tenant_id"] = auth_tid
+                # internal IP check: ws.client.host
+                client_host = ws.client.host if ws.client else ""
+                is_internal = any(
+                    str(e).split("/")[0] and client_host.startswith(str(e).split("/")[0].rstrip("."))
+                    for e in self.internal_whitelist
+                )
+                if not auth_tid and body_tid and not is_internal:
+                    body.pop("tenant_id", None)
+
+                effective_tid = str(body.get("tenant_id") or "default")
+                if not self._is_known_tenant(effective_tid):
+                    await ws.send_json({
+                        "type": "error", "code": "TENANT_NOT_FOUND",
+                        "message": "tenant 不存在或无权访问",
+                        "trace_id": trace_id,
+                    })
+                    return
+
+                # QPS quota
+                if not self._check_qps_quota(effective_tid):
+                    await ws.send_json({
+                        "type": "error", "code": "API_RATE_LIMITED",
+                        "message": "请求频率超出租户配额",
+                        "trace_id": trace_id,
+                    })
+                    return
+
+                tenant_token = set_current_tenant(effective_tid)
+
+                # 3. 通知客户端"开始"
+                await ws.send_json({
+                    "type": "start",
+                    "trace_id": trace_id,
+                    "tenant_id": effective_tid,
+                    "request_type": body.get("type", "unknown"),
+                })
+
+                # 4. 同步跑 handler (V1: 不是真实 token 流, 跑完再切片)
+                start_t = time.time()
+                # FastAPI 的 ws handler 是 async; handler.handle 是 sync.
+                # 把它跑到 thread pool 避免阻塞 event loop。
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, lambda: self.handler.handle(body, trace_id=trace_id)
+                )
+                duration = time.time() - start_t
+
+                code = str(result.get("code", "UNKNOWN_ERROR"))
+                if code != "SUCCESS":
+                    await ws.send_json({
+                        "type": "error",
+                        "code": code,
+                        "message": result.get("message", ""),
+                        "trace_id": trace_id,
+                        "retryable": bool(result.get("retryable")),
+                        "details": result.get("details"),
+                    })
+                    self._record_metrics(
+                        req_type=str(body.get("type", "unknown")),
+                        code=code,
+                        duration=duration,
+                        tenant_id=effective_tid,
+                    )
+                    return
+
+                # 5. 切片发送 answer (按 ~20 char 一片, 模拟流式)
+                data = result.get("data") or {}
+                answer = str(data.get("answer") or "")
+                chunk_size = 20
+                for i in range(0, len(answer), chunk_size):
+                    await ws.send_json({"type": "chunk", "text": answer[i:i + chunk_size]})
+                    # 5ms 间隔, 让 UI 有"打字感";真实 LLM 流式后这里直接跟 generator
+                    await asyncio.sleep(0.005)
+
+                # 6. 发 metadata (citations / chunks / steps)
+                meta_payload = {
+                    "type": "metadata",
+                    "citations": data.get("citations") or [],
+                    "retrieved_chunks": data.get("retrieved_chunks") or [],
+                    "steps": data.get("steps") or [],
+                }
+                await ws.send_json(meta_payload)
+
+                # 7. 完成
+                await ws.send_json({
+                    "type": "done",
+                    "code": "SUCCESS",
+                    "cost_time": round(duration, 3),
+                    "trace_id": trace_id,
+                })
+
+                self._record_metrics(
+                    req_type=str(body.get("type", "unknown")),
+                    code="SUCCESS",
+                    duration=duration,
+                    tenant_id=effective_tid,
+                )
+            except WebSocketDisconnect:
+                # 客户端主动断开, 静默
+                pass
+            except Exception as e:
+                self.logger.error(f"[ws] /invoke/stream 异常: {e}", exc_info=True)
+                try:
+                    await ws.send_json({
+                        "type": "error", "code": "UNKNOWN_ERROR",
+                        "message": str(e), "trace_id": trace_id,
+                    })
+                except Exception:
+                    pass
+            finally:
+                if tenant_token is not None:
+                    reset_current_tenant(tenant_token)
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
         @self.app.get("/health")
         async def health(request: Request):

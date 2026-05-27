@@ -127,6 +127,88 @@ const ApiClient = (() => {
 
     function getSettings() { return { ...settings }; }
 
+    /**
+     * WebSocket 流式 invoke: WS /invoke/stream
+     *
+     * 用法:
+     *   const ws = ApiClient.openStream({
+     *     onStart:    ({trace_id, tenant_id}) => ...,
+     *     onChunk:    (text) => ...,           // 多次触发
+     *     onMetadata: (data) => ...,            // citations/chunks/steps
+     *     onDone:     ({code, cost_time, trace_id}) => ...,
+     *     onError:    ({code, message, retryable}) => ...,
+     *     onClose:    () => ...,
+     *   });
+     *   ws.send(requestBody);    // 发送 RequestEnvelope
+     *   ws.close();              // 主动关闭
+     *
+     * 注意: 浏览器 WebSocket API 不支持自定义 header, X-API-Key 通过 ?api_key=
+     * 查询字符串传递 (后端 ApiService 在 WS handshake 时校验)。
+     */
+    function openStream(handlers = {}) {
+        const wsUrl = _wsUrl(settings.apiKey);
+        let ws;
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (e) {
+            if (handlers.onError) handlers.onError({ code: 'WS_OPEN_FAILED', message: e.message });
+            return { send: () => {}, close: () => {}, readyState: 3 };
+        }
+
+        ws.addEventListener('message', (ev) => {
+            let msg;
+            try { msg = JSON.parse(ev.data); } catch { return; }
+            switch (msg.type) {
+                case 'start':    handlers.onStart && handlers.onStart(msg); break;
+                case 'chunk':    handlers.onChunk && handlers.onChunk(msg.text || ''); break;
+                case 'metadata': handlers.onMetadata && handlers.onMetadata(msg); break;
+                case 'done':     handlers.onDone && handlers.onDone(msg); break;
+                case 'error':    handlers.onError && handlers.onError(msg); break;
+            }
+        });
+        ws.addEventListener('close', (ev) => {
+            if (handlers.onClose) handlers.onClose(ev);
+        });
+        ws.addEventListener('error', (ev) => {
+            if (handlers.onError) handlers.onError({
+                code: 'WS_ERROR',
+                message: 'WebSocket 错误 (可能是网络或服务端断开)',
+            });
+        });
+
+        function send(body) {
+            const finalBody = { ...body };
+            if (settings.sessionId && !finalBody.session_id) {
+                finalBody.session_id = settings.sessionId;
+            }
+            const tryFn = () => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(finalBody));
+                } else if (ws.readyState === WebSocket.CONNECTING) {
+                    ws.addEventListener('open', () => ws.send(JSON.stringify(finalBody)), { once: true });
+                }
+            };
+            tryFn();
+        }
+
+        function close() {
+            try { ws.close(); } catch (_) {}
+        }
+
+        return { send, close, get readyState() { return ws.readyState; } };
+    }
+
+    function _wsUrl(apiKey) {
+        // 同源时直接用当前 host;否则用 settings.baseUrl 转 ws://
+        let base = settings.baseUrl || `${location.protocol}//${location.host}`;
+        let proto = base.startsWith('https') ? 'wss://' : 'ws://';
+        if (base.startsWith('http://')) base = base.slice(7);
+        else if (base.startsWith('https://')) base = base.slice(8);
+        const path = '/invoke/stream';
+        const qs = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : '';
+        return proto + base + path + qs;
+    }
+
     return {
         invoke,
         health,
@@ -136,6 +218,7 @@ const ApiClient = (() => {
         buildIndex,
         getIndexJob,
         getDocumentPreview,
+        openStream,
         configure,
         getSettings,
     };

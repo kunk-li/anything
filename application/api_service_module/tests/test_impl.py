@@ -559,6 +559,138 @@ class TestQuotaAndTenantNotFound(unittest.TestCase):
         self.assertEqual(rb1.status_code, 200)
 
 
+class TestWebSocketStream(unittest.TestCase):
+    """WS /invoke/stream — 简化版流式 (跑完 sync handler 后切片发)"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+
+    def test_stream_success_flow(self):
+        """成功流: start -> chunk * N -> metadata -> done"""
+        class _H:
+            def handle(self, req, trace_id=None):
+                return {
+                    "code": "SUCCESS",
+                    "message": "ok",
+                    "data": {
+                        "answer": "Hello WebSocket streaming world. " * 3,
+                        "citations": [{"chunk_id": "c1", "doc_id": "d1"}],
+                        "retrieved_chunks": [{"chunk_id": "c1", "doc_id": "d1", "score": 0.9}],
+                        "steps": [],
+                    },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": None,
+                }
+
+        svc = ApiService(handler=_H())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+
+        with client.websocket_connect("/invoke/stream") as ws:
+            ws.send_json({"type": "rag", "query": "hi"})
+
+            msgs = []
+            while True:
+                try:
+                    m = ws.receive_json()
+                except Exception:
+                    break
+                msgs.append(m)
+                if m.get("type") in ("done", "error"):
+                    break
+
+        types = [m["type"] for m in msgs]
+        self.assertEqual(types[0], "start")
+        self.assertGreaterEqual(types.count("chunk"), 1)
+        self.assertIn("metadata", types)
+        self.assertEqual(types[-1], "done")
+        # 拼接 chunks 应跟原 answer 相等
+        joined = "".join(m["text"] for m in msgs if m["type"] == "chunk")
+        self.assertEqual(joined, "Hello WebSocket streaming world. " * 3)
+        # metadata 段带 citations
+        meta = next(m for m in msgs if m["type"] == "metadata")
+        self.assertEqual(len(meta["citations"]), 1)
+
+    def test_stream_error_propagates(self):
+        """handler 返回非 SUCCESS code -> WS 发 error 消息"""
+        class _H:
+            def handle(self, req, trace_id=None):
+                return {
+                    "code": "PARAM_MISSING",
+                    "message": "缺 query",
+                    "data": None,
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": {"field": "query"},
+                }
+
+        svc = ApiService(handler=_H())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        with client.websocket_connect("/invoke/stream") as ws:
+            ws.send_json({"type": "rag"})
+            m_start = ws.receive_json()
+            m_err = ws.receive_json()
+            self.assertEqual(m_start["type"], "start")
+            self.assertEqual(m_err["type"], "error")
+            self.assertEqual(m_err["code"], "PARAM_MISSING")
+
+    def test_stream_unknown_tenant_rejected(self):
+        """未知 tenant 立即 error TENANT_NOT_FOUND (不进 handler)"""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = False
+        svc.internal_whitelist = ["testclient"]
+        client = TestClient(svc.app)
+        with client.websocket_connect("/invoke/stream") as ws:
+            ws.send_json({"type": "rag", "query": "x", "tenant_id": "tenant-ghost"})
+            # 应直接收到 start? 不, 我们在 reconcile 后立即拦截.
+            # 看实现: start 之前先做 tenant_not_found 检查
+            m = ws.receive_json()
+            self.assertEqual(m["type"], "error")
+            self.assertEqual(m["code"], "TENANT_NOT_FOUND")
+
+    def test_stream_auth_required_for_apikey(self):
+        """auth_enabled=apikey 但 querystring 无 api_key -> 4401 close"""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = True
+        svc.auth_type = "apikey"
+        svc._key_to_tenant = {"key_a1": "default"}
+        client = TestClient(svc.app)
+        # connect without api_key -> close 4401
+        # TestClient 的 ws 在 close 时直接抛 WebSocketDisconnect
+        with self.assertRaises(Exception):
+            with client.websocket_connect("/invoke/stream") as ws:
+                ws.receive_json()  # 不会发到这一步
+
+    def test_stream_auth_apikey_in_querystring(self):
+        """正确 api_key querystring -> 接受 + 走完流程"""
+        class _H:
+            def handle(self, req, trace_id=None):
+                return {"code": "SUCCESS", "message": "ok",
+                        "data": {"answer": "ok"},
+                        "trace_id": trace_id, "retryable": False, "details": None}
+
+        svc = ApiService(handler=_H())
+        svc.auth_enabled = True
+        svc.auth_type = "apikey"
+        svc._key_to_tenant = {"key_a1": "default"}
+        client = TestClient(svc.app)
+        with client.websocket_connect("/invoke/stream?api_key=key_a1") as ws:
+            ws.send_json({"type": "rag", "query": "x"})
+            msgs = []
+            while True:
+                try:
+                    msgs.append(ws.receive_json())
+                except Exception:
+                    break
+                if msgs[-1].get("type") in ("done", "error"):
+                    break
+        types = [m["type"] for m in msgs]
+        self.assertEqual(types[0], "start")
+        self.assertEqual(types[-1], "done")
+
+
 class TestDocumentPreview(unittest.TestCase):
     """GET /documents/{doc_id}/preview — 跟 chunk 跳转回原文功能配套"""
 

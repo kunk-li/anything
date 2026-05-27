@@ -50,7 +50,11 @@
         previewTitle: $('preview-title'),
         previewMeta: $('preview-meta'),
         previewText: $('preview-text'),
+        streamToggle: $('stream-toggle'),
     };
+
+    // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
+    let activeStream = null;
 
     // i18n shortcut
     const t = (key, params) => (window.I18n ? window.I18n.t(key, params) : key);
@@ -65,6 +69,7 @@
             apiKey: '',
             sessionId: '',
             tenant: 'default',
+            useStream: false,
         },
     };
 
@@ -109,6 +114,7 @@
         els.apiKeyInput.value = state.settings.apiKey;
         els.sessionInput.value = state.settings.sessionId;
         els.tenantInput.value = state.settings.tenant;
+        if (els.streamToggle) els.streamToggle.checked = !!state.settings.useStream;
 
         ApiClient.configure({
             baseUrl: state.settings.baseUrl,
@@ -181,6 +187,16 @@
         els.tenantInput.addEventListener('change', () => {
             state.settings.tenant = (els.tenantInput.value || '').trim() || 'default';
         });
+
+        // 流式开关持久化
+        if (els.streamToggle) {
+            els.streamToggle.addEventListener('change', () => {
+                state.settings.useStream = !!els.streamToggle.checked;
+                try {
+                    localStorage.setItem('anything_settings', JSON.stringify(state.settings));
+                } catch (_) {}
+            });
+        }
 
         // 健康检查点击重检
         els.healthBadge.addEventListener('click', pollHealth);
@@ -278,6 +294,7 @@
         const topK = Math.max(1, Math.min(50, Number(els.topkInput.value) || 5));
         const mode = state.mode;
         const tenant = (els.tenantInput.value || '').trim() || 'default';
+        const useStream = !!(els.streamToggle && els.streamToggle.checked);
 
         const body = { type: mode, top_k: topK, tenant_id: tenant };
         if (mode === 'rag') body.query = text;
@@ -295,6 +312,16 @@
         els.inputText.value = '';
         els.inputText.focus();
 
+        if (useStream) {
+            await sendStream(body, placeholderId, { tenant, mode });
+        } else {
+            await sendOnce(body, placeholderId, { tenant, mode });
+        }
+        state.sending = false;
+        els.sendBtn.disabled = false;
+    }
+
+    async function sendOnce(body, placeholderId, { tenant, mode }) {
         try {
             const { payload, traceId, costTime, status } = await ApiClient.invoke(body);
             updateMessage(placeholderId, {
@@ -310,11 +337,10 @@
                 data: payload?.data,
                 error: payload?.code && payload.code !== 'SUCCESS' ? payload : null,
             });
-            // 侧栏渲染
             renderRetrievedChunks(payload?.data?.retrieved_chunks || []);
             renderAgentSteps(payload?.data?.steps || []);
             if (payload?.code && payload.code !== 'SUCCESS') {
-                toast('error', payload.code, payload.message || '请求失败');
+                toast('error', payload.code, payload.message || '');
             }
         } catch (err) {
             updateMessage(placeholderId, {
@@ -324,10 +350,101 @@
                 error: { code: 'NETWORK_ERROR', message: err.message },
             });
             toast('error', t('toast.network.error'), String(err.message || err));
-        } finally {
-            state.sending = false;
-            els.sendBtn.disabled = false;
         }
+    }
+
+    function sendStream(body, placeholderId, { tenant, mode }) {
+        return new Promise((resolve) => {
+            let accumulated = '';
+            let traceId = '';
+            let metaCitations = [];
+            let metaRetrieved = [];
+            let metaSteps = [];
+
+            // 1. 先把占位消息切到"流式渲染"态: 显示文本节点 + 光标
+            updateMessage(placeholderId, {
+                loading: false,
+                content: '',
+                meta: { tenant, mode, code: 'STREAMING' },
+                streaming: true,
+            });
+
+            activeStream = ApiClient.openStream({
+                onStart: (m) => {
+                    traceId = m.trace_id || '';
+                },
+                onChunk: (text) => {
+                    accumulated += text;
+                    // 流式增量更新, 不重渲染整个消息 (省 DOM 开销)
+                    appendStreamChunk(placeholderId, accumulated);
+                },
+                onMetadata: (m) => {
+                    metaCitations = m.citations || [];
+                    metaRetrieved = m.retrieved_chunks || [];
+                    metaSteps = m.steps || [];
+                    renderRetrievedChunks(metaRetrieved);
+                    renderAgentSteps(metaSteps);
+                },
+                onDone: (m) => {
+                    // 完成 -> 重新渲染 (走 markdown 完整路径)
+                    updateMessage(placeholderId, {
+                        loading: false,
+                        streaming: false,
+                        content: accumulated,
+                        meta: {
+                            code: 'SUCCESS',
+                            traceId: m.trace_id || traceId,
+                            costTime: m.cost_time != null ? m.cost_time.toFixed(3) : '',
+                            tenant,
+                            mode,
+                        },
+                        data: {
+                            citations: metaCitations,
+                            retrieved_chunks: metaRetrieved,
+                            steps: metaSteps,
+                        },
+                    });
+                    activeStream = null;
+                    resolve();
+                },
+                onError: (m) => {
+                    updateMessage(placeholderId, {
+                        loading: false,
+                        streaming: false,
+                        content: accumulated
+                            ? `${accumulated}\n\n[${m.code}] ${m.message || ''}`
+                            : `[${m.code}] ${m.message || ''}`,
+                        meta: { code: m.code, traceId: m.trace_id || traceId, tenant, mode },
+                        error: m,
+                    });
+                    toast('error', m.code || 'WS_ERROR', m.message || '');
+                    activeStream = null;
+                    resolve();
+                },
+                onClose: () => {
+                    if (activeStream) {
+                        activeStream = null;
+                        resolve();
+                    }
+                },
+            });
+            activeStream.send(body);
+        });
+    }
+
+    /** 流式增量渲染: 直接 textContent 替换, 不过 markdown (性能 + 防中途解析出错) */
+    function appendStreamChunk(msgId, fullContent) {
+        const node = els.messages.querySelector(`[data-id="${msgId}"] .message-body`);
+        if (!node) return;
+        node.textContent = fullContent;
+        // 加一个闪烁光标
+        if (!node.querySelector('.stream-cursor')) {
+            const cur = document.createElement('span');
+            cur.className = 'stream-cursor';
+            cur.textContent = '▍';
+            node.appendChild(cur);
+        }
+        scrollToBottom();
     }
 
     function extractAnswer(payload) {
