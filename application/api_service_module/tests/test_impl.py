@@ -11,6 +11,13 @@ ApiService 单元测试
 
 from __future__ import annotations
 
+import os
+
+# 单独跑本测试时(unittest discover)显式启用 dev mode 避免 build_basic_deps
+# 在生产模式因 secrets 未配抛 StartupError. 通过 scripts/run_tests.sh 跑时
+# 该变量已被设置, 这里 setdefault 不覆盖.
+os.environ.setdefault("ANYTHING_DEV_MODE", "1")
+
 import unittest
 
 from fastapi.testclient import TestClient
@@ -87,6 +94,122 @@ class TestApiService(unittest.TestCase):
     def test_healthz_endpoint(self):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
+
+
+class TestTenantBinding(unittest.TestCase):
+    """Task #33 PR2: api_keys 反向映射 + 冲突处理"""
+
+    def test_legacy_list_format_maps_all_to_default(self):
+        """老 list 格式: 全部 key 映射到 default + 启动 WARN"""
+        service = ApiService(handler=MockHandler())
+        service.api_keys = []
+        idx = service._build_key_to_tenant_index(["k1", "k2", "k3"])
+        self.assertEqual(idx, {"k1": "default", "k2": "default", "k3": "default"})
+
+    def test_new_dict_format_parses(self):
+        """新 dict 格式: tenant -> keys list 反向解析"""
+        service = ApiService(handler=MockHandler())
+        idx = service._build_key_to_tenant_index({
+            "tenant-a": ["key_a1", "key_a2"],
+            "default": ["key_internal"],
+        })
+        self.assertEqual(idx["key_a1"], "tenant-a")
+        self.assertEqual(idx["key_a2"], "tenant-a")
+        self.assertEqual(idx["key_internal"], "default")
+
+    def test_dict_format_one_key_multi_tenant_raises_startup_error(self):
+        """决议 3: 一个 key 绑多 tenant -> StartupError fail-fast"""
+        from deps_module import StartupError
+        service = ApiService(handler=MockHandler())
+        with self.assertRaises(StartupError) as ctx:
+            service._build_key_to_tenant_index({
+                "tenant-a": ["shared_key"],
+                "tenant-b": ["shared_key"],  # 同一 key 绑两个 tenant
+            })
+        self.assertIn("multiple tenants", str(ctx.exception))
+
+    def test_dict_format_keys_not_list_raises(self):
+        from deps_module import StartupError
+        service = ApiService(handler=MockHandler())
+        with self.assertRaises(StartupError):
+            service._build_key_to_tenant_index({"tenant-a": "not_a_list"})
+
+    def test_resolve_tenant_from_apikey_header(self):
+        """API key header 应映射到对应 tenant_id"""
+        from unittest.mock import MagicMock
+        service = ApiService(handler=MockHandler())
+        service.auth_enabled = True
+        service.auth_type = "apikey"
+        service._key_to_tenant = {"key_a1": "tenant-a", "key_internal": "default"}
+
+        req_a = MagicMock()
+        req_a.headers = {"X-API-Key": "key_a1"}
+        self.assertEqual(service._resolve_tenant_from_auth(req_a), "tenant-a")
+
+        req_unknown = MagicMock()
+        req_unknown.headers = {"X-API-Key": "unknown_key"}
+        self.assertIsNone(service._resolve_tenant_from_auth(req_unknown))
+
+        req_no_header = MagicMock()
+        req_no_header.headers = {}
+        self.assertIsNone(service._resolve_tenant_from_auth(req_no_header))
+
+    def test_auth_disabled_resolve_returns_none(self):
+        """auth_enabled=False 时不解析 tenant_id"""
+        from unittest.mock import MagicMock
+        service = ApiService(handler=MockHandler())
+        service.auth_enabled = False
+        req = MagicMock()
+        req.headers = {"X-API-Key": "key_a1"}
+        self.assertIsNone(service._resolve_tenant_from_auth(req))
+
+    def test_reconcile_auth_wins_over_body(self):
+        """冲突: auth=tenant-a, body=tenant-b -> 强制 auth + ERROR 日志"""
+        from unittest.mock import MagicMock
+        service = ApiService(handler=MockHandler())
+        service.auth_enabled = True
+        service.auth_type = "apikey"
+        service._key_to_tenant = {"key_a1": "tenant-a"}
+
+        req = MagicMock()
+        req.headers = {"X-API-Key": "key_a1"}
+        req.client = MagicMock(host="203.0.113.1")  # 非 internal IP
+
+        body = {"type": "rag", "query": "x", "tenant_id": "tenant-b"}
+        service._reconcile_tenant_id(req, body, trace_id="t1")
+        # auth 赢: body 被改写
+        self.assertEqual(body["tenant_id"], "tenant-a")
+
+    def test_reconcile_body_only_external_ip_ignored(self):
+        """无认证 + 非 internal IP + body 声明 tenant -> 忽略 body 声明"""
+        from unittest.mock import MagicMock
+        service = ApiService(handler=MockHandler())
+        service.auth_enabled = False  # 无认证
+        service.internal_whitelist = []
+
+        req = MagicMock()
+        req.headers = {}
+        req.client = MagicMock(host="203.0.113.1")
+
+        body = {"type": "rag", "query": "x", "tenant_id": "tenant-attacker"}
+        service._reconcile_tenant_id(req, body, trace_id="t1")
+        # body 的 tenant_id 被剥除, 后续 RequestHandler 会补 default
+        self.assertNotIn("tenant_id", body)
+
+    def test_reconcile_body_only_internal_ip_preserved(self):
+        """无认证 + internal IP + body 声明 -> 保留 body"""
+        from unittest.mock import MagicMock
+        service = ApiService(handler=MockHandler())
+        service.auth_enabled = False
+        service.internal_whitelist = ["127.0.0.1", "10.0.0."]
+
+        req = MagicMock()
+        req.headers = {}
+        req.client = MagicMock(host="127.0.0.1")
+
+        body = {"type": "rag", "query": "x", "tenant_id": "tenant-internal"}
+        service._reconcile_tenant_id(req, body, trace_id="t1")
+        self.assertEqual(body.get("tenant_id"), "tenant-internal")
 
 
 class TestMetricsEndpoint(unittest.TestCase):

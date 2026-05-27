@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from deps_module import BasicDeps, build_basic_deps
+from deps_module import BasicDeps, build_basic_deps, StartupError
 from observability_module import trace_span
 
 
@@ -37,7 +37,18 @@ class ApiService:
 
         self.auth_enabled = bool(self.config.get_config("security.auth_enabled", False))
         self.auth_type = self.config.get_config("security.auth_type", "none")
-        self.api_keys = self.config.get_config("security.api_keys", []) or []
+        # api_keys 支持两种格式 (Task #33 PR2, 详见 docs/multi-tenancy-design.md §5.2-5.3):
+        #   - list (老格式): ["k1", "k2"] -> 全部映射到 tenant="default" + WARN
+        #   - dict (新格式): {"tenant-a": ["k1"], "default": ["k2"]} -> 反向映射 + 唯一性校验
+        # 内存维护 _key_to_tenant: Dict[str, str] 反向索引, 认证 O(1) 查表
+        raw_api_keys = self.config.get_config("security.api_keys", []) or []
+        self._key_to_tenant: Dict[str, str] = self._build_key_to_tenant_index(raw_api_keys)
+        # 兼容: 老代码若直接读 self.api_keys 看是否在列表内, 仍能工作
+        self.api_keys = list(self._key_to_tenant.keys())
+        # 内部白名单 (本期占位, 真实使用在 §4.3 冲突处理): 配置 internal_whitelist 后, 这些 IP 可仅靠 body tenant_id
+        self.internal_whitelist: List[str] = list(
+            self.config.get_config("security.internal_whitelist", []) or []
+        )
         self.max_body_size = int(self.config.get_config("api_service.max_body_size", 1048576))
         self.enable_health_details = bool(
             self.config.get_config("api_service.enable_health_details", True)
@@ -251,6 +262,10 @@ class ApiService:
                     headers={"X-Request-Id": trace_id},
                 )
 
+            # 3.5 tenant_id 冲突处理 (Task #33 PR2, 见 docs/multi-tenancy-design.md §4.3)
+            #     auth_tenant_id (认证产物) 优先于 body tenant_id (声明)
+            self._reconcile_tenant_id(request, body, trace_id)
+
             # 4. 透传到接口层 (OTel root span 包住整个请求)
             with trace_span(
                 "api.invoke",
@@ -407,14 +422,135 @@ class ApiService:
     # =========================
     # 辅助方法
     # =========================
+    def _reconcile_tenant_id(self, request: Request, body: Dict[str, Any], trace_id: str) -> None:
+        """处理 auth_tenant_id 与 body['tenant_id'] 的冲突。
+
+        规则(见 docs/multi-tenancy-design.md §4.3):
+            - 仅 auth_tenant_id 存在 -> 用 auth
+            - 仅 body 存在(认证未携带): 仅 internal IP 允许;否则保留 body(后续 RequestHandler 补 default)
+            - 两者一致 -> 用 auth (等价)
+            - 两者不一致 -> 用 auth + 记 ERROR (疑似越权)
+
+        本方法直接修改 body 字典, body['tenant_id'] 最终为认证产物或保留原值。
+        """
+        auth_tid = self._resolve_tenant_from_auth(request)
+        body_tid = body.get("tenant_id")
+
+        if auth_tid:
+            if body_tid and body_tid != auth_tid:
+                self.logger.error(
+                    f"[security] tenant_id mismatch: auth={auth_tid!r} body={body_tid!r} "
+                    f"trace_id={trace_id} -- 疑似越权尝试, 强制使用认证产物"
+                )
+                # metrics counter (本期借用 errors_by_code, 后续可单独记 anything_tenant_mismatch_total)
+            body["tenant_id"] = auth_tid
+            return
+
+        # 没有认证产物: 若 body 显式声明 tenant_id, 仅 internal IP 允许保留
+        if body_tid and not self._is_internal_ip(request):
+            self.logger.warning(
+                f"[security] body 声明 tenant_id={body_tid!r} 但请求未认证且非 internal IP, "
+                f"忽略 body 声明 (后续 RequestHandler 会补 default), trace_id={trace_id}"
+            )
+            body.pop("tenant_id", None)
+        # else: 内部 IP 保留 body['tenant_id'], 或 body 本来就没声明 -> 不动
+
+    def _build_key_to_tenant_index(self, raw: Any) -> Dict[str, str]:
+        """从 yaml security.api_keys 构造 key -> tenant_id 反向索引。
+
+        支持两种输入格式:
+            - list ["k1", "k2"] (老格式, 全部映射到 default + 启动 WARN)
+            - dict {"tenant-a": ["k1"], "default": ["k2"]} (新格式)
+              一个 key 严格只能绑一个 tenant_id (决议 3); 多绑触发 StartupError
+
+        见 docs/multi-tenancy-design.md §5.3
+        """
+        if isinstance(raw, list):
+            if raw:
+                self.logger.warning(
+                    f"[security] detected legacy api_keys list format; "
+                    f"all {len(raw)} keys mapped to tenant='default'. "
+                    f"Multi-tenancy disabled. Migrate to tenant->keys dict to enable."
+                )
+            return {str(k): "default" for k in raw if k}
+
+        if isinstance(raw, dict):
+            seen: Dict[str, str] = {}
+            for tid, keys in raw.items():
+                if not isinstance(keys, list):
+                    raise StartupError(
+                        component="security.api_keys",
+                        reason=f"tenant '{tid}' 的 keys 应是 list, 实际是 {type(keys).__name__}",
+                        hint="格式: tenant_id: [\"key1\", \"key2\"]",
+                    )
+                for key in keys:
+                    key_str = str(key) if key is not None else ""
+                    if not key_str:
+                        continue
+                    if key_str in seen and seen[key_str] != tid:
+                        raise StartupError(
+                            component="security.api_keys",
+                            reason=(
+                                f"API key bound to multiple tenants: "
+                                f"'{tid}' vs '{seen[key_str]}'"
+                            ),
+                            hint="一个 API key 只能绑一个 tenant_id;跨租户访问请发多个 key",
+                        )
+                    seen[key_str] = tid
+            return seen
+
+        # 配置类型异常 -> 空映射 (等价于无鉴权配置)
+        if raw not in (None, [], {}):
+            self.logger.warning(
+                f"[security] api_keys 配置类型不支持: {type(raw).__name__}; 视为空映射"
+            )
+        return {}
+
+    def _resolve_tenant_from_auth(self, request: Request) -> Optional[str]:
+        """从认证产物提取 tenant_id。
+
+        - apikey: 查 _key_to_tenant 反向映射
+        - jwt: 解析 tenant_id claim (本期 TODO, 留作 stub)
+        - none: 返回 None
+        """
+        if not self.auth_enabled or self.auth_type == "none":
+            return None
+        if self.auth_type == "apikey":
+            api_key = request.headers.get("X-API-Key")
+            if api_key:
+                return self._key_to_tenant.get(api_key)
+        # 其他认证方式占位
+        return None
+
+    def _is_internal_ip(self, request: Request) -> bool:
+        """判断请求源 IP 是否在 internal_whitelist 中 (§4.3 冲突处理用)。
+
+        本期实现为字符串前缀匹配 (简单, 够用); 后续可换 ipaddress.IPv4Network。
+        """
+        if not self.internal_whitelist:
+            return False
+        client = request.client.host if request.client else ""
+        if not client:
+            return False
+        for entry in self.internal_whitelist:
+            # 支持 "127.0.0.1" 或 "10.0.0.0/8" -> 简单前缀匹配
+            base = str(entry).split("/")[0]
+            if base and client.startswith(base.rstrip(".")):
+                return True
+        return False
+
     def _check_auth(self, request: Request, trace_id: str) -> Optional[JSONResponse]:
-        """鉴权检查：仅处理协议层鉴权，不涉及业务逻辑"""
+        """鉴权检查:仅处理协议层鉴权,不涉及业务逻辑。
+
+        成功 -> 返回 None (调用方继续, tenant_id 通过 _resolve_tenant_from_auth 读取)
+        失败 -> 返回 JSONResponse (401)
+        """
         if not self.auth_enabled or self.auth_type == "none":
             return None
 
         if self.auth_type == "apikey":
             api_key = request.headers.get("X-API-Key")
-            if not api_key or api_key not in self.api_keys:
+            if not api_key or api_key not in self._key_to_tenant:
                 return JSONResponse(
                     status_code=401,
                     content={
