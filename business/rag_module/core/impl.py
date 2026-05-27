@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from llm_compat import call_llm_compat
 from .base import BaseRAG
 
-from deps_module import BasicDeps, build_basic_deps
+from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 
 
 class SimpleRAG(BaseRAG):
@@ -407,47 +407,24 @@ class SimpleRAG(BaseRAG):
         trace_id: Optional[str],
         request: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """统一异常处理"""
-        try:
-            if hasattr(self.exception_handler, "handle"):
-                error_info = self.exception_handler.handle(exception, trace_id=trace_id)
-            else:
-                error_info = self.exception_handler.handle_exception(exception)
-
-            code = error_info.get("code", "RAG_RUN_FAILED")
-            message = error_info.get("message", "RAG执行失败")
-            retryable = error_info.get("retryable", code in {
+        """统一异常处理(委托给 deps_module.handle_exception_to_envelope)。"""
+        return handle_exception_to_envelope(
+            exception_handler=self.exception_handler,
+            exception=exception,
+            trace_id=trace_id,
+            fallback_code="RAG_RUN_FAILED",
+            fallback_message="RAG执行失败",
+            stage="rag",
+            context={
+                "query": (request or {}).get("query"),
+                "top_k": (request or {}).get("top_k"),
+            },
+            retryable_codes={
                 "VECTOR_QUERY_FAILED",
                 "EMBEDDING_INIT_FAILED",
                 "RAG_RUN_FAILED",
-            })
-
-            details = error_info.get("details") or {
-                "stage": "rag",
-                "query": (request or {}).get("query"),
-                "top_k": (request or {}).get("top_k"),
-            }
-
-            return {
-                "code": code,
-                "message": message,
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": retryable,
-                "details": details,
-            }
-        except Exception:
-            return {
-                "code": "RAG_RUN_FAILED",
-                "message": "RAG执行失败",
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": True,
-                "details": {
-                    "stage": "rag",
-                    "query": (request or {}).get("query") if request else None,
-                },
-            }
+            },
+        )
 
     def call_rag(
         self,

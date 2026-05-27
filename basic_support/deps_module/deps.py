@@ -50,6 +50,77 @@ def is_dev_mode() -> bool:
     return val.lower() in ("1", "true", "yes", "on")
 
 
+def handle_exception_to_envelope(
+    exception_handler: Any,
+    exception: BaseException,
+    trace_id: Optional[str],
+    fallback_code: str,
+    fallback_message: str,
+    stage: str,
+    context: Optional[dict] = None,
+    retryable_codes: Optional[set] = None,
+) -> dict:
+    """把异常统一包装为响应信封 dict (文档第 10 章七字段格式)。
+
+    抽出原 SimpleRAG / SimpleAgent / SimpleOrchestrator / ConsoleApp 中
+    重复 ~30 行的 _handle_exception 方法。
+
+    参数:
+        exception_handler: ExceptionHandler 实例 (来自 deps.exception_handler)
+        exception: 触发的异常对象
+        trace_id: 链路追踪 ID,统一原样透传到信封
+        fallback_code: 当 exception_handler 不能识别异常码时使用的兜底码
+            (如 "RAG_RUN_FAILED" / "AGENT_RUN_FAILED" / "ORCHESTRATOR_RUN_FAILED")
+        fallback_message: 兜底 message
+        stage: 调用方所在阶段(写入 details.stage),如 "rag" / "agent" / "orchestrator"
+        context: 额外的上下文字段,会合并进 details
+        retryable_codes: 视为 retryable 的错误码集合 (调用方可定制)
+
+    返回:
+        {code, message, data:None, trace_id, retryable, details}
+    """
+    context = context or {}
+    retryable_codes = retryable_codes or set()
+
+    try:
+        # 兼容 ExceptionHandler 两种方法名 (handle / handle_exception)
+        # 这里保留 hasattr 是因为 exception_module 的 ABC 没钉死接口,
+        # 后续可在 Task #14 之外的清理任务中统一为单一方法名。
+        if hasattr(exception_handler, "handle"):
+            error_info = exception_handler.handle(exception, trace_id=trace_id)
+        elif hasattr(exception_handler, "handle_exception"):
+            error_info = exception_handler.handle_exception(exception)
+        else:
+            error_info = {}
+
+        if not isinstance(error_info, dict):
+            error_info = {}
+
+        code = error_info.get("code", fallback_code)
+        message = error_info.get("message", fallback_message)
+        retryable = error_info.get("retryable", code in retryable_codes)
+        details = error_info.get("details") or {"stage": stage, **context}
+
+        return {
+            "code": code,
+            "message": message,
+            "data": None,
+            "trace_id": trace_id,
+            "retryable": retryable,
+            "details": details,
+        }
+    except Exception:
+        # exception_handler 本身崩了 — 走最简兜底,确保系统永远有响应信封返回
+        return {
+            "code": fallback_code,
+            "message": fallback_message,
+            "data": None,
+            "trace_id": trace_id,
+            "retryable": False,
+            "details": {"stage": stage, **context},
+        }
+
+
 @dataclass
 class BasicDeps:
     """基础支撑层依赖容器。

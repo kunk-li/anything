@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional, Callable
 
 from .base import BaseAgent
 
-from deps_module import BasicDeps, build_basic_deps
+from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 
 
 class SimpleAgent(BaseAgent):
@@ -767,38 +767,16 @@ class SimpleAgent(BaseAgent):
             session_id: Optional[str],
             task: Optional[str],
     ) -> Dict[str, Any]:
-        """统一异常处理"""
-        try:
-            if hasattr(self.exception_handler, "handle"):
-                error_info = self.exception_handler.handle(exception, trace_id=trace_id)
-            else:
-                error_info = self.exception_handler.handle_exception(exception)
-
-            return {
-                "code": error_info.get("code", "AGENT_RUN_FAILED"),
-                "message": error_info.get("message", "Agent执行失败"),
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": error_info.get("retryable", False),
-                "details": error_info.get("details") or {
-                    "session_id": session_id,
-                    "task": task,
-                    "stage": "agent",
-                },
-            }
-        except Exception:
-            return {
-                "code": "AGENT_RUN_FAILED",
-                "message": "Agent执行失败",
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": False,
-                "details": {
-                    "session_id": session_id,
-                    "task": task,
-                    "stage": "agent",
-                },
-            }
+        """统一异常处理(委托给 deps_module.handle_exception_to_envelope)。"""
+        return handle_exception_to_envelope(
+            exception_handler=self.exception_handler,
+            exception=exception,
+            trace_id=trace_id,
+            fallback_code="AGENT_RUN_FAILED",
+            fallback_message="Agent执行失败",
+            stage="agent",
+            context={"session_id": session_id, "task": task},
+        )
 
     def call_agent(
             self,

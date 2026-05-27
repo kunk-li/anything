@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 
 from .base import BaseOrchestrator
 
-from deps_module import BasicDeps, build_basic_deps
+from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 
 
 class SimpleOrchestrator(BaseOrchestrator):
@@ -145,33 +145,16 @@ class SimpleOrchestrator(BaseOrchestrator):
         trace_id: Optional[str] = None,
         request: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """统一异常处理"""
-        try:
-            if hasattr(self.exception_handler, "handle"):
-                error_info = self.exception_handler.handle(exception, trace_id=trace_id)
-            else:
-                error_info = self.exception_handler.handle_exception(exception)
-
-            return {
-                "code": error_info.get("code", "ORCHESTRATOR_RUN_FAILED"),
-                "message": error_info.get("message", "协同调度执行失败"),
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": error_info.get("retryable", False),
-                "details": error_info.get("details") or {
-                    "stage": "orchestrator",
-                    "type": (request or {}).get("type"),
-                },
-            }
-        except Exception:
-            return {
-                "code": "ORCHESTRATOR_RUN_FAILED",
-                "message": "协同调度执行失败",
-                "data": None,
-                "trace_id": trace_id,
-                "retryable": False,
-                "details": {"stage": "orchestrator"},
-            }
+        """统一异常处理(委托给 deps_module.handle_exception_to_envelope)。"""
+        return handle_exception_to_envelope(
+            exception_handler=self.exception_handler,
+            exception=exception,
+            trace_id=trace_id,
+            fallback_code="ORCHESTRATOR_RUN_FAILED",
+            fallback_message="协同调度执行失败",
+            stage="orchestrator",
+            context={"type": (request or {}).get("type")},
+        )
 
     def register_module(self, module_type: str, module_instance: Any) -> None:
         """
