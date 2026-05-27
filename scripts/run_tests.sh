@@ -20,6 +20,7 @@ export PYTHONPATH="basic_support:data_layer:business:interface:application:run:.
 modules=(
   "basic_support/schema_module"
   "basic_support/deps_module"
+  "basic_support/config_module"
   "data_layer/chunker_module"
   "data_layer/vector_db_module"
   "data_layer/document_store_module"

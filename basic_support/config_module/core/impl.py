@@ -126,6 +126,40 @@ class ConfigManager(BaseConfigManager):
                     return default
             return default
 
+    def get_effective_value(
+        self,
+        key: str,
+        env_var: Optional[str] = None,
+        default: Any = None,
+    ) -> Any:
+        """按显式优先级解析配置项,返回最终生效值。
+
+        优先级 (高 -> 低):
+            1. 环境变量 (若 env_var 非空且环境中存在)
+            2. 全局/局部 yaml 配置 (走 get_config)
+            3. default 兜底
+
+        相比 get_config(key, default), 本方法把"环境变量覆盖"作为显式优先项,
+        让调用方更明确地表达"这个值允许环境变量覆盖"。
+
+        示例:
+            timeout = config.get_effective_value(
+                "rag.llm_timeout", env_var="ANYTHING_RAG_TIMEOUT", default=30
+            )
+
+        参考 docs/configuration-priority.md 第 2 节"5 个配置源 + 优先级"。
+        """
+        if env_var:
+            env_val = os.environ.get(env_var)
+            if env_val is not None and env_val != "":
+                return env_val
+
+        yaml_val = self.get_config(key, None)
+        if yaml_val is not None:
+            return yaml_val
+
+        return default
+
     def update_config(self, key: str, value: Any, persist: bool = False) -> bool:
         self._check_hot_reload()
 

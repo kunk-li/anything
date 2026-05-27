@@ -103,5 +103,69 @@ validate_rules:
         self.assertAlmostEqual(self.config_manager.get_config("llm.temperature"), 0.7, places=6)
 
 
+class TestGetEffectiveValue(unittest.TestCase):
+    """显式优先级解析: env_var > yaml > default"""
+
+    def setUp(self):
+        self.cfg = ConfigManager()
+        self.cfg.load_config()
+        # 暂存可能存在的环境变量,确保测试不被外部环境干扰
+        self._env_snapshot = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env_snapshot)
+
+    def test_env_var_overrides_yaml(self):
+        """L1 环境变量应覆盖 L4 yaml 默认"""
+        os.environ["ANYTHING_TEST_ENV_OVERRIDE"] = "from_env"
+        v = self.cfg.get_effective_value(
+            key="global.env",
+            env_var="ANYTHING_TEST_ENV_OVERRIDE",
+            default="from_default",
+        )
+        self.assertEqual(v, "from_env")
+
+    def test_yaml_used_when_no_env(self):
+        """没设环境变量时走 yaml"""
+        os.environ.pop("ANYTHING_TEST_ENV_OVERRIDE", None)
+        v = self.cfg.get_effective_value(
+            key="global.env",
+            env_var="ANYTHING_TEST_ENV_OVERRIDE",
+            default="from_default",
+        )
+        # config.yaml 中 global.env 是 "development"
+        self.assertEqual(v, "development")
+
+    def test_default_used_when_neither_env_nor_yaml(self):
+        """env 和 yaml 都没有时返回 default"""
+        os.environ.pop("ANYTHING_NO_SUCH_KEY", None)
+        v = self.cfg.get_effective_value(
+            key="nonexistent.path",
+            env_var="ANYTHING_NO_SUCH_KEY",
+            default="fallback",
+        )
+        self.assertEqual(v, "fallback")
+
+    def test_empty_env_treated_as_missing(self):
+        """空字符串环境变量应视为未设置(走 yaml/default)"""
+        os.environ["ANYTHING_TEST_EMPTY"] = ""
+        v = self.cfg.get_effective_value(
+            key="nonexistent.path",
+            env_var="ANYTHING_TEST_EMPTY",
+            default="fallback",
+        )
+        self.assertEqual(v, "fallback")
+
+    def test_no_env_var_param_falls_through_to_yaml(self):
+        """env_var=None 时只走 yaml + default"""
+        v = self.cfg.get_effective_value(
+            key="global.env",
+            env_var=None,
+            default="x",
+        )
+        self.assertEqual(v, "development")
+
+
 if __name__ == "__main__":
     unittest.main()
