@@ -9,11 +9,15 @@
 
 ```
 evaluation/
-├── datasets/             # JSONL 评测数据集
-│   ├── rag_basic.jsonl   # RAG 基础数据集 (5 cases)
-│   └── agent_basic.jsonl # Agent 基础数据集 (4 cases)
-├── run_eval.py           # 评测脚本入口
-└── README.md             # 本文件
+├── datasets/                  # JSONL 评测数据集
+│   ├── rag_basic.jsonl        # RAG 中文 (5 cases)
+│   ├── rag_english.jsonl      # RAG 英文 (5 cases)
+│   ├── agent_basic.jsonl      # Agent 中文 (4 cases)
+│   └── agent_english.jsonl    # Agent 英文 (4 cases)
+├── sample_docs/               # 评测用样本文档(供索引到 vector_store)
+│   └── en/                    # 英文样本(logging_design + exception_handling)
+├── run_eval.py                # 评测脚本入口
+└── README.md                  # 本文件
 ```
 
 ## 数据集格式
@@ -106,3 +110,41 @@ python evaluation/run_eval.py -v
 - 本地开发时手工跑(回归时)
 - 部署前在 staging 环境跑
 - 或加专门的"nightly eval" Action(配 secrets 包含真实 API key)
+
+## 多语言评测
+
+### 当前覆盖
+
+- 中文:`rag_basic.jsonl` (5) + `agent_basic.jsonl` (4) = 9 cases
+- 英文:`rag_english.jsonl` (5) + `agent_english.jsonl` (4) = 9 cases
+- 总计 **18 个 cases**(10 RAG + 8 Agent)
+
+### 跑英文评测前先索引英文文档
+
+英文 cases 期望命中 `evaluation/sample_docs/en/` 下的文档:
+
+```bash
+# 1) 一次性索引英文样本到 vector_store
+cd run
+PYTHONPATH="../basic_support:../data_layer:../business:../interface:../application:.:.." \
+    python index_build.py --source-type folder \
+        --source-path ../evaluation/sample_docs/en
+
+# 2) 跑英文评测(中文样本之前已索引过)
+cd ..
+PYTHONPATH="basic_support:data_layer:business:interface:application:run:." \
+    python evaluation/run_eval.py \
+        --dataset evaluation/datasets/rag_english.jsonl \
+        --dataset evaluation/datasets/agent_english.jsonl
+```
+
+### 添加新语言
+
+1. 在 `evaluation/sample_docs/<lang>/` 放 1-2 篇短文档
+2. 用 `index_build.py` 把文档索引到向量库
+3. 在 `evaluation/datasets/` 新建 `rag_<lang>.jsonl` + `agent_<lang>.jsonl`
+4. 跑评测验证命中率
+
+注意:当前默认 embedding 模型是 `all-MiniLM-L6-v2`(多语言基础),
+中英文都能处理但效果一般。生产建议替换为 `BAAI/bge-m3` 或
+`paraphrase-multilingual-MiniLM-L12-v2` 等多语言专用模型。

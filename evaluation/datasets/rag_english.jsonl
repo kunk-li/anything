@@ -1,0 +1,5 @@
+{"id": "rag-en-001", "type": "rag", "query": "What is the role of trace_id in the logging module?", "expected_file_keywords": ["logging"], "expected_content_keywords": ["trace_id"], "top_k": 5}
+{"id": "rag-en-002", "type": "rag", "query": "How does the exception module map business codes to HTTP status?", "expected_file_keywords": ["exception"], "expected_content_keywords": ["HTTP"], "top_k": 5}
+{"id": "rag-en-003", "type": "rag", "query": "Which error codes are marked retryable?", "expected_file_keywords": ["exception"], "expected_content_keywords": ["retryable"], "top_k": 5}
+{"id": "rag-en-004", "type": "rag", "query": "What information should the details field contain?", "expected_file_keywords": [], "expected_content_keywords": ["details"], "top_k": 5}
+{"id": "rag-en-005", "type": "rag", "query": "How are log levels configured?", "expected_file_keywords": ["logging"], "expected_content_keywords": ["level"], "top_k": 5}

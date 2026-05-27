@@ -1,0 +1,4 @@
+{"id": "agent-en-001", "type": "agent", "task": "Draft a 3-point plan for adding observability to a python service", "expected_tools": ["llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-en-002", "type": "agent", "task": "Summarize the key principles of clean error handling", "expected_tools": ["llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-en-003", "type": "hybrid", "task": "Based on the knowledge base, explain how logging supports observability", "expected_tools": ["rag_search", "llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-en-004", "type": "hybrid", "task": "Lookup the exception module design and list its retryable codes", "expected_tools": ["rag_search", "llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
