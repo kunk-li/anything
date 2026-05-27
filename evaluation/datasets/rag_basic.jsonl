@@ -1,0 +1,5 @@
+{"id": "rag-001", "type": "rag", "query": "日志模块的设计原则是什么", "expected_file_keywords": ["日志模块"], "expected_content_keywords": ["日志", "trace_id"], "top_k": 5}
+{"id": "rag-002", "type": "rag", "query": "异常处理模块如何统一错误码", "expected_file_keywords": ["异常处理模块"], "expected_content_keywords": ["错误码", "异常"], "top_k": 5}
+{"id": "rag-003", "type": "rag", "query": "session_id 的格式约束是什么", "expected_file_keywords": [], "expected_content_keywords": ["session"], "top_k": 5}
+{"id": "rag-004", "type": "rag", "query": "为什么需要 trace_id 全链路透传", "expected_file_keywords": [], "expected_content_keywords": ["trace_id"], "top_k": 5}
+{"id": "rag-005", "type": "rag", "query": "如何配置日志的格式与级别", "expected_file_keywords": ["日志"], "expected_content_keywords": ["级别", "格式"], "top_k": 5}

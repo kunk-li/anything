@@ -1,0 +1,4 @@
+{"id": "agent-001", "type": "agent", "task": "请写一段开发计划", "expected_tools": ["llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-002", "type": "agent", "task": "总结一下 RAG 系统的核心模块", "expected_tools": ["llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-003", "type": "hybrid", "task": "基于知识库回答日志模块的作用", "expected_tools": ["rag_search", "llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
+{"id": "agent-004", "type": "hybrid", "task": "查阅异常处理模块的接口规范并总结", "expected_tools": ["rag_search", "llm_generate"], "expected_answer_min_length": 1, "expected_code": "SUCCESS"}
