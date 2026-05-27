@@ -5,13 +5,16 @@ API 服务模块具体实现类
 """
 
 import json
+import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from deps_module import BasicDeps, build_basic_deps, StartupError
 from observability_module import (
@@ -601,6 +604,53 @@ class ApiService:
                 },
                 headers={"X-Request-Id": trace_id},
             )
+
+        # ============== 前端 Web UI 挂载 ==============
+        # frontend/ 目录在项目根: <repo_root>/frontend/{index.html, static/*}
+        # 服务启动 cwd 不固定 (可能在 run/ 也可能在 repo root), 用 __file__ 反推。
+        # 找不到时不挂载, 不影响纯 API 部署。
+        self._mount_frontend()
+
+    def _mount_frontend(self) -> None:
+        """挂载 frontend/ 静态资源 + GET / 返回 index.html.
+
+        路径解析: <api_service_module/core/impl.py>
+            -> ../../../../frontend/      (从 application/api_service_module/core/ 上溯 4 层)
+            -> or <cwd>/frontend/         (兜底)
+            -> or <cwd>/../frontend/      (在 run/ 下启动时)
+
+        找不到 index.html 时跳过挂载并 INFO 日志, 不挂掉服务。
+        """
+        candidates = [
+            Path(__file__).resolve().parents[3] / "frontend",
+            Path.cwd() / "frontend",
+            Path.cwd().parent / "frontend",
+        ]
+        frontend_dir = next((p for p in candidates if (p / "index.html").exists()), None)
+        if frontend_dir is None:
+            self.logger.info(
+                "未找到 frontend/index.html, 跳过 Web UI 挂载 (纯 API 模式)"
+            )
+            return
+
+        static_dir = frontend_dir / "static"
+        if static_dir.is_dir():
+            self.app.mount(
+                "/static", StaticFiles(directory=str(static_dir)), name="static"
+            )
+
+        index_path = frontend_dir / "index.html"
+
+        @self.app.get("/")
+        async def _root():
+            return FileResponse(str(index_path), media_type="text/html; charset=utf-8")
+
+        # 也支持 /ui 别名 (有些反代会在 / 挂别的内容)
+        @self.app.get("/ui")
+        async def _ui():
+            return FileResponse(str(index_path), media_type="text/html; charset=utf-8")
+
+        self.logger.info(f"Web UI 已挂载: GET / 提供 index.html, 静态资源 from {static_dir}")
 
     # =========================
     # 辅助方法

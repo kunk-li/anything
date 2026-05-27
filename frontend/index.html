@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anything · RAG & Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- ============== Header ============== -->
+    <header class="app-header">
+        <div class="brand">
+            <span class="logo">🤖</span>
+            <span class="title">Anything</span>
+            <span class="subtitle">RAG & Agent</span>
+        </div>
+        <div class="header-controls">
+            <span class="tenant-chip">
+                <label for="tenant-input">tenant</label>
+                <input id="tenant-input" type="text" placeholder="default" maxlength="32" />
+            </span>
+            <span class="health-badge" id="health-badge" title="点击重新检测">
+                <span class="health-dot" id="health-dot"></span>
+                <span id="health-text">检测中</span>
+            </span>
+            <button class="icon-btn" id="settings-btn" title="设置" aria-label="settings">⚙</button>
+        </div>
+    </header>
+
+    <!-- ============== Main Layout ============== -->
+    <div class="app-main">
+        <!-- 左:对话区 -->
+        <section class="chat-pane">
+            <div class="messages" id="messages" aria-live="polite">
+                <div class="welcome">
+                    <h2>欢迎使用 Anything</h2>
+                    <p>RAG 检索 / Agent 任务执行 / Hybrid 混合,选择模式后输入开始对话。</p>
+                    <ul class="hint-list">
+                        <li><b>RAG</b> 模式适合"在文档里找答案" — 输入问题,返回引用的 chunks</li>
+                        <li><b>Agent</b> 模式适合"调工具完成任务" — 输入任务,返回执行步骤 + 答案</li>
+                        <li><b>Hybrid</b> 模式综合两者 — 检索 + 推理</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 输入区 -->
+            <div class="composer">
+                <div class="composer-row">
+                    <div class="mode-tabs" role="tablist">
+                        <button class="mode-tab active" data-mode="rag" role="tab" aria-selected="true">RAG</button>
+                        <button class="mode-tab" data-mode="agent" role="tab" aria-selected="false">Agent</button>
+                        <button class="mode-tab" data-mode="hybrid" role="tab" aria-selected="false">Hybrid</button>
+                    </div>
+                    <div class="composer-extras">
+                        <label class="topk-input">
+                            top_k
+                            <input type="number" id="topk-input" min="1" max="50" value="5" />
+                        </label>
+                    </div>
+                </div>
+                <div class="composer-row composer-input-row">
+                    <textarea
+                        id="input-text"
+                        rows="2"
+                        placeholder="输入问题或任务,Ctrl+Enter 发送..."
+                        aria-label="对话输入框"
+                    ></textarea>
+                    <button id="send-btn" class="send-btn">
+                        <span class="send-label">发送</span>
+                        <span class="send-icon">↵</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 右:侧栏 -->
+        <aside class="sidebar">
+            <nav class="side-tabs" role="tablist">
+                <button class="side-tab active" data-tab="retrieved" role="tab" aria-selected="true">
+                    检索结果<span class="badge" id="retrieved-count">0</span>
+                </button>
+                <button class="side-tab" data-tab="steps" role="tab" aria-selected="false">
+                    工具调用<span class="badge" id="steps-count">0</span>
+                </button>
+                <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false">系统指标</button>
+                <button class="side-tab" data-tab="upload" role="tab" aria-selected="false">文档</button>
+            </nav>
+            <div class="side-panels">
+                <!-- 检索结果 -->
+                <div class="side-panel active" data-panel="retrieved">
+                    <div class="empty-state" id="retrieved-empty">
+                        最近一次 RAG 检索的 chunks 会显示在这里
+                    </div>
+                    <ul class="chunk-list" id="chunk-list"></ul>
+                </div>
+
+                <!-- 工具调用 -->
+                <div class="side-panel" data-panel="steps">
+                    <div class="empty-state" id="steps-empty">
+                        最近一次 Agent 任务的工具调用步骤会显示在这里
+                    </div>
+                    <ol class="step-list" id="step-list"></ol>
+                </div>
+
+                <!-- 系统指标 -->
+                <div class="side-panel" data-panel="metrics">
+                    <div class="metrics-controls">
+                        <button id="metrics-refresh" class="small-btn">刷新</button>
+                        <span class="hint">来自 /metrics (Prometheus 文本)</span>
+                    </div>
+                    <pre class="metrics-text" id="metrics-text">点击刷新查看实时指标</pre>
+                </div>
+
+                <!-- 文档上传 -->
+                <div class="side-panel" data-panel="upload">
+                    <div class="upload-area" id="upload-area">
+                        <input type="file" id="file-input" hidden />
+                        <label for="file-input" class="upload-label">
+                            <span class="upload-icon">📂</span>
+                            <span>点击或拖拽文件到此上传</span>
+                            <span class="upload-hint">支持 md / txt / pdf / docx</span>
+                        </label>
+                    </div>
+                    <div class="upload-result" id="upload-result"></div>
+                    <button id="build-index-btn" class="small-btn block">触发索引构建</button>
+                    <div class="job-result" id="job-result"></div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ============== Settings Drawer ============== -->
+    <div class="drawer" id="settings-drawer" hidden>
+        <div class="drawer-backdrop" data-close="settings"></div>
+        <div class="drawer-panel">
+            <div class="drawer-header">
+                <h3>设置</h3>
+                <button class="icon-btn" data-close="settings" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <div class="form-row">
+                    <label for="api-base-input">API Base URL</label>
+                    <input type="text" id="api-base-input" placeholder="同域(留空)" />
+                    <p class="hint">留空 = 使用当前页面所在域名,生产部署时配置网关地址</p>
+                </div>
+                <div class="form-row">
+                    <label for="apikey-input">X-API-Key</label>
+                    <input type="password" id="apikey-input" placeholder="可选,认证时需要" />
+                    <p class="hint">配置 security.auth_enabled=true 时必填</p>
+                </div>
+                <div class="form-row">
+                    <label for="session-input">Session ID</label>
+                    <input type="text" id="session-input" placeholder="自动生成" />
+                    <p class="hint">用于跨请求关联,留空自动生成</p>
+                </div>
+                <div class="form-row">
+                    <button id="save-settings" class="primary-btn">保存</button>
+                    <button id="clear-history" class="secondary-btn">清空对话历史</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============== Toast ============== -->
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+    <script src="/static/api.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

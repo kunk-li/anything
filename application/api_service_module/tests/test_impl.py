@@ -559,6 +559,67 @@ class TestQuotaAndTenantNotFound(unittest.TestCase):
         self.assertEqual(rb1.status_code, 200)
 
 
+class TestFrontendMount(unittest.TestCase):
+    """Web UI 挂载: GET / 返回 index.html, /static/* 提供静态资源"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+        self.service = ApiService(handler=self.handler)
+        self.service.auth_enabled = False
+        self.client = TestClient(self.service.app)
+
+    def test_root_returns_html_when_frontend_exists(self):
+        """frontend/index.html 存在时 GET / 应返回 HTML"""
+        import os
+        from pathlib import Path
+        # 找 frontend dir, 跟 _mount_frontend 用同样的 fallback
+        candidates = [
+            Path(__file__).resolve().parents[3] / "frontend",
+            Path.cwd() / "frontend",
+            Path.cwd().parent / "frontend",
+        ]
+        frontend_exists = any((p / "index.html").exists() for p in candidates)
+        if not frontend_exists:
+            self.skipTest("frontend/index.html 不存在, 跳过 (纯 API 部署场景)")
+        resp = self.client.get("/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+        self.assertIn("Anything", resp.text)
+
+    def test_static_assets_served(self):
+        """静态资源应可访问"""
+        from pathlib import Path
+        candidates = [
+            Path(__file__).resolve().parents[3] / "frontend" / "static",
+            Path.cwd() / "frontend" / "static",
+            Path.cwd().parent / "frontend" / "static",
+        ]
+        static_exists = any((p / "app.js").exists() for p in candidates)
+        if not static_exists:
+            self.skipTest("frontend/static/app.js 不存在")
+        resp = self.client.get("/static/app.js")
+        self.assertEqual(resp.status_code, 200)
+        # JS 文件 content-type
+        self.assertTrue(
+            "javascript" in resp.headers.get("content-type", "")
+            or "text" in resp.headers.get("content-type", "")
+        )
+
+    def test_ui_alias_works(self):
+        """GET /ui 应跟 / 等价"""
+        from pathlib import Path
+        candidates = [
+            Path(__file__).resolve().parents[3] / "frontend",
+            Path.cwd() / "frontend",
+            Path.cwd().parent / "frontend",
+        ]
+        if not any((p / "index.html").exists() for p in candidates):
+            self.skipTest("frontend/index.html 不存在")
+        resp = self.client.get("/ui")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("content-type", ""))
+
+
 class TestHTTPStatusMapping(unittest.TestCase):
     """PR4b: 新错误码 -> HTTP 状态码映射"""
 

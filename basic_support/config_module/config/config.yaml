@@ -84,6 +84,13 @@ security:
     - "${API_KEY_1}"
   jwt_secret: "${JWT_SECRET}"
   sensitive_config_secret: "${SENSITIVE_CONFIG_SECRET}"
+  # 内部白名单 (前缀匹配): 这些 IP 即使没认证也允许 body tenant_id 透传。
+  # 默认包含 localhost / 127.0.0.1, 方便本地 Web UI 直接选 tenant.
+  # 生产部署面向公网时建议清空或调整为内网网段。
+  internal_whitelist:
+    - "127.0.0.1"
+    - "localhost"
+    - "::1"
 
 remote_config:
   enabled: false
