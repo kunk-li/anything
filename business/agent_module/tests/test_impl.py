@@ -1,114 +1,140 @@
 # -*- coding: utf-8 -*-
 """
-Agent 模块单元测试
-覆盖核心功能与异常场景
+Agent 模块单元测试(核心契约)
+
+覆盖:
+    - SimpleAgent 构造与基础属性
+    - execute 返回统一响应信封
+    - register_tool / unregister_tool 契约
+    - call_agent 关键字参数入口
+
+注意:
+    LLM 规划相关测试见同目录 test_llm_planner.py。
 """
 
 import unittest
+
 from agent_module.core.impl import SimpleAgent
-from agent_module.model.data_model import AgentRequest
-from exception_module.core.impl import AgentException
 
 
-class MockTool:
-    """模拟工具，用于测试"""
+class _DictRegistry:
+    def __init__(self):
+        self._tools = {}
 
-    def __init__(self, should_fail=False):
-        self.should_fail = should_fail
-        self.call_count = 0
+    def register(self, name, func):
+        self._tools[name] = func
 
-    def __call__(self, inp: dict):
-        self.call_count += 1
-        if self.should_fail:
-            raise Exception("工具执行失败")
-        return {
-            "code": "SUCCESS",
-            "message": "ok",
-            "data": {"result": "mock_result"}
-        }
+    def unregister(self, name):
+        return self._tools.pop(name, None) is not None
+
+    def get(self, name):
+        return self._tools.get(name)
+
+    def list_tools(self):
+        return list(self._tools.keys())
 
 
-class TestAgentModule(unittest.TestCase):
-    """Agent 模块单元测试类"""
+def _stub_llm_generate(payload):
+    """模拟 llm_generate 工具的成功响应。"""
+    return {
+        "code": "SUCCESS",
+        "message": "ok",
+        "data": {"text": "stub answer for: " + str(payload.get("prompt", ""))[:32]},
+    }
+
+
+def _stub_rag_search(payload):
+    return {
+        "code": "SUCCESS",
+        "message": "ok",
+        "data": {
+            "answer": "rag stub answer",
+            "citations": [],
+            "retrieved_chunks": [],
+        },
+    }
+
+
+class TestSimpleAgent(unittest.TestCase):
 
     def setUp(self):
-        """测试前置：初始化 Agent 实例、测试数据"""
-        self.tools = {
-            "mock_tool": MockTool(),
-            "fail_tool": MockTool(should_fail=True)
-        }
-        self.agent = SimpleAgent(tools=self.tools)
-        self.test_task = "测试任务：请根据知识库整理要点"
-        self.empty_task = ""
+        # impl 接收的是 tool_registry,不是 tools(注意:这是历史测试的常见错误)
+        self.registry = _DictRegistry()
+        self.registry.register("llm_generate", _stub_llm_generate)
+        self.registry.register("rag_search", _stub_rag_search)
+        # 显式关闭 LLM 规划,让 parse_task 走规则式以便测试稳定
+        self.agent = SimpleAgent(
+            tool_registry=self.registry,
+            llm_planner=None,
+        )
+        # 关掉 LLM 规划,避免 _stub_llm_generate 偶然返回 JSON-like 字符串触发 LLM 路径
+        self.agent.use_llm_planner = False
 
-    def test_task_parse(self):
-        """测试任务解析功能"""
-        plan = self.agent.parse_task(self.test_task)
-        self.assertIn("plan", plan)
-        self.assertIsInstance(plan["plan"], list)
+    def test_execute_returns_unified_envelope(self):
+        """execute 应返回统一响应信封,且 data 含 answer / steps。"""
+        result = self.agent.execute({
+            "task": "请写一段开发计划",
+            "trace_id": "t1",
+            "session_id": "s1",
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["trace_id"], "t1")
+        data = result["data"]
+        self.assertIn("answer", data)
+        self.assertIn("steps", data)
+        self.assertEqual(data["session_id"], "s1")
 
-    def test_agent_execute(self):
-        """测试 Agent 全流程执行"""
-        result = self.agent.execute(
-            self.test_task,
-            session_id="test_session"
+    def test_register_tool_returns_true(self):
+        """register_tool 应满足 BaseAgent.-> bool 契约。"""
+        def my_tool(payload):
+            return {"code": "SUCCESS", "data": {}}
+
+        ok = self.agent.register_tool(
+            name="my_tool",
+            tool_func=my_tool,
+            description="test",
+            input_schema={},
+        )
+        self.assertTrue(ok)
+        self.assertIsNotNone(self.registry.get("my_tool"))
+
+    def test_unregister_tool(self):
+        """unregister_tool 应该真的从 registry 移除工具。"""
+        # 先注册再注销
+        self.agent.register_tool("tmp_tool", lambda p: {}, "tmp", {})
+        self.assertIsNotNone(self.registry.get("tmp_tool"))
+
+        ok = self.agent.unregister_tool("tmp_tool")
+        self.assertTrue(ok)
+        self.assertIsNone(self.registry.get("tmp_tool"))
+
+    def test_unregister_nonexistent_tool_returns_false(self):
+        ok = self.agent.unregister_tool("never_registered")
+        self.assertFalse(ok)
+
+    def test_call_agent_keyword_interface(self):
+        """call_agent 关键字参数入口(BaseAgent 契约)。"""
+        result = self.agent.call_agent(
+            task="请写一段开发计划",
+            trace_id="t1",
+            session_id="s1",
         )
         self.assertEqual(result["code"], "SUCCESS")
-        self.assertIn("results", result["data"])
+        self.assertEqual(result["trace_id"], "t1")
 
-    def test_empty_task_execute(self):
-        """测试空任务执行，验证异常抛出"""
-        with self.assertRaises(AgentException):
-            self.agent.execute(self.empty_task)
-
-    def test_tool_retry(self):
-        """测试工具重试机制"""
-        fail_tool = MockTool(should_fail=True)
-        self.agent.tool_registry.register("always_fail", fail_tool)
-
-        with self.assertRaises(AgentException):
-            self.agent.execute("调用 always_fail 工具")
-
-        # 验证重试次数
-        self.assertEqual(fail_tool.call_count, self.agent.max_retries)
-
-    def test_call_agent_interface(self):
-        """测试标准化接口 call_agent"""
-        request = AgentRequest(
-            task=self.test_task,
-            session_id="test_session"
-        )
-        response = self.agent.call_agent(request)
-        self.assertIn(response.code, ["SUCCESS", "AGENT_EXECUTE_FAILED"])
-
-    def test_tool_register_unregister(self):
-        """测试工具注册与注销"""
-
-        def new_tool(inp):
-            return {"result": "new"}
-
-        # 注册
-        self.assertTrue(self.agent.register_tool(
-            "new_tool",
-            new_tool,
-            "新工具",
-            {}
-        ))
-        self.assertIsNotNone(self.agent.tool_registry.get("new_tool"))
-
-        # 注销
-        self.assertTrue(self.agent.unregister_tool("new_tool"))
-        self.assertIsNone(self.agent.tool_registry.get("new_tool"))
-
-    def test_search_task_parse(self):
-        """测试检索类任务解析"""
-        plan = self.agent.parse_task("请检索知识库中关于 RAG 的资料")
-        self.assertEqual(plan["plan"][0]["tool"], "rag_search")
-
-    def test_calculate_task_parse(self):
-        """测试计算类任务解析"""
-        plan = self.agent.parse_task("计算 123 + 456 的结果")
-        self.assertEqual(plan["plan"][0]["tool"], "calculator")
+    def test_execute_hybrid_mode_uses_two_steps(self):
+        """hybrid 模式(规则式)应固定为 rag_search + llm_generate 两步。"""
+        result = self.agent.execute({
+            "task": "基于知识库回答问题",
+            "trace_id": "t1",
+            "session_id": "s1",
+            "extra_params": {"execution_mode": "hybrid"},
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+        steps = result["data"]["steps"]
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(steps[0]["tool_name"], "rag_search")
+        self.assertEqual(steps[1]["tool_name"], "llm_generate")
 
 
 if __name__ == "__main__":

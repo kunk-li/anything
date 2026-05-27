@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      # smoke test 用占位 LLM,避免 CI 真打外网
+      ANYTHING_DEV_MODE: "1"
+      PYTHONPATH: "basic_support:data_layer:business:interface:application:run:."
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          # 项目 requirements.txt 是 UTF-16 编码,先转为 UTF-8 再 pip install
+          python - <<'PY'
+          from pathlib import Path
+          raw = Path("requirements.txt").read_bytes()
+          # 兼容 UTF-16 LE / UTF-8 BOM / 普通 UTF-8
+          for enc in ("utf-16", "utf-16-le", "utf-8-sig", "utf-8"):
+              try:
+                  text = raw.decode(enc)
+                  break
+              except UnicodeDecodeError:
+                  continue
+          Path("requirements.utf8.txt").write_text(text, encoding="utf-8")
+          PY
+          pip install -r requirements.utf8.txt
+          # 测试用额外依赖(主项目可能未显式声明的)
+          pip install pydantic 'numpy<3' faiss-cpu sentence-transformers
+
+      - name: Run unit tests per module
+        run: |
+          set -e
+          modules=(
+            "basic_support/schema_module"
+            "basic_support/deps_module"
+            "data_layer/chunker_module"
+            "data_layer/vector_db_module"
+            "data_layer/document_store_module"
+            "business/rag_module"
+            "business/agent_module"
+            "interface/request_response_module"
+          )
+          for m in "${modules[@]}"; do
+            echo "=== $m ==="
+            python -m unittest discover -s "$m/tests" -v
+          done
+
+      - name: Run smoke test (end-to-end)
+        run: |
+          cd run
+          PYTHONPATH="../basic_support:../data_layer:../business:../interface:../application:.:.." \
+            python run_smoke_test.py

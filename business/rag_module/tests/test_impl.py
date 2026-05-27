@@ -1,67 +1,81 @@
 # -*- coding: utf-8 -*-
 """
 RAG 模块单元测试
-覆盖核心功能与异常场景
+
+覆盖核心功能、签名契约、异常路径。
+
+设计说明:
+    本测试不真实初始化向量库/文档存储,因此 retrieve / run 调用主要验证
+    "请求/响应结构契约",而不验证检索质量(后者由 smoke test 端到端验证)。
 """
 
 import unittest
-from unittest.mock import Mock
 
-from ..core.impl import SimpleRAG
-from ..model.data_model import RAGRequest
-from exception_module.core.impl import RAGException
+# 绝对 import,避免 unittest discover 时相对 import 失败
+from rag_module.core.impl import SimpleRAG
 
 
 class MockLLMClient:
-    """模拟大模型客户端，用于测试"""
-    def generate(self, prompt: str) -> str:
+    """模拟大模型客户端"""
+
+    def generate(self, prompt, trace_id=None):
         return "这是模拟的 RAG 回答。"
 
 
-class TestRAGModule(unittest.TestCase):
-    """RAG 模块单元测试类"""
+class TestSimpleRAG(unittest.TestCase):
+    """RAG 模块单元测试"""
 
     def setUp(self):
-        """测试前置：初始化 RAG 实例、大模型服务、测试数据"""
-        self.llm_service = MockLLMClient()
-        self.rag = SimpleRAG(llm_client=self.llm_service)
-        self.test_query = "RAG 系统核心业务层设计包含哪些模块？"
-        self.empty_query = ""
+        # 仅注入 llm_client,其他依赖保持为 None
+        # (retrieve 在 vector_db=None 时直接返回 [],不会报错)
+        self.llm = MockLLMClient()
+        self.rag = SimpleRAG(llm_client=self.llm)
 
-    def test_rag_retrieve(self):
-        """测试 RAG 检索步骤，验证检索结果格式与数量"""
-        # 注意：实际测试需要向量库中有数据，此处仅验证接口调用无异常
-        try:
-            retrieved = self.rag.retrieve(self.test_query, top_k=3)
-            self.assertIsInstance(retrieved, list)
-        except Exception:
-            # 若向量库为空可能返回空列表或异常，视具体实现而定
-            pass
+    def test_retrieve_with_no_vector_db_returns_empty(self):
+        """没有 vector_db 时 retrieve 应返回空列表而非崩溃。"""
+        chunks = self.rag.retrieve({
+            "query": "什么是 RAG?",
+            "top_k": 3,
+            "trace_id": "t1",
+        })
+        self.assertIsInstance(chunks, list)
+        self.assertEqual(chunks, [])
 
-    def test_rag_full_run(self):
-        """测试 RAG 全流程执行，验证响应格式与答案生成"""
-        # 注意：实际运行依赖向量库和文档存储中有数据
-        try:
-            result = self.rag.run(self.test_query)
-            self.assertEqual(result["code"], "SUCCESS")
-            self.assertIn("answer", result["data"])
-        except RAGException:
-            # 若无数据可能抛出异常，符合预期
-            pass
+    def test_run_returns_unified_envelope(self):
+        """run 应返回统一响应信封 (code/message/data/trace_id/...)。"""
+        result = self.rag.run({
+            "query": "什么是 RAG?",
+            "top_k": 3,
+            "trace_id": "t1",
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["trace_id"], "t1")
+        self.assertIn("answer", result["data"])
+        self.assertIn("citations", result["data"])
+        self.assertIn("retrieved_chunks", result["data"])
 
-    def test_empty_query_run(self):
-        """测试空问题 RAG 调用，验证异常抛出"""
-        with self.assertRaises(RAGException):
-            self.rag.run(self.empty_query)
+    def test_run_empty_query_still_returns_envelope(self):
+        """空 query 在 RAG 层不抛异常(校验由 RequestHandler 边界负责),
+        但应能返回明确的响应结构。"""
+        result = self.rag.run({
+            "query": "",
+            "top_k": 3,
+            "trace_id": "t1",
+        })
+        # 不论成功失败,都必须返回统一信封字段
+        self.assertIn("code", result)
+        self.assertIn("trace_id", result)
 
-    def test_call_rag_interface(self):
-        """测试标准化接口 call_rag"""
-        request = RAGRequest(query=self.test_query, top_k=5)
-        try:
-            response = self.rag.call_rag(request)
-            self.assertIn(response.code, ["SUCCESS", "RAG_RUN_FAILED"])
-        except Exception:
-            pass
+    def test_call_rag_keyword_interface(self):
+        """call_rag 关键字参数风格入口(BaseRAG 契约)。"""
+        result = self.rag.call_rag(
+            query="什么是 RAG?",
+            top_k=3,
+            trace_id="t1",
+            session_id="s1",
+        )
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["trace_id"], "t1")
 
 
 if __name__ == "__main__":

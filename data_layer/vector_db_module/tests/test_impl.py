@@ -45,24 +45,32 @@ class TestFaissVectorDB(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_upsert_and_query(self):
+        # 让 v1/v2 的方向真正不同(否则归一化后两个 [0.1]*64 与 [0.2]*64
+        # 完全相同,排序不稳定 -> 之前是 pre-existing flaky 测试)
+        emb_v1 = [1.0] + [0.0] * 63   # 主要在第 1 维
+        emb_v2 = [0.0, 1.0] + [0.0] * 62  # 主要在第 2 维
+
         test_vectors = [
             {
                 "vector_id": "v1",
-                "embedding": [0.1] * 64,
+                "embedding": emb_v1,
                 "metadata": {"doc_id": "d1", "chunk_id": "d1#c000001"},
             },
             {
                 "vector_id": "v2",
-                "embedding": [0.2] * 64,
+                "embedding": emb_v2,
                 "metadata": {"doc_id": "d2", "chunk_id": "d2#c000001"},
             },
         ]
         self.assertTrue(self.db.upsert_vectors(test_vectors))
 
-        res = self.db.query([0.1] * 64, top_k=2)
+        # query 与 v1 同方向,v1 必须排第一
+        res = self.db.query(emb_v1, top_k=2)
         self.assertEqual(len(res), 2)
         self.assertEqual(res[0]["vector_id"], "v1")
         self.assertIn("doc_id", res[0]["metadata"])
+        # 顺便验证 v1 的相似度严格高于 v2
+        self.assertGreater(res[0]["score"], res[1]["score"])
 
     def test_query_with_filter(self):
         test_vectors = [
