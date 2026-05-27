@@ -152,9 +152,15 @@ self.logger.info(f"using api_key=***{api_key[-4:]} (last 4)")
 grep -rEo '\$\{[A-Z0-9_]+\}' basic_support/config_module/config/config.yaml | sort -u
 ```
 
-## 8. 后续改进(规划中)
+## 8. 后续改进
 
-- Task #31:nightly workflow 配 secrets 跑业务质量评测
+**已就位**:
+- ✅ Nightly eval workflow 配 secrets 跑真实 LLM 评测
+  ([.github/workflows/nightly-eval.yml](../.github/workflows/nightly-eval.yml));
+  失败时自动开 GitHub Issue,详见
+  [evaluation/README.md "Nightly Eval Workflow"](../evaluation/README.md)
+
+**规划中**:
 - 集成 HashiCorp Vault / AWS Secrets Manager(替代 .env)
 - Secret rotation 自动化(API key 过期前自动轮换)
 - `ConfigManager.encrypt_sensitive_config` 在 yaml 内 inline 加密(已存在但未广泛使用)

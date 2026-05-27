@@ -98,18 +98,29 @@ python evaluation/run_eval.py -v
 3. 在对应 jsonl 文件追加一行
 4. 跑一次 `python evaluation/run_eval.py --verbose` 看 metrics 是否符合预期
 
-## 为什么不上 CI?
+## 评测在 CI 的位置
 
 主 CI(`.github/workflows/ci.yml`) **不** 自动跑业务质量评测,因为:
 
 - 评测需要真实的向量库 + 已索引的文档(需要先跑 `run/index_build.py`)
-- 评测需要真实 LLM(GitHub runner 上 401 时只能跑 Dummy,指标无意义)
-- 评测较慢(每个 case 涉及 LLM 调用,30 个 case 约 3-5 分钟)
+- 评测需要真实 LLM(主 CI 用 DummyLLM 跑测试,指标无意义)
+- 评测较慢(每个 case 涉及 LLM 调用,18 个 case 约 3-5 分钟)
 
-更合适的做法:
-- 本地开发时手工跑(回归时)
-- 部署前在 staging 环境跑
-- 或加专门的"nightly eval" Action(配 secrets 包含真实 API key)
+### Nightly Eval Workflow(已就位)
+
+[`.github/workflows/nightly-eval.yml`](../.github/workflows/nightly-eval.yml)
+每天凌晨自动跑一次真实 LLM 端到端评测:
+
+1. Verify secrets:检查 `OPENAI_API_KEY` / `DASHSCOPE_API_KEY` 等已配
+   (未配 → workflow 红,避免误以为通过)
+2. 索引中文 + 英文样本文档
+3. 跑 `run_eval.py --ci`,阈值不达标 → 工作流红
+4. 失败时**自动创建 GitHub Issue**(同日去重,避免刷屏)
+5. 把完整 report 作为 artifact 上传,保留 30 天
+
+也支持 Actions UI 手工触发(`workflow_dispatch`),可临时调阈值参数。
+
+启用步骤详见 [docs/secrets-management.md §4](../docs/secrets-management.md)。
 
 ## 多语言评测
 
