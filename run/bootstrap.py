@@ -23,6 +23,7 @@ from embedding_module import STEmbedding
 
 # 业务层
 from rag_module import SimpleRAG
+from rag_module.extensions import LLMQueryRewriter, LLMReranker
 from agent_module import SimpleAgent
 from orchestrator_module import SimpleOrchestrator
 
@@ -157,12 +158,22 @@ def build_business_layer(
     # 把 deps 也传到 data_layer,确保全链路共享同一份基础组件
     data_layer = data_layer or build_data_layer(deps=deps)
 
+    # 构造一个共享的 llm_call 闭包,供 rewriter / reranker 使用
+    llm_client = data_layer.get("llm_client")
+
+    def _llm_call(prompt: str) -> str:
+        return call_llm_compat(llm_client=llm_client, prompt=prompt)
+
+    query_rewriter = LLMQueryRewriter(llm_call=_llm_call) if llm_client is not None else None
+    reranker = LLMReranker(llm_call=_llm_call) if llm_client is not None else None
+
     rag = SimpleRAG(
-        llm_client=data_layer.get("llm_client"),
+        llm_client=llm_client,
         embedding=data_layer.get("embedding"),
         vector_db=data_layer.get("vector_db"),
         doc_store=data_layer.get("document_store"),
-        reranker=None,
+        reranker=reranker,
+        query_rewriter=query_rewriter,
         deps=deps,
     )
 

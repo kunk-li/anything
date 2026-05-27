@@ -23,6 +23,7 @@ class SimpleRAG(BaseRAG):
         vector_db=None,
         doc_store=None,
         reranker=None,
+        query_rewriter=None,
         deps: Optional[BasicDeps] = None,
     ):
         # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
@@ -37,6 +38,7 @@ class SimpleRAG(BaseRAG):
         self.vector_db = vector_db
         self.doc_store = doc_store
         self.reranker = reranker
+        self.query_rewriter = query_rewriter
 
         self.top_k_retrieve = int(self.config.get_config("rag.top_k_retrieve", 50))
         self.top_k_rerank = int(self.config.get_config("rag.top_k_rerank", 8))
@@ -50,44 +52,103 @@ class SimpleRAG(BaseRAG):
         self.logger.info("RAG 模块初始化完成")
 
     def retrieve(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """执行 chunk 级检索并返回标准结果列表"""
-        query = self._normalize_query(request.get("query", ""))
+        """执行 chunk 级检索并返回标准结果列表(文档第 12 章 6 步链路)。
+
+        步骤:
+            1. Normalize: 清洗/截断/去噪 query
+            2. Rewrite (可选): query_rewriter.rewrite(...) -> rewrite_query + filters
+            3. Embed: query_embedding = embedding.embed_text(rewrite_query)
+            4. Retrieve: vector_db.query(query_embedding, retrieve_k, filters)
+            5. Rerank (可选): reranker.rerank(rewrite_query, candidates)
+            6. Truncate: 取 top_k
+        """
+        original_query = self._normalize_query(request.get("query", ""))
         top_k = int(request.get("top_k") or self.top_k_rerank or 5)
         retrieve_k = max(top_k, self.top_k_retrieve)
         trace_id = request.get("trace_id")
         extra_params = request.get("extra_params") or {}
-        filters = extra_params.get("filters")
+        filters: Dict[str, Any] = dict(extra_params.get("filters") or {})
 
         self.logger.info(f"RAG 检索开始：trace_id={trace_id}, retrieve_k={retrieve_k}")
 
-        # 1. 向量化 query
-        query_embedding = self._embed_query(query, trace_id=trace_id)
+        # 2. 可选 query rewrite
+        effective_query = original_query
+        if self.enable_rewrite and self.query_rewriter is not None and original_query:
+            effective_query = self._apply_rewrite(
+                query=original_query,
+                filters=filters,
+                context=extra_params,
+                trace_id=trace_id,
+            )
 
-        # 2. 检索向量库
+        # 3. 向量化 effective_query
+        query_embedding = self._embed_query(effective_query, trace_id=trace_id)
+
+        # 4. 检索向量库
         raw_items: List[Dict[str, Any]] = []
         if self.vector_db is not None and query_embedding is not None:
             raw_items = self._query_vector_db(
                 query_embedding=query_embedding,
                 top_k=retrieve_k,
-                filters=filters,
+                filters=filters or None,
                 trace_id=trace_id,
             )
 
-        # 3. 统一 chunk 结构
+        # 5. 统一 chunk 结构
         chunks = [self._normalize_retrieved_item(item) for item in raw_items]
         chunks = [c for c in chunks if c is not None]
 
-        # 4. 可选 rerank
+        # 6. 可选 rerank (用 effective_query 而非 original)
         if self.enable_rerank and self.reranker is not None and chunks:
-            chunks = self._apply_rerank(query=query, chunks=chunks, trace_id=trace_id)
+            chunks = self._apply_rerank(query=effective_query, chunks=chunks, trace_id=trace_id)
 
-        # 5. 按 top_k 截断为生成候选
+        # 7. 按 top_k 截断为生成候选
         final_chunks = chunks[:top_k] if top_k > 0 else chunks
 
         self.logger.info(
             f"RAG 检索完成：trace_id={trace_id}, retrieved={len(chunks)}, selected={len(final_chunks)}"
         )
         return final_chunks
+
+    def _apply_rewrite(
+        self,
+        query: str,
+        filters: Dict[str, Any],
+        context: Dict[str, Any],
+        trace_id: Optional[str],
+    ) -> str:
+        """执行查询改写,失败时退化为原 query。
+
+        改写产出的 filters 会**合并**进调用方传入的 filters(调用方传入的优先,
+        改写补充未指定字段)。
+        """
+        try:
+            if hasattr(self.query_rewriter, "should_rewrite"):
+                if not self.query_rewriter.should_rewrite(query):
+                    return query
+            result = self.query_rewriter.rewrite(query, context=context)
+        except Exception as e:
+            self.logger.warning(
+                f"Query rewrite 失败,退化为原 query: trace_id={trace_id}, error={str(e)}"
+            )
+            return query
+
+        if result is None:
+            return query
+
+        rewrite_query = getattr(result, "rewrite_query", None) or query
+        rewrite_filters = getattr(result, "filters", None) or {}
+
+        # 合并 filters: 调用方传入的优先(已在 filters 中),改写仅补未指定字段
+        for k, v in rewrite_filters.items():
+            filters.setdefault(k, v)
+
+        if rewrite_query != query:
+            self.logger.info(
+                f"Query rewritten: trace_id={trace_id}, "
+                f"original={query[:50]!r}, rewrite={rewrite_query[:50]!r}"
+            )
+        return rewrite_query
 
     def generate(self, request: Dict[str, Any], retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """基于 chunk 级检索结果生成回答与 citations"""
@@ -300,12 +361,11 @@ class SimpleRAG(BaseRAG):
         chunks: List[Dict[str, Any]],
         trace_id: Optional[str],
     ) -> List[Dict[str, Any]]:
-        """可选 rerank，保持 chunk 级结构不变"""
+        """按 BaseReranker.rerank(query, candidates, top_k) 契约调用,失败时退化原顺序。"""
         try:
-            if hasattr(self.reranker, "rerank"):
-                result = self.reranker.rerank(query, chunks)
-                if isinstance(result, list):
-                    return result[: self.top_k_rerank]
+            result = self.reranker.rerank(query, chunks, top_k=self.top_k_rerank)
+            if isinstance(result, list) and result:
+                return result[: self.top_k_rerank]
         except Exception as e:
             self.logger.warning(f"Rerank 失败，退回原检索顺序：trace_id={trace_id}, error={str(e)}")
         return chunks[: self.top_k_rerank]
