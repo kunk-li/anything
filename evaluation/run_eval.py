@@ -115,12 +115,19 @@ def evaluate_rag_case(handler, case: Dict[str, Any]) -> CaseResult:
     top_k = int(case.get("top_k", 5))
     expected_file_kw = case.get("expected_file_keywords", []) or []
     expected_content_kw = case.get("expected_content_keywords", []) or []
+    # Task #33 PR4b: 多租户字段
+    tenant_id = case.get("tenant_id")
+    expected_must_not_contain = case.get("expected_must_not_contain", []) or []
+    expected_code = case.get("expected_code")  # 默认 SUCCESS; mt 集中可能是 TENANT_NOT_FOUND
+    allow_zero_chunks = bool(case.get("allow_zero_chunks", False))
+
+    # 构造 request body, 显式带 tenant_id (PR1 透传)
+    body = {"type": "rag", "query": query, "top_k": top_k}
+    if tenant_id is not None:
+        body["tenant_id"] = tenant_id
 
     try:
-        resp = handler.handle(
-            {"type": "rag", "query": query, "top_k": top_k},
-            trace_id=f"eval_{cid}",
-        )
+        resp = handler.handle(body, trace_id=f"eval_{cid}")
     except Exception as e:
         return CaseResult(case_id=cid, case_type="rag", passed=False,
                           error=str(e), cost_time=time.time() - start)
@@ -144,21 +151,44 @@ def evaluate_rag_case(handler, case: Dict[str, Any]) -> CaseResult:
     else:
         recall_kw = 1.0
 
+    # PR4b 多租户硬断言: 检索到的 chunks 不应含其他 tenant 关键词
+    leak_violation = False
+    if expected_must_not_contain:
+        leak_haystack = haystack + " " + " ".join(
+            str(c.get("chunk_id", "") or "") + " " + str(c.get("text", "") or "")
+            for c in chunks
+        )
+        for forbid_kw in expected_must_not_contain:
+            if forbid_kw in leak_haystack:
+                leak_violation = True
+                break
+
     has_citations = 1.0 if citations else 0.0
-    # 通过判定: code SUCCESS 且 file_hit==1 且 recall_kw >= 0.5
-    passed = (
-        resp.get("code") == "SUCCESS"
-        and file_hit == 1.0
-        and recall_kw >= 0.5
-    )
+
+    # 通过判定:
+    # - expected_code != SUCCESS (e.g. TENANT_NOT_FOUND) -> 严格比较 code
+    # - 否则 code == SUCCESS 且 (允许 0 chunks 时不查 file_hit) 且 recall_kw 达标
+    code = resp.get("code")
+    if expected_code and expected_code != "SUCCESS":
+        passed = code == expected_code and not leak_violation
+    else:
+        passed = (
+            code == "SUCCESS"
+            and (allow_zero_chunks or file_hit == 1.0)
+            and recall_kw >= 0.5
+            and not leak_violation
+        )
+
     return CaseResult(
         case_id=cid, case_type="rag", passed=passed,
         metrics={
             "recall_keyword": recall_kw,
             "file_hit": file_hit,
             "has_citations": has_citations,
-            "code": resp.get("code"),
+            "code": code,
             "chunks_count": len(chunks),
+            "leak_violation": leak_violation,
+            "tenant_id": tenant_id,
         },
         cost_time=time.time() - start,
     )

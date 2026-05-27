@@ -31,6 +31,7 @@ modules=(
   "interface/request_response_module"
   "application/api_service_module"
   "benchmarks"
+  "tests/integration"
 )
 
 verbose="${1:-}"

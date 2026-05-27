@@ -1,0 +1,17 @@
+# Task #33 多租户评测数据集
+# 每个 case 显式带 tenant_id, 验证检索结果不串扰。
+#
+# 跑法 (需先用 fixture script 把同一份文档以不同 tenant_id 索引到不同子目录):
+#     python evaluation/run_eval.py --dataset evaluation/datasets/multi_tenancy.jsonl
+#
+# 当前 run/ 下索引只有 default tenant 的文档, 所以 tenant-a / tenant-b 用例
+# 会被 evaluator 标记为 SKIPPED (零检索结果即视为预期, 因为 fixture 未铺好)。
+# Nightly eval 触发前请先运行 scripts/setup_multi_tenant_fixture.sh (留作运维步骤)。
+#
+# 格式跟 rag_basic.jsonl 一致, 多一个 tenant_id 字段 (PR1 RequestEnvelope 已加)。
+# expected_must_not_contain: 跨租户 chunks 不应包含的关键词 (PR4b 防越权读核心断言)。
+
+{"id": "mt-001", "type": "rag", "tenant_id": "default", "query": "日志模块的设计原则", "expected_content_keywords": ["日志", "trace_id"], "expected_must_not_contain": [], "top_k": 5}
+{"id": "mt-002", "type": "rag", "tenant_id": "mt-tenant-a", "query": "tenant-a 私有数据", "expected_content_keywords": [], "expected_must_not_contain": ["tenant-b", "tenant-c"], "top_k": 5, "allow_zero_chunks": true}
+{"id": "mt-003", "type": "rag", "tenant_id": "mt-tenant-b", "query": "tenant-b 公开数据", "expected_content_keywords": [], "expected_must_not_contain": ["tenant-a", "tenant-c"], "top_k": 5, "allow_zero_chunks": true}
+{"id": "mt-004", "type": "rag", "tenant_id": "mt-tenant-nonexist", "query": "不存在租户的查询应该走 TENANT_NOT_FOUND 路径", "expected_code": "TENANT_NOT_FOUND", "top_k": 5}

@@ -20,6 +20,7 @@
 
 | 版本 | 日期 | 修订点 | 评审来源 |
 |---|---|---|---|
+| v1.2 | 2026-05-27 | 收尾: tests/integration/test_multi_tenancy.py (6 个跨模块用例) + evaluation/datasets/multi_tenancy.jsonl (4 个 case, run_eval.py 支持 tenant_id + expected_must_not_contain + expected_code); Task #33 全部 PR 落地完成 | 实施同步 |
 | v1.1 | 2026-05-27 | PR4b 落地: 4 个错误码 + 配额硬限 (vector storage / document count / per-tenant QPS) + TENANT_NOT_FOUND 404 拦截 + DocumentStoreException 新建 | 实施同步 |
 | v1.0 | 2026-05-27 | 4 个开放问题决议落地 (§15);文档状态从"待二次评审"改为"Approved";相关章节(§9.4 grace period / §5.3 key 唯一性 / §6.4 单 worker 假设 / §2.1.3 _system_ 保留)更新具体规则 | v0.2 评审决议 |
 | v0.2 | 2026-05-27 | C1: api_keys 配置反转为 tenant→keys 形式;C2: 新增 §4.3 tenant_id 冲突处理;M1: §10 补写路径策略;M2: §10 补停机/原子迁移/回滚;M3: 错误码 CROSS_TENANT_FORBIDDEN 合并到 404;M4: QUOTA 错误码细分;M5: §7.2 cardinality 上限;M6: §13.1.4 FAISS 实例生命周期;M7: PR3/PR4 各拆 2 个共 6 个 PR;Minor 1-8 全部落地 | v0.1 评审报告 |
@@ -663,6 +664,20 @@ done
 - 单测:每个配额维度独立的"超限触发错误码"用例
 
 **总计 6 PR ~10 人天**,可分 2 个 sprint。
+
+### 实施完成清单 (2026-05-27)
+
+全部 6 PR 已合入 main, commit 链:
+
+| PR | commit | 内容 |
+|---|---|---|
+| PR1 | `8a4501e` | `RequestEnvelope.tenant_id` + `RequestHandler` 单层补齐 |
+| PR2 | `ff861b8` | `api_keys` dict 形式 + 反向映射 + 冲突处理 |
+| PR3a | `0bf309c` | 数据层接口扩展 + 字符集校验 (行为不变) |
+| PR3b | `72f0970` | 目录分区 + 双重读 fallback + 迁移脚本 |
+| PR4a | `f5f7002` | ContextVar + metrics 标签 + top_n 守护 |
+| PR4b | `ab47922` | 配额硬限 + 4 个新错误码 |
+| 集成测试 | (本提交) | `tests/integration/test_multi_tenancy.py` + `evaluation/datasets/multi_tenancy.jsonl` |
 
 ---
 
