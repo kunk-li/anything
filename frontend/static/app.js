@@ -44,6 +44,8 @@
         jobResult: $('job-result'),
         toastContainer: $('toast-container'),
         langBtn: $('lang-btn'),
+        sidebarToggle: $('sidebar-toggle'),
+        sidebar: document.querySelector('.sidebar'),
     };
 
     // i18n shortcut
@@ -201,6 +203,21 @@
             $$('.lang-opt').forEach((b) =>
                 b.classList.toggle('active', b.dataset.locale === curLoc)
             );
+        }
+
+        // 侧栏切换 (移动端用)
+        if (els.sidebarToggle && els.sidebar) {
+            els.sidebarToggle.addEventListener('click', () => {
+                els.sidebar.classList.toggle('open');
+            });
+            // 在窄屏选中 chunk/step 时自动打开侧栏
+            // 点击聊天区时自动关闭侧栏 (移动端 UX)
+            els.messages.addEventListener('click', () => {
+                if (window.innerWidth <= 1100 && els.sidebar.classList.contains('open')) {
+                    // 仅在 sidebar 当前是悬浮态时关闭
+                    els.sidebar.classList.remove('open');
+                }
+            });
         }
 
         // 设置抽屉
@@ -566,6 +583,10 @@
         $$('.side-panel').forEach(p => {
             p.classList.toggle('active', p.dataset.panel === 'retrieved');
         });
+        // 移动端: 自动打开侧栏覆盖层
+        if (window.innerWidth <= 1100 && els.sidebar) {
+            els.sidebar.classList.add('open');
+        }
         const node = els.chunkList.querySelector(`[data-chunk-id="${chunkId}"]`);
         if (node) {
             node.scrollIntoView({ behavior: 'smooth', block: 'center' });

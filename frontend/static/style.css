@@ -100,13 +100,145 @@ body {
     min-height: 0;
 }
 
+/* ===== 桌面/平板分界: 1100px ===== */
+/* >= 1100px: 双栏 (chat | sidebar 360px) */
+/* < 1100px: 单栏, sidebar 变成可切换的覆盖层 */
+
 @media (max-width: 1100px) {
     .app-main {
         grid-template-columns: 1fr;
+        position: relative;
     }
     .sidebar {
-        display: none;
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 360px;
+        max-width: 90vw;
+        z-index: 50;
+        transform: translateX(100%);
+        transition: transform var(--transition);
+        box-shadow: var(--shadow-lg);
+        border-left: 1px solid var(--border);
     }
+    .sidebar.open {
+        transform: translateX(0);
+    }
+    /* 顶栏的 sidebar-toggle 按钮 */
+    .sidebar-toggle { display: inline-flex !important; }
+}
+
+/* 桌面默认隐藏切换按钮 */
+.sidebar-toggle { display: none; }
+
+/* ===== 手机分界: 640px ===== */
+@media (max-width: 640px) {
+    /* header: 紧凑化 */
+    .app-header {
+        padding: 8px 12px;
+        height: auto;
+        min-height: 52px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .subtitle { display: none; }
+    .header-controls {
+        gap: 6px;
+    }
+    .tenant-chip {
+        padding: 3px 6px;
+    }
+    .tenant-chip input { width: 72px; font-size: 11px; }
+    .tenant-chip label { display: none; }
+    .health-badge {
+        padding: 3px 8px;
+        font-size: 11px;
+    }
+    .health-badge span:not(.health-dot) { display: none; } /* 只留 dot */
+
+    /* messages: 缩边距 + 单独消息更紧凑 */
+    .messages {
+        padding: 12px;
+    }
+    .message {
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+    .message-avatar {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
+    }
+    .message-meta {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .message-body {
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+
+    /* composer: 把模式 tab + topk 缩小; 输入栏更宽 */
+    .composer {
+        padding: 8px 12px 10px;
+    }
+    .composer-row { gap: 8px; flex-wrap: wrap; }
+    .mode-tab { padding: 4px 10px; font-size: 11px; }
+    .topk-input input { width: 44px; }
+    #input-text {
+        min-height: 38px;
+        padding: 8px 10px;
+        font-size: 14px; /* 防 iOS 自动放大 */
+    }
+    .send-btn { padding: 0 12px; }
+    .send-label { display: none; }
+    .send-icon { font-size: 18px; }
+
+    /* sidebar: 全宽抽屉 */
+    .sidebar {
+        width: 100%;
+        max-width: 100%;
+    }
+    .side-tab {
+        padding: 10px 6px;
+        font-size: 11px;
+    }
+    .side-tab .badge { display: none; }
+
+    /* drawer 在窄屏全宽 */
+    .drawer-panel {
+        width: 100%;
+        max-width: 100%;
+        border-left: none;
+    }
+
+    /* welcome 缩小 */
+    .welcome {
+        margin: 16px auto;
+    }
+    .welcome h2 { font-size: 18px; }
+    .welcome .hint-list {
+        padding: 12px;
+        font-size: 13px;
+    }
+
+    /* code block 在小屏不让它撑爆 */
+    .md-code-block pre {
+        padding: 10px;
+        font-size: 11px;
+    }
+}
+
+/* ===== 触摸优化: 任何带触摸的设备 ===== */
+@media (hover: none) and (pointer: coarse) {
+    /* 提升点击目标 (Apple HIG 推荐 44px, Material Design 48px) */
+    .icon-btn { width: 36px; height: 36px; }
+    .mode-tab { min-height: 32px; }
+    .side-tab { min-height: 44px; }
+    .send-btn { min-height: 38px; min-width: 44px; }
+    .small-btn { min-height: 36px; padding: 8px 14px; }
+    .citation-chip { padding: 4px 10px; font-size: 12px; }
 }
 
 /* ============== Header ============== */
