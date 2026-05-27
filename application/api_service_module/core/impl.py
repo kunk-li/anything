@@ -35,6 +35,7 @@ class ApiService:
         deps: Optional[BasicDeps] = None,
         document_store_factory=None,
         llm_service=None,
+        index_runner=None,
     ):
         """
         Args:
@@ -49,6 +50,10 @@ class ApiService:
         """
         self.document_store_factory = document_store_factory
         self.llm_service = llm_service
+        # index_runner: Callable[[str file_path], Dict[str,Any]]
+        # 给 /documents/upload 用 — 上传后立刻跑 parse + chunk + embed + upsert,
+        # 让 RAG 检索能立即查到。不传时上传只落盘不索引 (老行为)。
+        self.index_runner = index_runner
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils
@@ -755,7 +760,7 @@ class ApiService:
         async def upload_document(request: Request, file: UploadFile = File(...)):
             trace_id = request.state.trace_id
 
-            # 协议层：仅负责上传与返回落盘信息，不做索引编排
+            # 协议层: 落盘到 upload_dir
             upload_dir = self.config.get_config("api_service.upload_dir", "./uploads")
             Path(upload_dir).mkdir(parents=True, exist_ok=True)
 
@@ -763,15 +768,46 @@ class ApiService:
             content = await file.read()
             file_path.write_bytes(content)
 
+            response_data = {
+                "file_name": file.filename,
+                "stored_path": str(file_path),
+                "indexed": False,
+            }
+
+            # 如果注入了 index_runner, 上传后立刻索引到默认 tenant 的 vector_store。
+            # 这是单 worker 同步操作 (parse + chunk + embed + upsert), 一般 1-3 秒。
+            if self.index_runner is not None:
+                import asyncio as _asyncio
+                try:
+                    loop = _asyncio.get_event_loop()
+                    idx_result = await loop.run_in_executor(
+                        None, lambda: self.index_runner(str(file_path))
+                    )
+                    response_data["indexed"] = True
+                    response_data["index_summary"] = {
+                        "total_chunks": idx_result.get("data", {}).get("total_chunks", 0),
+                        "total_vectors": idx_result.get("data", {}).get("total_vectors", 0),
+                        "documents": idx_result.get("data", {}).get("documents", []),
+                    }
+                    self.logger.info(
+                        f"[upload+index] file={file.filename} "
+                        f"chunks={response_data['index_summary']['total_chunks']} "
+                        f"vectors={response_data['index_summary']['total_vectors']}"
+                    )
+                except Exception as e:
+                    # 索引失败不阻塞上传成功 (文件已落盘), 仅 ERROR 日志
+                    self.logger.error(
+                        f"[upload+index] indexing failed for {file.filename}: {e}",
+                        exc_info=True,
+                    )
+                    response_data["index_error"] = str(e)
+
             return JSONResponse(
                 status_code=200,
                 content={
                     "code": "SUCCESS",
-                    "message": "uploaded",
-                    "data": {
-                        "file_name": file.filename,
-                        "stored_path": str(file_path),
-                    },
+                    "message": "uploaded" + (" + indexed" if response_data["indexed"] else ""),
+                    "data": response_data,
                     "trace_id": trace_id,
                     "retryable": False,
                     "details": None,

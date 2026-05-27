@@ -15,7 +15,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from bootstrap import build_data_layer
 from chunker_module import chunk_document, build_upsert_items
@@ -135,8 +135,11 @@ def build_index(
     source_path: str,
     chunk_size_tokens: int = 400,
     chunk_overlap_tokens: int = 80,
+    data_layer: "Optional[Dict[str, Any]]" = None,
 ) -> Dict[str, Any]:
-    data_layer = build_data_layer()
+    """构建索引. data_layer 不传时现 new (CLI 模式), 传入时复用 (ApiService 模式)."""
+    if data_layer is None:
+        data_layer = build_data_layer()
 
     parser = data_layer.get("document_parser")
     store = data_layer.get("document_store")

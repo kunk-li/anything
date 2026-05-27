@@ -907,9 +907,20 @@
         try {
             const { payload, status } = await ApiClient.uploadDocument(file);
             if (status === 200 && payload?.code === 'SUCCESS') {
+                const d = payload.data || {};
                 els.uploadResult.className = 'upload-result success';
-                els.uploadResult.textContent = `✓ ${payload.data.stored_path}`;
-                toast('success', t('toast.upload.success'), payload.data.file_name);
+                let msg = `✓ ${d.stored_path}`;
+                if (d.indexed && d.index_summary) {
+                    const s = d.index_summary;
+                    msg += `\n  已索引: ${s.total_chunks} chunks, ${s.total_vectors} vectors`;
+                } else if (d.index_error) {
+                    msg += `\n  ⚠ 索引失败: ${d.index_error}`;
+                } else {
+                    msg += `\n  (仅落盘, 未触发索引 - index_runner 未注入)`;
+                }
+                els.uploadResult.textContent = msg;
+                toast('success', t('toast.upload.success'),
+                    d.indexed ? `${d.file_name} + indexed` : d.file_name);
             } else {
                 els.uploadResult.className = 'upload-result error';
                 els.uploadResult.textContent = `× ${payload?.code || status} ${payload?.message || ''}`;

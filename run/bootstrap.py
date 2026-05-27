@@ -294,11 +294,26 @@ def build_application_layer(
             if hasattr(candidate, "list_models") and hasattr(candidate, "register_or_update_model"):
                 llm_service = candidate
 
+        # index_runner: 上传文件后自动触发 parse + chunk + embed + upsert,
+        # 让 /documents/upload 真的能让 RAG 立刻查到。复用现有 data_layer 不重 new。
+        # 走 default tenant 的 vector_store (多租户运行期 upload 走 PR4+ 路径)。
+        index_runner = None
+        if data_layer is not None and data_layer.get("embedding") and data_layer.get("vector_db"):
+            def _index_runner(file_path: str):
+                from index_build import build_index as _build_index
+                return _build_index(
+                    source_type="file",
+                    source_path=file_path,
+                    data_layer=data_layer,
+                )
+            index_runner = _index_runner
+
         result["api_service"] = ApiService(
             handler=handler,
             deps=deps,
             document_store_factory=_doc_store_factory,
             llm_service=llm_service,
+            index_runner=index_runner,
         )
 
     if build_console:
