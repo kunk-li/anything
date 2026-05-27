@@ -206,17 +206,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="--ci 时, 允许的最大错误率")
     args = parser.parse_args(argv)
 
+    # 在 chdir 之前先把相对路径 resolve 为绝对路径,
+    # 否则 run_benchmark 切到 run/ 后, 相对路径会指向 run/<output> 错位
+    output_path = Path(args.output).resolve() if args.output else None
+    baseline_path = Path(args.baseline).resolve() if args.baseline else None
+
     report = run_benchmark(args.concurrency, args.total)
     print_report(report)
 
-    if args.output:
-        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"\n[bench] saved to {args.output}")
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\n[bench] saved to {output_path}")
 
-    if args.baseline and args.ci:
+    if baseline_path and args.ci:
         try:
-            baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
         except Exception as e:
             print(f"[bench] cannot load baseline: {e}")
             return 1

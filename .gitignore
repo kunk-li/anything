@@ -19,3 +19,8 @@ __pycache__/
 /run/state_store/
 /run/vector_store/
 /run/documents/
+/run/benchmarks/
+
+# Benchmark 结果 (机器 / Python 版本相关,不应进 git)
+/benchmarks/baseline*.json
+/benchmarks/results*.json
