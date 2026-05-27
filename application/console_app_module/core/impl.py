@@ -12,10 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from .base import BaseConsoleApp
 
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import ExceptionHandler
+from deps_module import BasicDeps, build_basic_deps
 
 
 class ConsoleApp(BaseConsoleApp):
@@ -27,15 +24,14 @@ class ConsoleApp(BaseConsoleApp):
         input_provider=None,
         renderer=None,
         history_store=None,
+        deps: Optional[BasicDeps] = None,
     ):
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        if hasattr(self.config, "load_config"):
-            self.config.load_config()
-        elif hasattr(self.config, "load"):
-            self.config.load()
-        self.exception_handler = ExceptionHandler()
+        # 基础依赖优先走 DI 注入
+        deps = deps or build_basic_deps()
+        self.utils = deps.utils
+        self.logger = deps.logger
+        self.config = deps.config
+        self.exception_handler = deps.exception_handler
 
         self.handler = handler
         self.input_provider = input_provider

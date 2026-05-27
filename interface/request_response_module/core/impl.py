@@ -11,28 +11,24 @@ from typing import Dict, Any, Optional, Tuple
 from .base import BaseRequestHandler
 from ..utils.tool_functions import validate_request_params, build_error_details
 
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import ExceptionHandler
+from deps_module import BasicDeps, build_basic_deps
 
 
 class RequestHandler(BaseRequestHandler):
     """标准请求响应处理实现类：参数校验 + 调度调用 + 响应封装，系统默认实现"""
 
-    def __init__(self, orchestrator):
+    def __init__(self, orchestrator, deps: Optional[BasicDeps] = None):
         """
         初始化处理模块，注入协同调度实例，加载系统配置
         :param orchestrator: 协同调度模块实例（建议实现 BaseOrchestrator 接口）
+        :param deps: 基础依赖容器；未提供时自行构造（向后兼容）
         """
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        if hasattr(self.config, "load_config"):
-            self.config.load_config()
-        elif hasattr(self.config, "load"):
-            self.config.load()
-        self.exception_handler = ExceptionHandler()
+        # 基础依赖优先走 DI 注入
+        deps = deps or build_basic_deps()
+        self.utils = deps.utils
+        self.logger = deps.logger
+        self.config = deps.config
+        self.exception_handler = deps.exception_handler
 
         self.orchestrator = orchestrator
 

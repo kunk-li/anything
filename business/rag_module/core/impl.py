@@ -10,10 +10,7 @@ from typing import Dict, Any, List, Optional
 from llm_compat import call_llm_compat
 from .base import BaseRAG
 
-from common_utils_module.core.impl import CommonUtils
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import ExceptionHandler
+from deps_module import BasicDeps, build_basic_deps
 
 
 class SimpleRAG(BaseRAG):
@@ -26,15 +23,14 @@ class SimpleRAG(BaseRAG):
         vector_db=None,
         doc_store=None,
         reranker=None,
+        deps: Optional[BasicDeps] = None,
     ):
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        if hasattr(self.config, "load_config"):
-            self.config.load_config()
-        elif hasattr(self.config, "load"):
-            self.config.load()
-        self.exception_handler = ExceptionHandler()
+        # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
+        deps = deps or build_basic_deps()
+        self.utils = deps.utils
+        self.logger = deps.logger
+        self.config = deps.config
+        self.exception_handler = deps.exception_handler
 
         self.llm_client = llm_client
         self.embedding = embedding

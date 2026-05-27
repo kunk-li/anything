@@ -11,6 +11,7 @@ from common_utils_module import CommonUtils
 from config_module import ConfigManager
 from log_module import SystemLogger
 from exception_module import ExceptionHandler
+from deps_module import BasicDeps, build_basic_deps
 
 # 数据层
 from document_parser_module.core.impl import LocalDocumentParser
@@ -53,22 +54,17 @@ class DictToolRegistry:
 
 
 def build_basic_support() -> Dict[str, Any]:
-    """构建基础支撑层"""
-    config = ConfigManager()
-    if hasattr(config, "load_config"):
-        config.load_config()
-    elif hasattr(config, "load"):
-        config.load()
+    """构建基础支撑层（基于 BasicDeps 容器,内部单例共享）。
 
-    logger = SystemLogger()
-    exception_handler = ExceptionHandler()
-    utils = CommonUtils()
-
+    返回 dict 以保持向后兼容;若调用方需要容器引用,推荐改用 build_basic_deps()。
+    """
+    deps = build_basic_deps()
     return {
-        "config": config,
-        "logger": logger,
-        "exception_handler": exception_handler,
-        "utils": utils,
+        "config": deps.config,
+        "logger": deps.logger,
+        "exception_handler": deps.exception_handler,
+        "utils": deps.utils,
+        "deps": deps,  # 暴露容器本身,便于业务/接口/应用层注入
     }
 
 
@@ -127,9 +123,13 @@ def build_data_layer(use_dummy_llm: bool = True) -> Dict[str, Any]:
     }
 
 
-def build_business_layer(data_layer: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """构建业务层"""
+def build_business_layer(
+    data_layer: Optional[Dict[str, Any]] = None,
+    deps: Optional[BasicDeps] = None,
+) -> Dict[str, Any]:
+    """构建业务层（共享 BasicDeps，避免每个模块重复 new 基础组件）"""
     data_layer = data_layer or build_data_layer()
+    deps = deps or build_basic_deps()
 
     rag = SimpleRAG(
         llm_client=data_layer.get("llm_client"),
@@ -137,6 +137,7 @@ def build_business_layer(data_layer: Optional[Dict[str, Any]] = None) -> Dict[st
         vector_db=data_layer.get("vector_db"),
         doc_store=data_layer.get("document_store"),
         reranker=None,
+        deps=deps,
     )
 
     tool_registry = DictToolRegistry()
@@ -180,11 +181,13 @@ def build_business_layer(data_layer: Optional[Dict[str, Any]] = None) -> Dict[st
         timeout=60,
         max_retries=2,
         session_prefix="session",
+        deps=deps,
     )
 
     orchestrator = SimpleOrchestrator(
         rag_runner=rag,
         agent_runner=agent,
+        deps=deps,
     )
 
     return {
@@ -195,10 +198,14 @@ def build_business_layer(data_layer: Optional[Dict[str, Any]] = None) -> Dict[st
     }
 
 
-def build_interface_layer(business_layer: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """构建接口层"""
-    business_layer = business_layer or build_business_layer()
-    handler = RequestHandler(orchestrator=business_layer["orchestrator"])
+def build_interface_layer(
+    business_layer: Optional[Dict[str, Any]] = None,
+    deps: Optional[BasicDeps] = None,
+) -> Dict[str, Any]:
+    """构建接口层（共享 BasicDeps）"""
+    deps = deps or build_basic_deps()
+    business_layer = business_layer or build_business_layer(deps=deps)
+    handler = RequestHandler(orchestrator=business_layer["orchestrator"], deps=deps)
     return {"handler": handler}
 
 
@@ -206,15 +213,17 @@ def build_application_layer(
     interface_layer: Optional[Dict[str, Any]] = None,
     build_api: bool = True,
     build_console: bool = False,
+    deps: Optional[BasicDeps] = None,
 ) -> Dict[str, Any]:
-    """构建应用层（按需构建，避免 API 启动时强依赖 ConsoleApp）"""
-    interface_layer = interface_layer or build_interface_layer()
+    """构建应用层（共享 BasicDeps,按需构建,避免 API 启动时强依赖 ConsoleApp）"""
+    deps = deps or build_basic_deps()
+    interface_layer = interface_layer or build_interface_layer(deps=deps)
     handler = interface_layer["handler"]
 
     result: Dict[str, Any] = {}
 
     if build_api:
-        result["api_service"] = ApiService(handler=handler)
+        result["api_service"] = ApiService(handler=handler, deps=deps)
 
     if build_console:
         console_app = ConsoleApp(
@@ -222,6 +231,7 @@ def build_application_layer(
             input_provider=None,
             renderer=None,
             history_store=None,
+            deps=deps,
         )
         result["console_app"] = console_app
 
@@ -229,34 +239,39 @@ def build_application_layer(
 
 
 def build_handler() -> RequestHandler:
-    """直接构建统一 RequestHandler"""
-    business_layer = build_business_layer()
-    interface_layer = build_interface_layer(business_layer=business_layer)
+    """直接构建统一 RequestHandler（DI 共享一份 BasicDeps）"""
+    deps = build_basic_deps()
+    business_layer = build_business_layer(deps=deps)
+    interface_layer = build_interface_layer(business_layer=business_layer, deps=deps)
     return interface_layer["handler"]
 
 def build_api_app():
-    """构建 FastAPI app"""
-    app_layer = build_application_layer(build_api=True, build_console=False)
+    """构建 FastAPI app（DI 共享一份 BasicDeps）"""
+    deps = build_basic_deps()
+    app_layer = build_application_layer(build_api=True, build_console=False, deps=deps)
     return app_layer["api_service"].app
 
 
 
 def build_console_app() -> ConsoleApp:
-    """构建控制台应用"""
-    app_layer = build_application_layer(build_api=False, build_console=True)
+    """构建控制台应用（DI 共享一份 BasicDeps）"""
+    deps = build_basic_deps()
+    app_layer = build_application_layer(build_api=False, build_console=True, deps=deps)
     return app_layer["console_app"]
 
 
 def build_all(include_console: bool = False) -> Dict[str, Any]:
-    """完整构建所有层，便于调试或测试"""
+    """完整构建所有层（基础依赖 DI 共享,便于调试或测试）"""
     basic = build_basic_support()
+    deps = basic["deps"]  # 由 build_basic_support 暴露的容器
     data = build_data_layer()
-    business = build_business_layer(data_layer=data)
-    interface = build_interface_layer(business_layer=business)
+    business = build_business_layer(data_layer=data, deps=deps)
+    interface = build_interface_layer(business_layer=business, deps=deps)
     app = build_application_layer(
         interface_layer=interface,
         build_api=True,
         build_console=include_console,
+        deps=deps,
     )
 
     return {
