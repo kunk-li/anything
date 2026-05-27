@@ -5,12 +5,13 @@ API 服务模块具体实现类
 """
 
 import json
+import threading
 import time
 import uuid
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from deps_module import BasicDeps, build_basic_deps
 
@@ -41,11 +42,73 @@ class ApiService:
             self.config.get_config("api_service.enable_health_details", True)
         )
 
+        # 简单的 in-memory metrics, 通过 /metrics 端点暴露为 Prometheus 文本格式
+        # (单进程跑 uvicorn 够用; 多 worker 需后续接 prometheus_client + multiprocess mode)
+        self._metrics_lock = threading.Lock()
+        self._metrics: Dict[str, Dict[str, float]] = {
+            "requests_by_type": {},        # type ("rag"/"agent"/"hybrid"/"unknown") -> count
+            "errors_by_code": {},          # error code -> count
+            "duration_sum_by_type": {},    # type -> sum(seconds)
+            "duration_count_by_type": {},  # type -> count(用于算平均)
+        }
+
         self._register_middlewares()
         self._register_routes()
         self._register_exception_handlers()
 
         self.logger.info("API 服务模块初始化完成")
+
+    def _record_metrics(self, req_type: str, code: str, duration: float) -> None:
+        """更新 metrics 计数. 持锁是因为 FastAPI 可能并发处理多请求."""
+        with self._metrics_lock:
+            req_type = req_type or "unknown"
+            self._metrics["requests_by_type"][req_type] = (
+                self._metrics["requests_by_type"].get(req_type, 0) + 1
+            )
+            if code != "SUCCESS":
+                self._metrics["errors_by_code"][code] = (
+                    self._metrics["errors_by_code"].get(code, 0) + 1
+                )
+            self._metrics["duration_sum_by_type"][req_type] = (
+                self._metrics["duration_sum_by_type"].get(req_type, 0.0) + duration
+            )
+            self._metrics["duration_count_by_type"][req_type] = (
+                self._metrics["duration_count_by_type"].get(req_type, 0) + 1
+            )
+
+    def _render_prometheus_metrics(self) -> str:
+        """把 in-memory metrics 渲染为 Prometheus 文本格式."""
+        with self._metrics_lock:
+            snapshot = {
+                k: dict(v) for k, v in self._metrics.items()
+            }
+
+        lines = []
+
+        lines.append("# HELP anything_requests_total Total RAG/Agent requests handled")
+        lines.append("# TYPE anything_requests_total counter")
+        for t, n in snapshot["requests_by_type"].items():
+            lines.append(f'anything_requests_total{{type="{t}"}} {int(n)}')
+
+        lines.append("")
+        lines.append("# HELP anything_errors_total Total non-SUCCESS responses by code")
+        lines.append("# TYPE anything_errors_total counter")
+        for code, n in snapshot["errors_by_code"].items():
+            lines.append(f'anything_errors_total{{code="{code}"}} {int(n)}')
+
+        lines.append("")
+        lines.append("# HELP anything_request_duration_seconds_sum Cumulative request duration")
+        lines.append("# TYPE anything_request_duration_seconds_sum counter")
+        for t, s in snapshot["duration_sum_by_type"].items():
+            lines.append(f'anything_request_duration_seconds_sum{{type="{t}"}} {s:.6f}')
+
+        lines.append("")
+        lines.append("# HELP anything_request_duration_seconds_count Total samples for duration")
+        lines.append("# TYPE anything_request_duration_seconds_count counter")
+        for t, n in snapshot["duration_count_by_type"].items():
+            lines.append(f'anything_request_duration_seconds_count{{type="{t}"}} {int(n)}')
+
+        return "\n".join(lines) + "\n"
 
     # =========================
     # 中间件与异常处理
@@ -192,8 +255,16 @@ class ApiService:
 
             # 5. 应用层只负责业务码 -> HTTP 状态码映射
             http_status = self._map_code_to_http_status(result.get("code", "UNKNOWN_ERROR"))
+            duration = time.time() - start_time
             headers = {"X-Request-Id": trace_id}
-            headers["X-Cost-Time"] = str(round(time.time() - start_time, 3))
+            headers["X-Cost-Time"] = str(round(duration, 3))
+
+            # 6. 记录 metrics (异步级别开销极低)
+            self._record_metrics(
+                req_type=str(body.get("type", "unknown")),
+                code=str(result.get("code", "UNKNOWN_ERROR")),
+                duration=duration,
+            )
 
             return JSONResponse(
                 status_code=http_status,
@@ -237,6 +308,23 @@ class ApiService:
                     "details": None,
                 },
                 headers={"X-Request-Id": trace_id},
+            )
+
+        @self.app.get("/metrics")
+        async def metrics(request: Request):
+            """Prometheus 文本格式 metrics 端点.
+
+            可以直接被 Prometheus / VictoriaMetrics 抓取,无需中间件.
+            示例 prometheus.yml scrape_config:
+                - job_name: anything
+                  static_configs:
+                    - targets: ['localhost:8000']
+            """
+            return PlainTextResponse(
+                content=self._render_prometheus_metrics(),
+                status_code=200,
+                headers={"X-Request-Id": request.state.trace_id},
+                media_type="text/plain; version=0.0.4; charset=utf-8",
             )
 
         @self.app.post("/documents/upload")
