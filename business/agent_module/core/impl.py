@@ -55,6 +55,10 @@ class SimpleAgent(BaseAgent):
         self.use_llm_planner = bool(self.config.get_config("agent.use_llm_planner", True))
         # LLM 规划最多生成的 step 数,避免无限链路
         self.max_planner_steps = int(self.config.get_config("agent.max_planner_steps", 3))
+        # 执行策略: "single_shot" (默认,一次性规划 + 顺序执行) 或 "react" (多轮 observe-reflect-next)
+        self.execution_strategy = self.config.get_config("agent.execution_strategy", "single_shot")
+        # ReAct 模式最大轮数
+        self.max_react_iterations = int(self.config.get_config("agent.max_react_iterations", 5))
 
         self.logger.info("Agent 模块初始化完成")
 
@@ -74,7 +78,14 @@ class SimpleAgent(BaseAgent):
         return True
 
     def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """执行 Agent 任务，统一接收标准 request dict"""
+        """执行 Agent 任务，统一接收标准 request dict。
+
+        策略分发(由 self.execution_strategy 控制):
+            - "single_shot" (默认): parse_task 一次性输出全部 steps -> 顺序执行 -> 聚合
+            - "react": 多轮 observe-reflect-next 循环, 每步 LLM 决定下一动作
+
+        ReAct 模式失败/不可用时优雅降级到 single_shot, 主链路永远有响应。
+        """
         start_time = time.time()
 
         task = request.get("task")
@@ -101,10 +112,27 @@ class SimpleAgent(BaseAgent):
         timeout = int(request.get("timeout") or self.timeout)
         max_retries = int(request.get("max_retries") or self.max_retries)
         execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
+        # 单次请求可通过 extra_params.execution_strategy 覆盖全局设置
+        strategy = extra_params.get("execution_strategy", self.execution_strategy)
+
+        # ReAct 模式优先(hybrid 由文档定义为固定流水线,不走 ReAct)
+        if strategy == "react" and execution_mode != "hybrid":
+            react_result = self._react_execute(
+                task=task,
+                session_id=session_id,
+                trace_id=trace_id,
+                extra_params=extra_params,
+                start_time=start_time,
+            )
+            if react_result is not None:
+                return react_result
+            self.logger.warning(
+                f"[react] 多轮规划不可用(无 LLM 通道/任务不适合),fallback 到 single_shot: trace_id={trace_id}"
+            )
 
         try:
             self.logger.info(
-                f"Agent执行开始：session_id={session_id}, trace_id={trace_id}, mode={execution_mode}"
+                f"Agent执行开始：session_id={session_id}, trace_id={trace_id}, mode={execution_mode}, strategy={strategy}"
             )
 
             self._append_state_event(
@@ -114,6 +142,7 @@ class SimpleAgent(BaseAgent):
                 payload={
                     "task": task,
                     "execution_mode": execution_mode,
+                    "execution_strategy": strategy,
                     "timeout": timeout,
                     "max_retries": max_retries,
                 },
@@ -285,6 +314,238 @@ class SimpleAgent(BaseAgent):
             "task": task,
             "steps": steps,
             "plan_source": "rule_based",
+        }
+
+    # =========================
+    # 规划: ReAct 多轮循环
+    # =========================
+    def _react_execute(
+            self,
+            task: str,
+            session_id: str,
+            trace_id: Optional[str],
+            extra_params: Dict[str, Any],
+            start_time: float,
+    ) -> Optional[Dict[str, Any]]:
+        """ReAct 多轮循环: observe -> reflect -> next, 直到 final_answer 或 max iterations。
+
+        返回:
+            统一响应信封 dict (完整结果),或 None 表示"无法走 ReAct"(由 execute 降级到 single_shot)
+        """
+        llm_call = self._resolve_llm_planner(trace_id=trace_id)
+        if llm_call is None:
+            return None
+        available_tools = self._available_tool_names()
+        if not available_tools:
+            return None
+
+        self._append_state_event(
+            session_id=session_id, event_type="react_started", trace_id=trace_id,
+            payload={"task": task, "max_iterations": self.max_react_iterations},
+        )
+
+        history: List[Dict[str, Any]] = []  # 每项 {thought, action?, observation?, final_answer?}
+        tool_results: List[Dict[str, Any]] = []
+        final_answer: Optional[str] = None
+        last_observation: Optional[Dict[str, Any]] = None
+
+        for iteration in range(1, self.max_react_iterations + 1):
+            prompt = self._build_react_prompt(
+                task=task,
+                available_tools=available_tools,
+                history=history,
+                iteration=iteration,
+                max_iterations=self.max_react_iterations,
+            )
+            try:
+                raw = llm_call(prompt)
+            except Exception as e:
+                self.logger.warning(f"[react] LLM 调用异常 iter={iteration}: {e}")
+                return None  # 完全不可用 -> 降级 single_shot
+
+            step = self._parse_react_response(raw, available_tools)
+            if step is None:
+                self.logger.warning(f"[react] LLM 输出无法解析 iter={iteration}, fallback")
+                return None
+
+            thought = step.get("thought", "")
+            self._append_state_event(
+                session_id=session_id, event_type="react_thought", trace_id=trace_id,
+                payload={"iteration": iteration, "thought": thought[:200]},
+            )
+
+            # 终止条件: LLM 输出 final_answer
+            if "final_answer" in step:
+                final_answer = str(step["final_answer"])
+                history.append({"thought": thought, "final_answer": final_answer})
+                self._append_state_event(
+                    session_id=session_id, event_type="react_final", trace_id=trace_id,
+                    payload={"iteration": iteration, "final_answer_preview": final_answer[:200]},
+                )
+                break
+
+            # 执行 action
+            action = step.get("action") or {}
+            tool_name = action.get("tool")
+            tool_input = action.get("input") or {}
+            tool_input.setdefault("trace_id", trace_id)
+            tool_input.setdefault("session_id", session_id)
+            tool_input.setdefault("extra_params", extra_params)
+
+            self._append_state_event(
+                session_id=session_id, event_type="react_action", trace_id=trace_id,
+                payload={"iteration": iteration, "tool_name": tool_name},
+            )
+            tool_result = self._call_tool_with_retry(
+                step={"step_id": f"react_{iteration}", "tool_name": tool_name, "input_data": tool_input},
+                session_id=session_id,
+                trace_id=trace_id,
+                max_retries=self.max_retries,
+            )
+            tool_results.append(tool_result)
+            observation = self._summarize_tool_output(tool_result.get("output"))
+            last_observation = tool_result
+
+            history.append({"thought": thought, "action": {"tool": tool_name, "input": tool_input}, "observation": observation})
+            self._append_state_event(
+                session_id=session_id, event_type="react_observation", trace_id=trace_id,
+                payload={"iteration": iteration, "tool_name": tool_name, "success": tool_result.get("success"), "obs": observation[:200]},
+            )
+
+        # 循环结束: 整合最终结果
+        if final_answer is None and last_observation is not None:
+            # 没有输出 final_answer 就用最后观察作为答案
+            output = last_observation.get("output") or {}
+            if isinstance(output, dict):
+                data = output.get("data") or {}
+                final_answer = data.get("answer") or data.get("text") or self._summarize_tool_output(output)
+            else:
+                final_answer = str(output)
+        if not final_answer:
+            final_answer = "ReAct 循环未产出可用答案"
+
+        self._append_state_event(
+            session_id=session_id, event_type="react_completed", trace_id=trace_id,
+            payload={"iterations_used": len(history), "had_final_answer": "final_answer" in history[-1] if history else False},
+        )
+
+        cost_time = round(time.time() - start_time, 3)
+        return {
+            "code": "SUCCESS",
+            "message": "ok",
+            "data": {
+                "answer": final_answer,
+                "session_id": session_id,
+                "trace_id": trace_id,
+                "execution_mode": "react",
+                "execution_strategy": "react",
+                "iterations_used": len(history),
+                "react_history": [
+                    {
+                        "iteration": i + 1,
+                        "thought": (h.get("thought") or "")[:200],
+                        "action": h.get("action"),
+                        "observation_preview": (h.get("observation") or "")[:200] if h.get("observation") else None,
+                        "final_answer": h.get("final_answer"),
+                    }
+                    for i, h in enumerate(history)
+                ],
+                "tool_results_summary": [
+                    {"tool_name": tr.get("tool_name"), "success": tr.get("success")}
+                    for tr in tool_results
+                ],
+                "citations": [],
+                "retrieved_chunks": [],
+            },
+            "trace_id": trace_id,
+            "retryable": False,
+            "details": None,
+            "cost_time": cost_time,
+        }
+
+    @staticmethod
+    def _build_react_prompt(
+            task: str,
+            available_tools: List[str],
+            history: List[Dict[str, Any]],
+            iteration: int,
+            max_iterations: int,
+    ) -> str:
+        """构造 ReAct prompt: 任务 + 工具 + 历史 + 期望输出格式"""
+        tool_docs = {
+            "rag_search": '{"query": str, "top_k": int}',
+            "llm_generate": '{"prompt": str}',
+        }
+        tool_lines = [f"- {n}: input={tool_docs.get(n, '{}')}"
+                      for n in available_tools]
+
+        history_lines = []
+        for i, h in enumerate(history, start=1):
+            history_lines.append(f"Iteration {i}:")
+            if h.get("thought"):
+                history_lines.append(f"  Thought: {h['thought']}")
+            if h.get("action"):
+                a = h["action"]
+                history_lines.append(f"  Action: {a.get('tool')}({a.get('input')})")
+            if h.get("observation"):
+                history_lines.append(f"  Observation: {h['observation'][:300]}")
+
+        history_text = "\n".join(history_lines) if history_lines else "(尚无历史)"
+
+        return (
+            f"你是一个 ReAct 模式智能代理。当前任务: {task}\n"
+            f"\n"
+            f"可用工具:\n" + "\n".join(tool_lines) + "\n"
+            f"\n"
+            f"历史:\n{history_text}\n"
+            f"\n"
+            f"这是第 {iteration}/{max_iterations} 轮。请输出下一步思考与动作。\n"
+            f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
+            f"\n"
+            f"请只输出严格 JSON(不要解释/markdown 围栏),二选一格式:\n"
+            f'{{"thought": "<推理>", "action": {{"tool": "<工具名>", "input": {{...}}}}}}\n'
+            f'或\n'
+            f'{{"thought": "<推理>", "final_answer": "<最终回答>"}}\n'
+        )
+
+    @staticmethod
+    def _parse_react_response(
+            raw: str,
+            available_tools: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """从 LLM 输出抠出 JSON,校验结构合法性。"""
+        if not raw or not isinstance(raw, str):
+            return None
+        candidate = raw.strip()
+        if candidate.startswith("```"):
+            candidate = re.sub(r"^```[a-zA-Z]*\n?", "", candidate)
+            candidate = re.sub(r"```\s*$", "", candidate).strip()
+        match = re.search(r"\{[\s\S]*\}", candidate)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+
+        # 二选一: final_answer 或 action
+        if "final_answer" in parsed:
+            return {"thought": parsed.get("thought", ""), "final_answer": parsed["final_answer"]}
+
+        action = parsed.get("action")
+        if not isinstance(action, dict):
+            return None
+        tool_name = action.get("tool")
+        if tool_name not in set(available_tools):
+            return None
+        return {
+            "thought": parsed.get("thought", ""),
+            "action": {
+                "tool": tool_name,
+                "input": action.get("input") or {},
+            },
         }
 
     # =========================
