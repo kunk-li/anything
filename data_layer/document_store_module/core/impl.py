@@ -24,8 +24,8 @@ from ..utils.tool_functions import (
     json_load,
 )
 
-from config_module import ConfigManager  # type: ignore
-from log_module import SystemLogger  # type: ignore
+# 注: ConfigManager / SystemLogger 由 deps 注入,不在此直接 import
+from deps_module import BasicDeps
 
 
 
@@ -38,9 +38,11 @@ class LocalDocumentStore(BaseDocumentStore):
     - Hash map:      {storage_dir}/.hash_doc_map.json (hash -> doc_id)
     """
 
-    def __init__(self):
-        self.config_manager = ConfigManager()
-        self.logger = SystemLogger()
+    def __init__(self, deps: Optional[BasicDeps] = None):
+        from deps_module import build_basic_deps
+        deps = deps or build_basic_deps()
+        self.config_manager = deps.config
+        self.logger = deps.logger
 
         defaults = DocumentStoreConfig()
 

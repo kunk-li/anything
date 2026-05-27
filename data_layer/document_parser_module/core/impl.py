@@ -103,9 +103,21 @@ class LocalDocumentParser(BaseDocumentParser):
     负责解析 txt/pdf/docx/md/py/excel/ppt/pptx/csv/json/xml 为文本，不做存储，返回统一标准结构。
     """
 
-    def __init__(self):
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
+    def __init__(self, deps=None):
+        # deps: 可选 BasicDeps,未注入时构造一份(向后兼容)
+        if deps is not None:
+            self.utils = deps.utils
+            self.logger = deps.logger
+        else:
+            try:
+                from deps_module import build_basic_deps
+                _deps = build_basic_deps()
+                self.utils = _deps.utils
+                self.logger = _deps.logger
+            except Exception:
+                # 极端情况下 deps_module 不可用,沿用兼容 import 的实现
+                self.utils = CommonUtils()
+                self.logger = SystemLogger()
         self.supported_file_types = list(SUPPORTED_FILE_TYPES)
 
     # ------------------------

@@ -11,10 +11,8 @@ from ..utils.tool_functions import normalize_embeddings, validate_vectors, match
 from ..config.config import VectorDBConfig
 
 # 依赖模块（基础支撑层）
-try:
-    from log_module.core.impl import SystemLogger
-except Exception:  # pragma: no cover
-    SystemLogger = None  # type: ignore
+# 注: logger 改由 deps 注入; SystemLogger 不再直接 import
+from deps_module import BasicDeps
 
 try:
     from exception_module.core.impl import VectorDBException
@@ -52,7 +50,7 @@ class FaissVectorDB(BaseVectorDB):
     - 更新策略：IndexFlatIP 不支持原位更新，因此 upsert 会在内存中更新映射并重建索引
     """
 
-    def __init__(self, cfg: Optional[VectorDBConfig] = None):
+    def __init__(self, cfg: Optional[VectorDBConfig] = None, deps: Optional[BasicDeps] = None):
         self.cfg = cfg or VectorDBConfig()
         self.dim = int(self.cfg.get_vector_dimension())
         self.store_dir = self.cfg.get_local_store_dir()
@@ -67,7 +65,12 @@ class FaissVectorDB(BaseVectorDB):
         self.meta_path = os.path.join(self.store_dir, "meta.json")
         self.emb_path = os.path.join(self.store_dir, "embeddings.npy")
 
-        self.logger = SystemLogger() if SystemLogger is not None else None
+        # logger 优先走 DI 注入;未注入时延迟构造一份(向后兼容)
+        if deps is not None:
+            self.logger = deps.logger
+        else:
+            from deps_module import build_basic_deps
+            self.logger = build_basic_deps().logger
 
         # 内存数据结构
         self.id_map: List[str] = []

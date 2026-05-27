@@ -87,12 +87,17 @@ def _build_component(name: str, factory, hint: str = "") -> Any:
         ) from e
 
 
-def build_data_layer(use_dummy_llm: Optional[bool] = None) -> Dict[str, Any]:
-    """构建数据层(fail-fast)。
+def build_data_layer(
+    use_dummy_llm: Optional[bool] = None,
+    deps: Optional[BasicDeps] = None,
+) -> Dict[str, Any]:
+    """构建数据层(fail-fast + 共享 BasicDeps)。
 
     参数:
         use_dummy_llm: None 表示根据 dev_mode 自动决定(dev=True / 生产=False);
                        显式 True/False 优先于环境变量
+        deps: 基础依赖容器;未提供时构造一份并向数据层各 impl 注入,确保整条
+              装配链共享同一个 ConfigManager/SystemLogger 等
 
     生产/严格模式(默认):
         - 任一关键组件初始化失败 → 抛 StartupError,系统拒绝启动
@@ -105,10 +110,11 @@ def build_data_layer(use_dummy_llm: Optional[bool] = None) -> Dict[str, Any]:
     dev = is_dev_mode()
     if use_dummy_llm is None:
         use_dummy_llm = dev
+    deps = deps or build_basic_deps()
 
     # LLM client: 失败时 dev 模式回退 Dummy,生产抛 StartupError
     try:
-        llm_client = LLMService()
+        llm_client = LLMService(deps=deps)
         print(f"[bootstrap] llm_client 已启用真实 LLMService: {type(llm_client).__name__}")
     except Exception as e:
         if use_dummy_llm:
@@ -121,15 +127,15 @@ def build_data_layer(use_dummy_llm: Optional[bool] = None) -> Dict[str, Any]:
                 hint="检查 llm 配置(api_key/api_base/model_name);或设置 ANYTHING_DEV_MODE=1 启用 DummyLLMClient",
             ) from e
 
-    embedding = _build_component("embedding", STEmbedding,
+    embedding = _build_component("embedding", lambda: STEmbedding(deps=deps),
                                  hint="检查 sentence-transformers 模型是否可用")
-    vector_db = _build_component("vector_db", FaissVectorDB,
+    vector_db = _build_component("vector_db", lambda: FaissVectorDB(deps=deps),
                                  hint="检查 faiss-cpu 是否安装,以及 vector_db.vector_dimension 配置")
-    document_store = _build_component("document_store", LocalDocumentStore,
+    document_store = _build_component("document_store", lambda: LocalDocumentStore(deps=deps),
                                       hint="检查 document_store.dir 配置与目录写入权限")
-    state_store = _build_component("state_store", LocalStateStore,
+    state_store = _build_component("state_store", lambda: LocalStateStore(deps=deps),
                                    hint="检查 state_store.dir 配置与目录写入权限")
-    document_parser = _build_component("document_parser", LocalDocumentParser,
+    document_parser = _build_component("document_parser", lambda: LocalDocumentParser(deps=deps),
                                        hint="检查文档解析依赖(pypdf/python-docx 等)")
 
     return {
@@ -147,8 +153,9 @@ def build_business_layer(
     deps: Optional[BasicDeps] = None,
 ) -> Dict[str, Any]:
     """构建业务层（共享 BasicDeps，避免每个模块重复 new 基础组件）"""
-    data_layer = data_layer or build_data_layer()
     deps = deps or build_basic_deps()
+    # 把 deps 也传到 data_layer,确保全链路共享同一份基础组件
+    data_layer = data_layer or build_data_layer(deps=deps)
 
     rag = SimpleRAG(
         llm_client=data_layer.get("llm_client"),
@@ -283,7 +290,7 @@ def build_all(include_console: bool = False) -> Dict[str, Any]:
     """完整构建所有层（基础依赖 DI 共享,便于调试或测试）"""
     basic = build_basic_support()
     deps = basic["deps"]  # 由 build_basic_support 暴露的容器
-    data = build_data_layer()
+    data = build_data_layer(deps=deps)
     business = build_business_layer(data_layer=data, deps=deps)
     interface = build_interface_layer(business_layer=business, deps=deps)
     app = build_application_layer(

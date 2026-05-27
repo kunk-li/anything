@@ -24,10 +24,11 @@ from llm_adapter_module.utils.tool_functions import (
     merge_media_from_file_and_request, hydrate_media_base64, safe_dict,
 )
 
-# 基础支撑层依赖（外部已实现）
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
-from exception_module.core.impl import ExceptionHandler, ConfigException, SystemBaseException
+# 基础支撑层依赖
+# 注: ConfigManager / SystemLogger / ExceptionHandler 由 deps 注入,不在此 import;
+#     ConfigException / SystemBaseException 是异常类,本模块需要 catch,故保留 import。
+from exception_module.core.impl import ConfigException, SystemBaseException
+from deps_module import BasicDeps
 
 
 class _BaseHTTPAdapterMixin:
@@ -310,11 +311,12 @@ class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
 class LLMService(BaseLLMService):
     """大模型统一服务实现：对外唯一入口"""
 
-    def __init__(self):
-        self.logger = SystemLogger()
-        self.exception_handler = ExceptionHandler()
-        self.config_manager = ConfigManager()
-        self.config_manager.load_config()
+    def __init__(self, deps: Optional[BasicDeps] = None):
+        from deps_module import build_basic_deps
+        deps = deps or build_basic_deps()
+        self.logger = deps.logger
+        self.exception_handler = deps.exception_handler
+        self.config_manager = deps.config
         self.cfg = LLMAdapterConfig(self.config_manager)
 
         self.adapters: Dict[str, Any] = {}  # model_name -> adapter

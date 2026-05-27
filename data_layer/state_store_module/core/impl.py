@@ -15,9 +15,8 @@ from state_store_module.utils.tool_functions import (
     list_session_files,
 )
 
-from config_module.core.impl import ConfigManager
-from log_module.core.impl import SystemLogger
 from exception_module.core.impl import SystemBaseException
+from deps_module import BasicDeps
 
 
 class StateStoreException(SystemBaseException):
@@ -37,11 +36,23 @@ class LocalStateStore(BaseStateStore):
     def __init__(
         self,
         store_dir: Optional[str] = None,
-        config_manager: Optional[ConfigManager] = None,
-        logger: Optional[SystemLogger] = None,
+        deps: Optional[BasicDeps] = None,
+        # 旧风格兼容入参(已废弃,保留是为了不破坏既有调用)
+        config_manager=None,
+        logger=None,
     ):
-        self.config_manager = config_manager or ConfigManager()
-        self.logger = logger or SystemLogger()
+        # 优先级: 显式 config_manager/logger > deps > 默认 build_basic_deps
+        if config_manager is not None or logger is not None:
+            from deps_module import build_basic_deps
+            fallback = build_basic_deps()
+            self.config_manager = config_manager or fallback.config
+            self.logger = logger or fallback.logger
+        else:
+            if deps is None:
+                from deps_module import build_basic_deps
+                deps = build_basic_deps()
+            self.config_manager = deps.config
+            self.logger = deps.logger
 
         # 加载配置
         try:

@@ -19,12 +19,11 @@ from ..utils.tool_functions import (
     validate_vector_dim,
 )
 
-from common_utils_module import CommonUtils  # type: ignore
-from config_module import ConfigManager  # type: ignore
-from log_module import SystemLogger  # type: ignore
+# 基础依赖通过 deps 注入,不直接 import ConfigManager/SystemLogger/CommonUtils
 from exception_module import RAGException  # type: ignore
 from llm_adapter_module import LLMService  # type: ignore
 from sentence_transformers import SentenceTransformer  # type: ignore
+from deps_module import BasicDeps
 
 
 def _deterministic_vector(text: str, dim: int) -> List[float]:
@@ -52,11 +51,12 @@ def _deterministic_vector(text: str, dim: int) -> List[float]:
 class _BaseEmbeddingImpl(BaseEmbedding):
     """本地/远程实现的公共逻辑。"""
 
-    def __init__(self) -> None:
-        self.utils = CommonUtils()
-        self.logger = SystemLogger()
-        self.config = ConfigManager()
-        self.config.load_config()
+    def __init__(self, deps: Optional[BasicDeps] = None) -> None:
+        from deps_module import build_basic_deps
+        deps = deps or build_basic_deps()
+        self.utils = deps.utils
+        self.logger = deps.logger
+        self.config = deps.config
 
         self.vector_dim = int(self.config.get_config("vector_db.vector_dimension", 384))
         self.default_normalize = bool(
@@ -120,8 +120,8 @@ class STEmbedding(_BaseEmbeddingImpl):
     设计上要求开发/测试环境可用；若缺少 sentence-transformers 则抛统一异常。
     """
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, deps: Optional[BasicDeps] = None) -> None:
+        super().__init__(deps=deps)
         self.model_name = self.config.get_config("embedding.model_name", "all-MiniLM-L6-v2")
 
         if SentenceTransformer is None:
@@ -245,9 +245,10 @@ class LLMEmbedding(_BaseEmbeddingImpl):
     生产环境推荐使用本类。
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.llm_service = LLMService()
+    def __init__(self, deps: Optional[BasicDeps] = None) -> None:
+        super().__init__(deps=deps)
+        # LLMService 现在也接收 deps,共享同一份基础组件
+        self.llm_service = LLMService(deps=deps)
         self.default_vector_model = self.config.get_config(
             "llm.default_vector_model",
             "text-embedding-ada-002",
