@@ -33,6 +33,9 @@ from .tracing import (
     get_tracer,
     setup_tracer_provider,
     trace_span,
+    set_current_tenant,
+    reset_current_tenant,
+    get_current_tenant,
 )
 
 __all__ = [
@@ -40,4 +43,7 @@ __all__ = [
     "get_tracer",
     "setup_tracer_provider",
     "trace_span",
+    "set_current_tenant",
+    "reset_current_tenant",
+    "get_current_tenant",
 ]

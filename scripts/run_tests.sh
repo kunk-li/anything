@@ -46,12 +46,17 @@ fails=()
 for m in "${modules[@]}"; do
   if [ -d "$m/tests" ]; then
     echo "=== $m ==="
+    # 关键: 用 pipefail 保证管道里 python 的退出码不被 tail 吞掉。
+    # 之前没 pipefail 时 python 即使报 exit 49 (WindowsApps stub) 也会被 tail 覆盖
+    # 导致整个回归"静默通过", 现在显式检 python 退出码。
+    set -o pipefail
     if python -m unittest discover -s "$m/tests" $verbose_flag 2>&1 | tail -5; then
       pass=$((pass+1))
     else
       fail=$((fail+1))
       fails+=("$m")
     fi
+    set +o pipefail
   fi
 done
 

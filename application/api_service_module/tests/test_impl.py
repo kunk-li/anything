@@ -239,10 +239,9 @@ class TestMetricsEndpoint(unittest.TestCase):
         self.client.post("/invoke", json={"type": "rag", "query": "x"})
         response = self.client.get("/metrics")
         text = response.text
-        # 应包含 type="rag" 计数 = 1
-        self.assertIn('anything_requests_total{type="rag"} 1', text)
-        # duration_count_by_type 也应该 = 1
-        self.assertIn('anything_request_duration_seconds_count{type="rag"} 1', text)
+        # PR4a 后输出多标签 type + tenant; 未传 tenant_id 走 default
+        self.assertIn('anything_requests_total{type="rag",tenant="default"} 1', text)
+        self.assertIn('anything_request_duration_seconds_count{type="rag",tenant="default"} 1', text)
         # SUCCESS 不应进 errors_total
         self.assertNotIn('anything_errors_total{code=', text)
 
@@ -251,8 +250,8 @@ class TestMetricsEndpoint(unittest.TestCase):
         self.client.post("/invoke", json={"type": "rag"})
         response = self.client.get("/metrics")
         text = response.text
-        self.assertIn('anything_requests_total{type="rag"} 1', text)
-        self.assertIn('anything_errors_total{code="PARAM_MISSING"} 1', text)
+        self.assertIn('anything_requests_total{type="rag",tenant="default"} 1', text)
+        self.assertIn('anything_errors_total{code="PARAM_MISSING",tenant="default"} 1', text)
 
     def test_metrics_accumulates_across_requests(self):
         for _ in range(3):
@@ -260,8 +259,8 @@ class TestMetricsEndpoint(unittest.TestCase):
         for _ in range(2):
             self.client.post("/invoke", json={"type": "agent", "task": "y"})
         text = self.client.get("/metrics").text
-        self.assertIn('anything_requests_total{type="rag"} 3', text)
-        self.assertIn('anything_requests_total{type="agent"} 2', text)
+        self.assertIn('anything_requests_total{type="rag",tenant="default"} 3', text)
+        self.assertIn('anything_requests_total{type="agent",tenant="default"} 2', text)
 
     def test_metrics_prometheus_format_well_formed(self):
         """简单检查输出能被 prometheus 文本格式 parser 接受"""
@@ -273,6 +272,148 @@ class TestMetricsEndpoint(unittest.TestCase):
         type_count = sum(1 for l in lines if l.startswith("# TYPE"))
         self.assertGreaterEqual(help_count, 4)
         self.assertGreaterEqual(type_count, 4)
+
+
+class TestMetricsTenantLabel(unittest.TestCase):
+    """Task #33 PR4a: metrics 增加 tenant 标签 + cardinality top_n 守护"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+        self.service = ApiService(handler=self.handler)
+        self.service.auth_enabled = False
+        self.client = TestClient(self.service.app)
+
+    def test_metrics_tenant_label_in_output(self):
+        """body 显式带 tenant_id 时, metrics 应该用该 tenant 标签"""
+        # 注意 PR2 已经把 auth 关掉, 这里走 external IP path:
+        # body tenant_id 会被 _reconcile 剥掉 (非 internal IP) -> 走 default.
+        # 为了测 tenant 标签真正能写到 metrics, 把 IP 加 internal whitelist;
+        # 同时把 tenant-a 加入 metrics allowlist (否则会被聚合成 "other")。
+        self.service.internal_whitelist = ["testclient"]
+        self.service._tenant_label_allowlist = {"default", "tenant-a"}
+        # 1 个 tenant-a 请求
+        self.client.post(
+            "/invoke",
+            json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+        )
+        text = self.client.get("/metrics").text
+        self.assertIn('anything_requests_total{type="rag",tenant="tenant-a"} 1', text)
+
+    def test_metrics_tenant_separation(self):
+        """两个不同 tenant 的请求应该分别累计"""
+        self.service.internal_whitelist = ["testclient"]
+        self.service._tenant_label_allowlist = {"default", "tenant-a", "tenant-b"}
+        for _ in range(2):
+            self.client.post(
+                "/invoke",
+                json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+            )
+        for _ in range(3):
+            self.client.post(
+                "/invoke",
+                json={"type": "rag", "query": "y", "tenant_id": "tenant-b"},
+            )
+        text = self.client.get("/metrics").text
+        self.assertIn('anything_requests_total{type="rag",tenant="tenant-a"} 2', text)
+        self.assertIn('anything_requests_total{type="rag",tenant="tenant-b"} 3', text)
+
+    def test_metrics_cardinality_top_n_aggregation(self):
+        """超出 top_n 的 tenant 应被聚合为 tenant=other"""
+        # 手动收紧 allowlist 模拟 top_n=2
+        self.service._tenant_label_allowlist = {"default", "tenant-a"}
+        self.service.internal_whitelist = ["testclient"]
+        # tenant-a 在 allowlist 内
+        self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+        )
+        # tenant-zz 不在 allowlist -> 应聚合为 other
+        self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-zz"},
+        )
+        self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-zy"},
+        )
+        text = self.client.get("/metrics").text
+        self.assertIn('anything_requests_total{type="rag",tenant="tenant-a"} 1', text)
+        self.assertIn('anything_requests_total{type="rag",tenant="other"} 2', text)
+        # 严格不应该有 tenant-zz / tenant-zy 单独标签
+        self.assertNotIn('tenant="tenant-zz"', text)
+        self.assertNotIn('tenant="tenant-zy"', text)
+
+    def test_bucket_tenant_helper(self):
+        """_bucket_tenant 单元测试: allowlist 内保留, 外聚合 other"""
+        self.service._tenant_label_allowlist = {"default", "tenant-a"}
+        self.assertEqual(self.service._bucket_tenant("tenant-a"), "tenant-a")
+        self.assertEqual(self.service._bucket_tenant("default"), "default")
+        self.assertEqual(self.service._bucket_tenant("tenant-zz"), "other")
+        # None / 空字符串 -> default
+        self.assertEqual(self.service._bucket_tenant(None), "default")
+        self.assertEqual(self.service._bucket_tenant(""), "default")
+
+
+class TestContextVarIsolation(unittest.TestCase):
+    """Task #33 PR4a §7.3.1: tenant ContextVar 必须请求间隔离"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+        self.service = ApiService(handler=self.handler)
+        self.service.auth_enabled = False
+        self.service.internal_whitelist = ["testclient"]
+        self.client = TestClient(self.service.app)
+
+    def test_contextvar_does_not_leak_across_requests(self):
+        """请求 A 设的 tenant_id 不应被请求 B 看到"""
+        from observability_module import get_current_tenant
+
+        # 在外层进程上下文里 (没有请求时) tenant 应是 None
+        self.assertIsNone(get_current_tenant())
+
+        # 用 handler 当 hook: handle 时记录当时的 ContextVar 值
+        seen_tids = []
+
+        class _HookHandler(MockHandler):
+            def handle(self, request, trace_id=None):
+                seen_tids.append(get_current_tenant())
+                return super().handle(request, trace_id=trace_id)
+
+        self.service.handler = _HookHandler()
+
+        # 发请求 A (tenant-a)
+        self.client.post(
+            "/invoke", json={"type": "rag", "query": "a", "tenant_id": "tenant-a"},
+        )
+        # 发请求 B (tenant-b)
+        self.client.post(
+            "/invoke", json={"type": "rag", "query": "b", "tenant_id": "tenant-b"},
+        )
+        # 不带 tenant_id 的请求 (走 default)
+        self.client.post("/invoke", json={"type": "rag", "query": "c"})
+
+        self.assertEqual(seen_tids, ["tenant-a", "tenant-b", "default"])
+
+        # 所有请求处理完后 ContextVar 应该被 reset 回 None
+        self.assertIsNone(get_current_tenant())
+
+    def test_contextvar_reset_on_handler_exception(self):
+        """handler 抛异常时 ContextVar 也必须被 reset"""
+        from observability_module import get_current_tenant
+
+        class _BoomHandler(MockHandler):
+            def handle(self, request, trace_id=None):
+                raise RuntimeError("boom")
+
+        self.service.handler = _BoomHandler()
+
+        try:
+            self.client.post(
+                "/invoke",
+                json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+            )
+        except Exception:
+            pass
+
+        # 即使 handler 炸了, ContextVar 必须回到 None
+        self.assertIsNone(get_current_tenant())
 
 
 if __name__ == "__main__":

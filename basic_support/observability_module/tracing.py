@@ -8,6 +8,7 @@ OpenTelemetry 追踪封装(可选依赖)
 
 from __future__ import annotations
 
+import contextvars
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 
@@ -20,6 +21,40 @@ except ImportError:
 
 
 _tracer_provider_initialized = False
+
+
+# ===========================================================================
+# Tenant ContextVar (Task #33 PR4a, 见 docs/multi-tenancy-design.md §7.3.1)
+# ===========================================================================
+# 每请求一个 Context, ASGI 框架(FastAPI)天然隔离;
+# 业务侧只需用 set_current_tenant / reset_current_tenant 配对调用即可。
+
+_current_tenant: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "anything_tenant_id", default=None
+)
+
+
+def set_current_tenant(tenant_id: Optional[str]) -> "contextvars.Token[Optional[str]]":
+    """设置当前请求的 tenant_id, 返回 token 用于 reset.
+
+    用法 (ApiService 推荐写法):
+        token = set_current_tenant(auth_tenant_id)
+        try:
+            ...
+        finally:
+            reset_current_tenant(token)
+    """
+    return _current_tenant.set(tenant_id)
+
+
+def reset_current_tenant(token: "contextvars.Token[Optional[str]]") -> None:
+    """重置 tenant ContextVar 到之前的状态. 必须与 set 配对使用."""
+    _current_tenant.reset(token)
+
+
+def get_current_tenant() -> Optional[str]:
+    """读取当前 ContextVar 中的 tenant_id (没设过时返回 None)."""
+    return _current_tenant.get()
 
 
 def is_otel_available() -> bool:
@@ -159,11 +194,17 @@ def trace_span(
             span.set_attribute("response.code", "SUCCESS")
     """
     actual_tracer = tracer if tracer is not None else get_tracer()
+    # 自动从 ContextVar 注入 tenant_id (调用方未显式传时), 见 §7.3.1
+    merged_attrs: Dict[str, Any] = dict(attributes or {})
+    current_tid = _current_tenant.get()
+    if current_tid is not None and "anything.tenant_id" not in merged_attrs:
+        merged_attrs["anything.tenant_id"] = current_tid
+
     with actual_tracer.start_as_current_span(name) as span:
-        if attributes:
+        if merged_attrs:
             # NoopSpan 也实现了 set_attributes; OTel Span 同样
             try:
-                span.set_attributes(attributes)
+                span.set_attributes(merged_attrs)
             except Exception:
                 # 极端情况 attribute value 不可序列化等
                 pass

@@ -76,30 +76,34 @@ class TestLocalStateStore(unittest.TestCase):
         self.assertIsNone(get_result)
 
     def test_invalid_session_id(self):
-        with self.assertRaises(ValueError):
+        # save_state / clear_state 把 ValueError 包成 StateStoreException 上抛 (业务码 STATE_STORE_*)
+        # get_state 拿到 ValueError 时不再 catch (避免静默吞), 仍是 ValueError
+        from state_store_module.core.impl import StateStoreException
+
+        with self.assertRaises(StateStoreException):
             self.state_store.save_state("", self.test_state)
         with self.assertRaises(ValueError):
             self.state_store.get_state("..//bad")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(StateStoreException):
             self.state_store.clear_state("bad id")
 
     # ============ Task #33 PR3a: tenant_id 接口扩展 ============
 
     def test_tenant_id_default(self):
         from state_store_module.core.impl import LocalStateStore
-        s = LocalStateStore(store_dir=self.store_dir)
+        s = LocalStateStore(store_dir=self.temp_dir)
         self.assertEqual(s.tenant_id, "default")
 
     def test_tenant_id_specified(self):
         from state_store_module.core.impl import LocalStateStore
-        s = LocalStateStore(store_dir=self.store_dir, tenant_id="tenant-a")
+        s = LocalStateStore(store_dir=self.temp_dir, tenant_id="tenant-a")
         self.assertEqual(s.tenant_id, "tenant-a")
 
     def test_tenant_id_invalid_charset_rejected(self):
         from state_store_module.core.impl import LocalStateStore
         for bad in ("Acme Corp", "../../etc", "ab", "x" * 33):
             with self.assertRaises(ValueError, msg=f"should reject {bad!r}"):
-                LocalStateStore(store_dir=self.store_dir, tenant_id=bad)
+                LocalStateStore(store_dir=self.temp_dir, tenant_id=bad)
 
 
 if __name__ == "__main__":

@@ -8,13 +8,17 @@ import json
 import threading
 import time
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from deps_module import BasicDeps, build_basic_deps, StartupError
-from observability_module import trace_span
+from observability_module import (
+    trace_span,
+    set_current_tenant,
+    reset_current_tenant,
+)
 
 
 class ApiService:
@@ -54,14 +58,34 @@ class ApiService:
             self.config.get_config("api_service.enable_health_details", True)
         )
 
+        # Metrics cardinality 守护 (Task #33 PR4a, 见 docs/multi-tenancy-design.md §7.2)
+        # 启动期把 api_keys 中所有合法租户加入 allowlist; 超过 top_n 后只保留 top_n 个,
+        # 其余请求 metrics 标签使用 tenant="other" 聚合, 防止 Prometheus 时间序列爆炸。
+        self.metrics_tenant_label_top_n = int(
+            self.config.get_config("observability.metrics_tenant_label_top_n", 500)
+        )
+        all_tenants = set(self._key_to_tenant.values()) | {"default"}
+        if len(all_tenants) > self.metrics_tenant_label_top_n:
+            # 取前 top_n 个(字典序稳定;运行期实际"top by traffic"留作后续优化)
+            self._tenant_label_allowlist = set(
+                sorted(all_tenants)[: self.metrics_tenant_label_top_n]
+            )
+            self.logger.info(
+                f"[observability] tenant cardinality={len(all_tenants)}, "
+                f"threshold={self.metrics_tenant_label_top_n}, using top-N strategy"
+            )
+        else:
+            self._tenant_label_allowlist = all_tenants
+
         # 简单的 in-memory metrics, 通过 /metrics 端点暴露为 Prometheus 文本格式
         # (单进程跑 uvicorn 够用; 多 worker 需后续接 prometheus_client + multiprocess mode)
+        # PR4a: 把 type 单键改为 (type, tenant) 复合键, errors 也带 tenant 维度。
         self._metrics_lock = threading.Lock()
-        self._metrics: Dict[str, Dict[str, float]] = {
-            "requests_by_type": {},        # type ("rag"/"agent"/"hybrid"/"unknown") -> count
-            "errors_by_code": {},          # error code -> count
-            "duration_sum_by_type": {},    # type -> sum(seconds)
-            "duration_count_by_type": {},  # type -> count(用于算平均)
+        self._metrics: Dict[str, Dict[Any, float]] = {
+            "requests_by_type": {},        # (type, tenant) -> count
+            "errors_by_code": {},          # (code, tenant) -> count
+            "duration_sum_by_type": {},    # (type, tenant) -> sum(seconds)
+            "duration_count_by_type": {},  # (type, tenant) -> count
         }
 
         self._register_middlewares()
@@ -70,26 +94,52 @@ class ApiService:
 
         self.logger.info("API 服务模块初始化完成")
 
-    def _record_metrics(self, req_type: str, code: str, duration: float) -> None:
-        """更新 metrics 计数. 持锁是因为 FastAPI 可能并发处理多请求."""
+    def _bucket_tenant(self, tenant_id: Optional[str]) -> str:
+        """租户 cardinality 守护: allowlist 之外的全部聚合为 "other".
+
+        见 docs/multi-tenancy-design.md §7.2 — 防 Prometheus 时间序列爆炸。
+        """
+        tid = (tenant_id or "default") or "default"
+        if tid in self._tenant_label_allowlist:
+            return tid
+        return "other"
+
+    def _record_metrics(
+        self,
+        req_type: str,
+        code: str,
+        duration: float,
+        tenant_id: Optional[str] = None,
+    ) -> None:
+        """更新 metrics 计数. 持锁是因为 FastAPI 可能并发处理多请求.
+
+        PR4a: 加入 tenant 标签维度, 用 (type, tenant) / (code, tenant) 元组作为 key,
+        在渲染时拆开为 Prometheus 多标签。
+        """
         with self._metrics_lock:
             req_type = req_type or "unknown"
-            self._metrics["requests_by_type"][req_type] = (
-                self._metrics["requests_by_type"].get(req_type, 0) + 1
+            tenant = self._bucket_tenant(tenant_id)
+            key_t = (req_type, tenant)
+            self._metrics["requests_by_type"][key_t] = (
+                self._metrics["requests_by_type"].get(key_t, 0) + 1
             )
             if code != "SUCCESS":
-                self._metrics["errors_by_code"][code] = (
-                    self._metrics["errors_by_code"].get(code, 0) + 1
+                key_e = (code, tenant)
+                self._metrics["errors_by_code"][key_e] = (
+                    self._metrics["errors_by_code"].get(key_e, 0) + 1
                 )
-            self._metrics["duration_sum_by_type"][req_type] = (
-                self._metrics["duration_sum_by_type"].get(req_type, 0.0) + duration
+            self._metrics["duration_sum_by_type"][key_t] = (
+                self._metrics["duration_sum_by_type"].get(key_t, 0.0) + duration
             )
-            self._metrics["duration_count_by_type"][req_type] = (
-                self._metrics["duration_count_by_type"].get(req_type, 0) + 1
+            self._metrics["duration_count_by_type"][key_t] = (
+                self._metrics["duration_count_by_type"].get(key_t, 0) + 1
             )
 
     def _render_prometheus_metrics(self) -> str:
-        """把 in-memory metrics 渲染为 Prometheus 文本格式."""
+        """把 in-memory metrics 渲染为 Prometheus 文本格式.
+
+        PR4a: 输出多标签 — type + tenant; errors_total 增加 tenant 标签。
+        """
         with self._metrics_lock:
             snapshot = {
                 k: dict(v) for k, v in self._metrics.items()
@@ -99,26 +149,34 @@ class ApiService:
 
         lines.append("# HELP anything_requests_total Total RAG/Agent requests handled")
         lines.append("# TYPE anything_requests_total counter")
-        for t, n in snapshot["requests_by_type"].items():
-            lines.append(f'anything_requests_total{{type="{t}"}} {int(n)}')
+        for (t, tenant), n in snapshot["requests_by_type"].items():
+            lines.append(
+                f'anything_requests_total{{type="{t}",tenant="{tenant}"}} {int(n)}'
+            )
 
         lines.append("")
         lines.append("# HELP anything_errors_total Total non-SUCCESS responses by code")
         lines.append("# TYPE anything_errors_total counter")
-        for code, n in snapshot["errors_by_code"].items():
-            lines.append(f'anything_errors_total{{code="{code}"}} {int(n)}')
+        for (code, tenant), n in snapshot["errors_by_code"].items():
+            lines.append(
+                f'anything_errors_total{{code="{code}",tenant="{tenant}"}} {int(n)}'
+            )
 
         lines.append("")
         lines.append("# HELP anything_request_duration_seconds_sum Cumulative request duration")
         lines.append("# TYPE anything_request_duration_seconds_sum counter")
-        for t, s in snapshot["duration_sum_by_type"].items():
-            lines.append(f'anything_request_duration_seconds_sum{{type="{t}"}} {s:.6f}')
+        for (t, tenant), s in snapshot["duration_sum_by_type"].items():
+            lines.append(
+                f'anything_request_duration_seconds_sum{{type="{t}",tenant="{tenant}"}} {s:.6f}'
+            )
 
         lines.append("")
         lines.append("# HELP anything_request_duration_seconds_count Total samples for duration")
         lines.append("# TYPE anything_request_duration_seconds_count counter")
-        for t, n in snapshot["duration_count_by_type"].items():
-            lines.append(f'anything_request_duration_seconds_count{{type="{t}"}} {int(n)}')
+        for (t, tenant), n in snapshot["duration_count_by_type"].items():
+            lines.append(
+                f'anything_request_duration_seconds_count{{type="{t}",tenant="{tenant}"}} {int(n)}'
+            )
 
         return "\n".join(lines) + "\n"
 
@@ -266,37 +324,48 @@ class ApiService:
             #     auth_tenant_id (认证产物) 优先于 body tenant_id (声明)
             self._reconcile_tenant_id(request, body, trace_id)
 
-            # 4. 透传到接口层 (OTel root span 包住整个请求)
-            with trace_span(
-                "api.invoke",
-                attributes={
-                    "http.method": "POST",
-                    "http.route": "/invoke",
-                    "anything.trace_id": trace_id,
-                    "anything.request_type": str(body.get("type", "unknown")),
-                },
-            ) as span:
-                result = self.handler.handle(body, trace_id=trace_id)
-                span.set_attribute("anything.response_code", str(result.get("code", "UNKNOWN_ERROR")))
+            # PR4a (§7.3.1): 把 reconcile 后的 tenant_id 注入 ContextVar,
+            # 让所有 trace_span / 业务日志能自动拿到. body 没声明就用 default。
+            effective_tid = str(body.get("tenant_id") or "default")
+            tenant_token = set_current_tenant(effective_tid)
+            try:
+                # 4. 透传到接口层 (OTel root span 包住整个请求)
+                with trace_span(
+                    "api.invoke",
+                    attributes={
+                        "http.method": "POST",
+                        "http.route": "/invoke",
+                        "anything.trace_id": trace_id,
+                        "anything.request_type": str(body.get("type", "unknown")),
+                    },
+                ) as span:
+                    result = self.handler.handle(body, trace_id=trace_id)
+                    span.set_attribute(
+                        "anything.response_code", str(result.get("code", "UNKNOWN_ERROR"))
+                    )
 
-            # 5. 应用层只负责业务码 -> HTTP 状态码映射
-            http_status = self._map_code_to_http_status(result.get("code", "UNKNOWN_ERROR"))
-            duration = time.time() - start_time
-            headers = {"X-Request-Id": trace_id}
-            headers["X-Cost-Time"] = str(round(duration, 3))
+                # 5. 应用层只负责业务码 -> HTTP 状态码映射
+                http_status = self._map_code_to_http_status(result.get("code", "UNKNOWN_ERROR"))
+                duration = time.time() - start_time
+                headers = {"X-Request-Id": trace_id}
+                headers["X-Cost-Time"] = str(round(duration, 3))
 
-            # 6. 记录 metrics (异步级别开销极低)
-            self._record_metrics(
-                req_type=str(body.get("type", "unknown")),
-                code=str(result.get("code", "UNKNOWN_ERROR")),
-                duration=duration,
-            )
+                # 6. 记录 metrics (异步级别开销极低), 带 tenant 维度 + cardinality 守护
+                self._record_metrics(
+                    req_type=str(body.get("type", "unknown")),
+                    code=str(result.get("code", "UNKNOWN_ERROR")),
+                    duration=duration,
+                    tenant_id=effective_tid,
+                )
 
-            return JSONResponse(
-                status_code=http_status,
-                content=result,
-                headers=headers,
-            )
+                return JSONResponse(
+                    status_code=http_status,
+                    content=result,
+                    headers=headers,
+                )
+            finally:
+                # 无论成功 / 异常, 都必须 reset ContextVar, 防泄漏到下个请求
+                reset_current_tenant(tenant_token)
 
         @self.app.get("/health")
         async def health(request: Request):
