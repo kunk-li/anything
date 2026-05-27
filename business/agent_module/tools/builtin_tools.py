@@ -762,6 +762,600 @@ def make_text_summarize_tool(
 
 
 # ============================================================
+# 10. code_lint — 多语言语法检查
+# ============================================================
+
+def code_lint(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """代码语法检查 (静态, 不执行).
+
+    payload:
+        code: 待检查代码 (必填)
+        language: "python"|"json"|"yaml"|"sql" (默认 python)
+
+    返回 data: {"language", "valid": bool, "errors": [{line, col, message}], "summary"}
+    """
+    code = payload.get("code")
+    if not isinstance(code, str):
+        return {"code": "PARAM_MISSING", "message": "code 必须是字符串", "data": None, "retryable": False}
+    if len(code) > 200_000:
+        return {"code": "PARAM_INVALID", "message": "code 过长 (>200K)", "data": None, "retryable": False}
+
+    lang = str(payload.get("language", "python") or "python").lower()
+    errors: List[Dict[str, Any]] = []
+
+    if lang in ("python", "py"):
+        try:
+            ast.parse(code, mode="exec")
+        except SyntaxError as e:
+            errors.append({
+                "line": e.lineno or 0,
+                "col": e.offset or 0,
+                "message": e.msg or "syntax error",
+            })
+
+    elif lang == "json":
+        try:
+            json.loads(code)
+        except json.JSONDecodeError as e:
+            errors.append({
+                "line": e.lineno,
+                "col": e.colno,
+                "message": e.msg,
+            })
+
+    elif lang in ("yaml", "yml"):
+        try:
+            import yaml  # type: ignore
+        except ImportError:
+            return {
+                "code": "TOOL_CALL_FAILED",
+                "message": "yaml language 需要 PyYAML (pip install pyyaml)",
+                "data": None, "retryable": False,
+            }
+        try:
+            yaml.safe_load(code)
+        except yaml.YAMLError as e:  # type: ignore[attr-defined]
+            mark = getattr(e, "problem_mark", None)
+            errors.append({
+                "line": (mark.line + 1) if mark else 0,
+                "col": (mark.column + 1) if mark else 0,
+                "message": str(getattr(e, "problem", e)),
+            })
+
+    elif lang == "sql":
+        # sqlite3 EXPLAIN — 不真正建表, 只编译 SQL 语句, 抓语法错
+        import sqlite3
+        try:
+            with sqlite3.connect(":memory:") as conn:
+                conn.execute(f"EXPLAIN {code}")
+        except sqlite3.Error as e:
+            errors.append({"line": 0, "col": 0, "message": str(e)})
+
+    else:
+        return {
+            "code": "PARAM_INVALID",
+            "message": f"不支持的 language: {lang} (允许: python/json/yaml/sql)",
+            "data": None, "retryable": False,
+        }
+
+    valid = len(errors) == 0
+    return {
+        "code": "SUCCESS", "message": "ok",
+        "data": {
+            "language": lang,
+            "valid": valid,
+            "errors": errors,
+            "summary": "代码语法合法" if valid else f"{len(errors)} 处语法错误",
+        },
+        "retryable": False,
+    }
+
+
+# ============================================================
+# 11. email_send — SMTP 工厂模式
+# ============================================================
+
+def make_email_send_tool(
+    smtp_config: Dict[str, Any],
+) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """工厂: 闭包 smtp 配置 (host/port/user/password/from_addr/use_tls) 返回邮件工具.
+
+    payload:
+        to: str | list[str]  收件人
+        subject: str
+        body: str
+        cc: list[str] = None
+        is_html: bool = False
+
+    返回 data: {"to", "subject", "sent_at"}
+    """
+    required_cfg = {"host", "port", "from_addr"}
+    missing = required_cfg - set(smtp_config or {})
+
+    def _send(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if missing:
+            return {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": f"SMTP 未配置, 缺字段: {sorted(missing)}",
+                "data": None, "retryable": False,
+            }
+        to = payload.get("to")
+        subject = str(payload.get("subject") or "").strip()
+        body = str(payload.get("body") or "")
+        if not to or not subject or not body:
+            return {
+                "code": "PARAM_MISSING",
+                "message": "to / subject / body 都必填",
+                "data": None, "retryable": False,
+            }
+        recipients = [to] if isinstance(to, str) else list(to)
+        cc = payload.get("cc") or []
+        if isinstance(cc, str):
+            cc = [cc]
+        is_html = bool(payload.get("is_html", False))
+
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart()
+        msg["From"] = smtp_config["from_addr"]
+        msg["To"] = ", ".join(recipients)
+        if cc:
+            msg["Cc"] = ", ".join(cc)
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "html" if is_html else "plain", "utf-8"))
+
+        try:
+            with smtplib.SMTP(
+                smtp_config["host"],
+                int(smtp_config.get("port", 587)),
+                timeout=int(smtp_config.get("timeout", 15)),
+            ) as smtp:
+                if smtp_config.get("use_tls", True):
+                    smtp.starttls()
+                if smtp_config.get("user") and smtp_config.get("password"):
+                    smtp.login(smtp_config["user"], smtp_config["password"])
+                smtp.send_message(msg, to_addrs=recipients + cc)
+        except Exception as e:
+            return {
+                "code": "TOOL_CALL_FAILED",
+                "message": f"SMTP 发送失败: {e}",
+                "data": None, "retryable": True,
+            }
+
+        return {
+            "code": "SUCCESS", "message": "ok",
+            "data": {
+                "to": recipients,
+                "cc": cc,
+                "subject": subject,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "retryable": False,
+        }
+
+    return _send
+
+
+# ============================================================
+# 12. image_describe — 多模态 LLM 工厂
+# ============================================================
+
+def make_image_describe_tool(
+    llm_service: Any,
+) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """工厂: 闭包 llm_service (LLMService 实例) 返回图片理解工具.
+
+    payload:
+        image_path: 本地路径 (二选一)
+        image_base64: base64 字符串 (二选一)
+        prompt: 提问文本, 默认 "请描述这张图片"
+        model_name: 可选, 走 LLMService.cfg 默认多模态模型
+
+    返回 data: {"description", "model_name", "image_source"}
+
+    依赖: llm_service 必须有 call_llm 方法 (LLMService 而非 DummyLLMClient)。
+    """
+    def _describe(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if llm_service is None or not hasattr(llm_service, "call_llm"):
+            return {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "llm_service 未注入或不支持 call_llm",
+                "data": None, "retryable": False,
+            }
+
+        image_path = payload.get("image_path")
+        image_base64 = payload.get("image_base64")
+        if not image_path and not image_base64:
+            return {
+                "code": "PARAM_MISSING",
+                "message": "image_path 或 image_base64 二选一必填",
+                "data": None, "retryable": False,
+            }
+
+        prompt = str(payload.get("prompt") or "请描述这张图片")
+        model_name = str(payload.get("model_name") or "default")
+
+        # 构造 MediaContent
+        try:
+            from llm_adapter_module.model.data_model import (
+                LLMRequest, LLMParam, MediaContent,
+            )
+        except Exception as e:
+            return {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": f"llm_adapter 模块不可用: {e}",
+                "data": None, "retryable": False,
+            }
+
+        media = MediaContent(
+            media_type="image",
+            media_path=str(image_path or ""),
+            media_base64=str(image_base64 or "") or None,
+        )
+
+        req = LLMRequest(
+            request_type="MULTIMODAL",
+            input_text=prompt,
+            media_input=[media],
+            model_name=model_name,
+            model_param=LLMParam(temperature=0.3, max_tokens=512),
+        )
+
+        try:
+            resp = llm_service.call_llm(req)
+        except Exception as e:
+            return {
+                "code": "TOOL_CALL_FAILED",
+                "message": f"多模态 LLM 调用异常: {e}",
+                "data": None, "retryable": True,
+            }
+
+        code = getattr(resp, "code", "UNKNOWN_ERROR")
+        if code != "SUCCESS":
+            return {
+                "code": "TOOL_CALL_FAILED",
+                "message": f"多模态 LLM 返回 {code}: {getattr(resp, 'message', '')}",
+                "data": None, "retryable": True,
+            }
+
+        result = getattr(resp, "multimodal_result", None)
+        text = getattr(result, "text_result", "") if result else ""
+        return {
+            "code": "SUCCESS", "message": "ok",
+            "data": {
+                "description": text,
+                "model_name": getattr(resp, "request_info", {}).get("model_name") if getattr(resp, "request_info", None) else model_name,
+                "image_source": "path" if image_path else "base64",
+            },
+            "retryable": False,
+        }
+
+    return _describe
+
+
+# ============================================================
+# 13. weather — Open-Meteo 免 key 天气查询
+# ============================================================
+
+def weather(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """天气查询. 用 Open-Meteo (https://open-meteo.com), 无需 API key, 公网开放。
+
+    payload:
+        location: 城市名 (中英都行, 通过 geocoding API resolve)
+        OR latitude + longitude: 经纬度 (跳过 geocoding)
+
+    返回 data: {
+        "location": {"name", "country", "latitude", "longitude"},
+        "current": {"temperature", "weathercode", "windspeed", "winddirection", "is_day", "time"},
+    }
+    """
+    location = payload.get("location")
+    lat = payload.get("latitude")
+    lon = payload.get("longitude")
+
+    if not location and (lat is None or lon is None):
+        return {
+            "code": "PARAM_MISSING",
+            "message": "需要 location 字符串 或 latitude+longitude",
+            "data": None, "retryable": False,
+        }
+
+    location_info = {"name": None, "country": None, "latitude": lat, "longitude": lon}
+
+    try:
+        # 1. 没经纬度时, 用 geocoding 解析
+        if lat is None or lon is None:
+            geo_url = (
+                "https://geocoding-api.open-meteo.com/v1/search"
+                f"?name={urllib.parse.quote(str(location))}&count=1&language=zh"
+            )
+            req = urllib.request.Request(geo_url, headers={"User-Agent": "anything-agent/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                geo_data = json.loads(resp.read().decode("utf-8"))
+            results = geo_data.get("results") or []
+            if not results:
+                return {
+                    "code": "SUCCESS", "message": "location not found",
+                    "data": {"location": {"name": location}, "current": None},
+                    "retryable": False,
+                }
+            top = results[0]
+            location_info = {
+                "name": top.get("name"),
+                "country": top.get("country"),
+                "latitude": top.get("latitude"),
+                "longitude": top.get("longitude"),
+            }
+            lat = top.get("latitude")
+            lon = top.get("longitude")
+
+        # 2. 拉当前天气
+        weather_url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}&current_weather=true"
+        )
+        req2 = urllib.request.Request(weather_url, headers={"User-Agent": "anything-agent/1.0"})
+        with urllib.request.urlopen(req2, timeout=8) as resp2:
+            wdata = json.loads(resp2.read().decode("utf-8"))
+
+        current = wdata.get("current_weather") or {}
+        return {
+            "code": "SUCCESS", "message": "ok",
+            "data": {
+                "location": location_info,
+                "current": {
+                    "temperature_celsius": current.get("temperature"),
+                    "weathercode": current.get("weathercode"),
+                    "windspeed_kmh": current.get("windspeed"),
+                    "winddirection_deg": current.get("winddirection"),
+                    "is_day": bool(current.get("is_day", 1)),
+                    "time": current.get("time"),
+                },
+            },
+            "retryable": False,
+        }
+    except Exception as e:
+        return {
+            "code": "TOOL_CALL_FAILED",
+            "message": f"天气查询失败 (可能无网): {e}",
+            "data": None, "retryable": True,
+        }
+
+
+# ============================================================
+# 14. currency_convert — ECB Frankfurter 免 key 汇率换算
+# ============================================================
+
+def currency_convert(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """汇率换算. 用 https://api.frankfurter.app (ECB 数据, 免 key, 公网开放)。
+
+    payload:
+        from_currency: 3 字母代码 (USD/EUR/CNY/JPY/GBP/...)
+        to_currency: 同上
+        amount: 数字 (默认 1.0)
+        date: "YYYY-MM-DD" 或 "latest" (默认 latest)
+
+    返回 data: {"from", "to", "amount", "converted", "rate", "date"}
+    """
+    from_cur = str(payload.get("from_currency") or "").strip().upper()
+    to_cur = str(payload.get("to_currency") or "").strip().upper()
+    if not from_cur or not to_cur:
+        return {
+            "code": "PARAM_MISSING",
+            "message": "from_currency / to_currency 必填",
+            "data": None, "retryable": False,
+        }
+    if len(from_cur) != 3 or len(to_cur) != 3:
+        return {
+            "code": "PARAM_INVALID",
+            "message": "货币代码必须是 3 字母 ISO 4217",
+            "data": None, "retryable": False,
+        }
+    amount = float(payload.get("amount", 1.0) or 1.0)
+    date = str(payload.get("date") or "latest")
+
+    if from_cur == to_cur:
+        return {
+            "code": "SUCCESS", "message": "ok (same currency)",
+            "data": {
+                "from": from_cur, "to": to_cur, "amount": amount,
+                "converted": amount, "rate": 1.0, "date": date,
+            },
+            "retryable": False,
+        }
+
+    try:
+        url = (
+            f"https://api.frankfurter.app/{urllib.parse.quote(date)}"
+            f"?from={from_cur}&to={to_cur}&amount={amount}"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "anything-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {
+            "code": "TOOL_CALL_FAILED",
+            "message": f"汇率查询失败: {e}",
+            "data": None, "retryable": True,
+        }
+
+    rates = data.get("rates") or {}
+    converted = rates.get(to_cur)
+    if converted is None:
+        return {
+            "code": "PARAM_INVALID",
+            "message": f"不支持的货币对: {from_cur} -> {to_cur}",
+            "data": None, "retryable": False,
+        }
+    rate = converted / amount if amount else None
+    return {
+        "code": "SUCCESS", "message": "ok",
+        "data": {
+            "from": from_cur,
+            "to": to_cur,
+            "amount": amount,
+            "converted": converted,
+            "rate": rate,
+            "date": data.get("date") or date,
+        },
+        "retryable": False,
+    }
+
+
+# ============================================================
+# 15. python_sandbox — AST 严格白名单 + 超时
+# ============================================================
+# ⚠️ 关键约束 (Python sandbox 是公认难题, 这是教学/受限版本, 不能跑用户脚本):
+#   - 仅允许下面列出的 AST 节点类型 + 内置函数白名单
+#   - 禁止: import, attribute access, exec, eval, open, __ 双下划线, 函数定义, 类定义
+#   - 超时通过 threading.Timer + 协作式停止 (Python 没法强杀线程, 极端死循环可能 hang)
+
+_SANDBOX_ALLOWED_AST_NODES = {
+    ast.Module, ast.Expression, ast.Expr,
+    ast.Constant, ast.Name, ast.Load, ast.Store,
+    ast.BinOp, ast.UnaryOp, ast.BoolOp,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.UAdd, ast.USub, ast.Not,
+    ast.And, ast.Or,
+    ast.Compare,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.In, ast.NotIn, ast.Is, ast.IsNot,
+    ast.IfExp,                                 # 三元
+    ast.Call,
+    ast.List, ast.Tuple, ast.Set, ast.Dict,
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+    ast.comprehension,
+    ast.Subscript, ast.Slice, ast.Index if hasattr(ast, "Index") else ast.Slice,
+    ast.Assign, ast.AugAssign,
+    ast.If, ast.For, ast.While, ast.Pass, ast.Break, ast.Continue,
+    ast.Return,
+    ast.JoinedStr, ast.FormattedValue,        # f-string
+    ast.Starred,
+    ast.keyword,
+}
+
+_SANDBOX_BUILTINS = {
+    "abs": abs, "all": all, "any": any, "bool": bool,
+    "dict": dict, "enumerate": enumerate, "filter": filter, "float": float,
+    "int": int, "len": len, "list": list, "map": map,
+    "max": max, "min": min, "range": range, "round": round,
+    "set": set, "sorted": sorted, "str": str, "sum": sum,
+    "tuple": tuple, "zip": zip, "reversed": reversed,
+    "True": True, "False": False, "None": None,
+    # 数学
+    "math_pi": math.pi, "math_e": math.e,
+}
+
+
+def _sandbox_validate_ast(tree: ast.AST) -> Optional[str]:
+    """遍历 AST, 任一节点不在白名单 -> 返回错误描述; 通过返回 None."""
+    for node in ast.walk(tree):
+        if type(node) not in _SANDBOX_ALLOWED_AST_NODES:
+            return f"禁止的 AST 节点: {type(node).__name__}"
+        if isinstance(node, ast.Name):
+            if node.id.startswith("__") and node.id.endswith("__"):
+                return f"禁止访问 __ 双下划线名称: {node.id}"
+        if isinstance(node, ast.Attribute):
+            return "禁止属性访问 (xxx.yyy)"
+        if isinstance(node, ast.Call):
+            # Call 的 func 必须是 Name 且在白名单
+            if not isinstance(node.func, ast.Name):
+                return "禁止调用非简单函数名"
+            if node.func.id not in _SANDBOX_BUILTINS:
+                return f"禁止调用未在白名单的函数: {node.func.id}"
+    return None
+
+
+def python_sandbox(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """超受限 Python 执行. 比 calculator 更宽 (有 for / if / 列表推导 / dict / 切片),
+    但仍严禁 import / attribute / 双下划线 / 函数定义 / 类定义。
+
+    payload:
+        code: 待执行代码 (必填)
+        timeout_seconds: 默认 2.0, 上限 10.0
+
+    返回 data: {"stdout": str, "result": Any, "elapsed_seconds": float}
+        - "result": 最后一个表达式的值 (如果是赋值语句序列, 取 `result` 变量, 没有则 None)
+        - "stdout": 暂不支持 (sandbox 不允许 print)
+
+    ⚠️ 教学/受限实现, 不能用来跑不可信代码 — Python sandbox 是公认难题,
+       生产部署建议跑在隔离进程 / Docker / gVisor 里。
+    """
+    code = payload.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return {"code": "PARAM_MISSING", "message": "code 不能为空", "data": None, "retryable": False}
+    if len(code) > 5000:
+        return {"code": "PARAM_INVALID", "message": "code 过长 (>5000)", "data": None, "retryable": False}
+
+    timeout_s = max(0.1, min(float(payload.get("timeout_seconds", 2.0) or 2.0), 10.0))
+
+    # 1. 解析 + AST 白名单校验
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as e:
+        return {"code": "PARAM_INVALID", "message": f"语法错误: {e}", "data": None, "retryable": False}
+    err = _sandbox_validate_ast(tree)
+    if err:
+        return {"code": "PARAM_INVALID", "message": err, "data": None, "retryable": False}
+
+    # 2. 在受限命名空间执行, 用线程 + 标志位做协作式超时
+    import threading
+    import time as _time
+    result_holder: Dict[str, Any] = {"value": None, "error": None}
+    safe_globals = {"__builtins__": {}}
+    safe_globals.update(_SANDBOX_BUILTINS)
+    safe_locals: Dict[str, Any] = {}
+
+    def _run():
+        try:
+            exec(compile(tree, "<sandbox>", "exec"), safe_globals, safe_locals)
+        except Exception as e:
+            result_holder["error"] = f"{type(e).__name__}: {e}"
+
+    thread = threading.Thread(target=_run, daemon=True)
+    t0 = _time.time()
+    thread.start()
+    thread.join(timeout=timeout_s)
+    elapsed = _time.time() - t0
+
+    if thread.is_alive():
+        # 没法强杀, 但标记 timeout (线程可能继续跑直到自然结束)
+        return {
+            "code": "TOOL_CALL_FAILED",
+            "message": f"超时 (>{timeout_s}s)",
+            "data": {"elapsed_seconds": round(elapsed, 3)},
+            "retryable": False,
+        }
+    if result_holder["error"]:
+        return {
+            "code": "TOOL_CALL_FAILED",
+            "message": result_holder["error"],
+            "data": {"elapsed_seconds": round(elapsed, 3)},
+            "retryable": False,
+        }
+
+    # 提取 `result` 变量 (如果用户定义了), 否则取最后一个赋值变量, 都没就 None
+    final = safe_locals.get("result")
+    if final is None and safe_locals:
+        # 取最后赋值的非内部变量
+        for k in list(safe_locals.keys())[::-1]:
+            if not k.startswith("_"):
+                final = safe_locals[k]
+                break
+
+    return {
+        "code": "SUCCESS", "message": "ok",
+        "data": {
+            "result": final,
+            "locals_keys": [k for k in safe_locals.keys() if not k.startswith("_")],
+            "elapsed_seconds": round(elapsed, 3),
+        },
+        "retryable": False,
+    }
+
+
+# ============================================================
 # 工具描述表 — 给 Agent LLM 看, 决定何时调用何工具
 # ============================================================
 
@@ -815,5 +1409,40 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
         "调 LLM 把长文本压缩为 N 句摘要。"
         ' input: {"text": str, "max_sentences": int = 3, "lang": "zh"|"en"}.'
         " 适合: 把 rag_search / document_read / http_get 拿到的大段文本浓缩进上下文。"
+    ),
+    "code_lint": (
+        "代码语法检查 (静态, 不执行), 不联网。"
+        ' input: {"code": str, "language": "python"|"json"|"yaml"|"sql"}.'
+        " 返回 valid + 行列号 + 错误描述。"
+        " 适合: 用户/LLM 输出代码前做合法性校验。"
+    ),
+    "email_send": (
+        "通过 SMTP 发邮件。需要后端注入 smtp 配置 (host/port/user/password/from_addr)。"
+        ' input: {"to": str|list, "subject": str, "body": str, "cc": list, "is_html": bool}.'
+        " 缺配置时返回 SERVICE_UNAVAILABLE。适合: 通知 / 报告分发场景。"
+    ),
+    "image_describe": (
+        "多模态 LLM 描述图片。"
+        ' input: {"image_path": 本地路径 或 "image_base64": str, "prompt": "请描述", "model_name": "default"}.'
+        " 需要 OpenAIMultimodalAdapter 或类似配置的多模态模型。"
+        " 适合: 看图回答 / 图像内容理解。"
+    ),
+    "weather": (
+        "天气查询, 用 Open-Meteo (公网免 key)。"
+        ' input: {"location": "北京" 或 "latitude": 39.9, "longitude": 116.4}.'
+        " 返回 location 元信息 + 当前温度/风速/天气码。无网时失败。"
+    ),
+    "currency_convert": (
+        "汇率换算, 用 ECB Frankfurter API (公网免 key)。"
+        ' input: {"from_currency": "USD", "to_currency": "CNY", "amount": 100, "date": "latest"}.'
+        " 货币代码 ISO 4217 3 字母。返回 converted + rate + date。"
+    ),
+    "python_sandbox": (
+        "Python 受限执行, AST 严格白名单 + 协作式超时。"
+        ' input: {"code": str, "timeout_seconds": 2.0}.'
+        " 禁: import / attribute / __ 双下划线 / def / class / open / exec / eval。"
+        " 允许: 数字 + 字符串 + 列表/字典 + for/if/while + 列表推导 + 内置 abs/len/sum 等。"
+        " 适合: 比 calculator 更复杂的小段算法验证 (排序、统计聚合、列表变换)。"
+        " ⚠️ 不能跑不可信代码, sandbox 是公认难题, 生产请隔离进程 / Docker。"
     ),
 }

@@ -21,6 +21,12 @@ from agent_module.tools import (
     json_query,
     http_get,
     make_text_summarize_tool,
+    code_lint,
+    make_email_send_tool,
+    make_image_describe_tool,
+    weather,
+    currency_convert,
+    python_sandbox,
     TOOL_DESCRIPTIONS,
 )
 
@@ -363,11 +369,256 @@ class TestTextSummarize(unittest.TestCase):
         self.assertTrue(r["retryable"])
 
 
+class TestCodeLint(unittest.TestCase):
+
+    def test_python_valid(self):
+        r = code_lint({"code": "x = 1\ny = x + 2\nprint(y)", "language": "python"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertTrue(r["data"]["valid"])
+        self.assertEqual(len(r["data"]["errors"]), 0)
+
+    def test_python_invalid(self):
+        r = code_lint({"code": "def f(:\n    return 1", "language": "python"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertFalse(r["data"]["valid"])
+        self.assertGreater(len(r["data"]["errors"]), 0)
+        self.assertIn("line", r["data"]["errors"][0])
+
+    def test_json_valid(self):
+        r = code_lint({"code": '{"a": 1, "b": [1, 2]}', "language": "json"})
+        self.assertTrue(r["data"]["valid"])
+
+    def test_json_invalid(self):
+        r = code_lint({"code": '{"a": ,}', "language": "json"})
+        self.assertFalse(r["data"]["valid"])
+
+    def test_sql_valid(self):
+        r = code_lint({"code": "SELECT 1 + 2", "language": "sql"})
+        self.assertTrue(r["data"]["valid"])
+
+    def test_sql_invalid(self):
+        r = code_lint({"code": "SELEKT FROM lol", "language": "sql"})
+        self.assertFalse(r["data"]["valid"])
+
+    def test_unsupported_language(self):
+        r = code_lint({"code": "{}", "language": "klingon"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_yaml_valid_or_skipped(self):
+        """PyYAML 不一定装, 装了应过, 没装应优雅降级 TOOL_CALL_FAILED"""
+        r = code_lint({"code": "a: 1\nb: [1, 2]", "language": "yaml"})
+        # SUCCESS (valid:true) 或 TOOL_CALL_FAILED (PyYAML 缺) 都可接受
+        if r["code"] == "SUCCESS":
+            self.assertTrue(r["data"]["valid"])
+        else:
+            self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+
+class TestEmailSendTool(unittest.TestCase):
+
+    def test_no_config_returns_unavailable(self):
+        tool = make_email_send_tool({})  # 缺所有 required
+        r = tool({"to": "a@b.com", "subject": "x", "body": "y"})
+        self.assertEqual(r["code"], "SERVICE_UNAVAILABLE")
+        self.assertIn("缺字段", r["message"])
+
+    def test_partial_config(self):
+        tool = make_email_send_tool({"host": "smtp", "port": 25})  # 缺 from_addr
+        r = tool({"to": "a@b.com", "subject": "x", "body": "y"})
+        self.assertEqual(r["code"], "SERVICE_UNAVAILABLE")
+
+    def test_full_config_missing_payload_fields(self):
+        cfg = {"host": "smtp.test", "port": 25, "from_addr": "me@x.com"}
+        tool = make_email_send_tool(cfg)
+        r = tool({"to": "a@b.com", "subject": ""})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_smtp_call_mocked(self):
+        """完整 mock smtplib.SMTP, 验证 send_message 调到"""
+        from unittest.mock import patch, MagicMock
+        cfg = {"host": "smtp.test", "port": 25, "from_addr": "me@x.com",
+               "use_tls": False, "user": None, "password": None}
+        tool = make_email_send_tool(cfg)
+        fake_smtp = MagicMock()
+        fake_smtp.__enter__ = lambda s: fake_smtp
+        fake_smtp.__exit__ = lambda *a: None
+        with patch("smtplib.SMTP", return_value=fake_smtp):
+            r = tool({"to": "to@b.com", "subject": "Hi", "body": "test"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["to"], ["to@b.com"])
+        fake_smtp.send_message.assert_called_once()
+
+
+class TestImageDescribeTool(unittest.TestCase):
+
+    def test_no_llm_service(self):
+        tool = make_image_describe_tool(None)
+        r = tool({"image_path": "/x.png"})
+        self.assertEqual(r["code"], "SERVICE_UNAVAILABLE")
+
+    def test_no_input(self):
+        tool = make_image_describe_tool(MagicMock(call_llm=lambda req: None))
+        r = tool({})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_calls_llm_service(self):
+        """mock LLMService.call_llm 返回成功 multimodal_result"""
+        from llm_adapter_module.model.data_model import LLMResponse, MultimodalResult
+        fake_resp = LLMResponse(
+            code="SUCCESS", message="ok",
+            multimodal_result=MultimodalResult(text_result="A cat sitting on a sofa", confidence=0.9),
+            request_info={"model_name": "gpt-4o-mini"},
+        )
+        fake_svc = MagicMock()
+        fake_svc.call_llm.return_value = fake_resp
+        tool = make_image_describe_tool(fake_svc)
+        r = tool({"image_path": "/cat.png", "prompt": "what's in the image?"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["description"], "A cat sitting on a sofa")
+        # 验证 LLMRequest 真的发出去了
+        fake_svc.call_llm.assert_called_once()
+
+    def test_llm_returns_error(self):
+        from llm_adapter_module.model.data_model import LLMResponse
+        fake_svc = MagicMock()
+        fake_svc.call_llm.return_value = LLMResponse(code="VECTOR_QUERY_FAILED", message="kaput")
+        tool = make_image_describe_tool(fake_svc)
+        r = tool({"image_base64": "abc"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+
+class TestWeather(unittest.TestCase):
+
+    def test_no_input(self):
+        r = weather({})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_offline(self):
+        """无网时应返回 TOOL_CALL_FAILED"""
+        from unittest.mock import patch
+        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen",
+                   side_effect=ConnectionError("offline")):
+            r = weather({"location": "Beijing"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+    def test_with_lat_lon_skips_geocoding(self):
+        """显式经纬度时不调 geocoding, 直接调 weather"""
+        from io import BytesIO
+        from unittest.mock import patch, MagicMock
+        fake_resp = MagicMock()
+        fake_resp.__enter__ = lambda s: fake_resp
+        fake_resp.__exit__ = lambda *a: None
+        fake_resp.read.return_value = (
+            b'{"current_weather": {"temperature": 22.5, "weathercode": 1, '
+            b'"windspeed": 5.0, "winddirection": 90, "is_day": 1, "time": "2026-05-27T10:00"}}'
+        )
+        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen", return_value=fake_resp):
+            r = weather({"latitude": 39.9, "longitude": 116.4})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["current"]["temperature_celsius"], 22.5)
+
+
+class TestCurrencyConvert(unittest.TestCase):
+
+    def test_missing_codes(self):
+        r = currency_convert({"amount": 100})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_invalid_codes(self):
+        r = currency_convert({"from_currency": "DOLLAR", "to_currency": "EUR"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_same_currency(self):
+        """同币种应直接返回, 不调网络"""
+        r = currency_convert({"from_currency": "CNY", "to_currency": "CNY", "amount": 100})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["converted"], 100)
+        self.assertEqual(r["data"]["rate"], 1.0)
+
+    def test_mocked_conversion(self):
+        from unittest.mock import patch, MagicMock
+        fake_resp = MagicMock()
+        fake_resp.__enter__ = lambda s: fake_resp
+        fake_resp.__exit__ = lambda *a: None
+        fake_resp.read.return_value = b'{"date": "2026-05-27", "rates": {"CNY": 720.5}}'
+        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen", return_value=fake_resp):
+            r = currency_convert({"from_currency": "USD", "to_currency": "CNY", "amount": 100})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["converted"], 720.5)
+        self.assertAlmostEqual(r["data"]["rate"], 7.205)
+
+
+class TestPythonSandbox(unittest.TestCase):
+
+    def test_simple_assign(self):
+        r = python_sandbox({"code": "result = 1 + 2"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], 3)
+
+    def test_list_comprehension(self):
+        r = python_sandbox({"code": "result = [x*x for x in range(5)]"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], [0, 1, 4, 9, 16])
+
+    def test_dict_and_sorted(self):
+        r = python_sandbox({"code": "result = sorted({'a':3,'b':1,'c':2}.items(), key=lambda kv: kv[1])"})
+        # lambda 不在白名单, 应当被拒
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_for_loop(self):
+        r = python_sandbox({"code": """
+total = 0
+for i in range(10):
+    total = total + i
+result = total
+""".strip()})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], 45)
+
+    def test_reject_import(self):
+        r = python_sandbox({"code": "import os"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIn("禁止", r["message"])
+
+    def test_reject_attribute(self):
+        r = python_sandbox({"code": "x = (1).bit_length()"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_reject_open(self):
+        r = python_sandbox({"code": "f = open('/etc/passwd')"})
+        # open 不在白名单
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_reject_dunder(self):
+        r = python_sandbox({"code": "x = __name__"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_reject_def(self):
+        r = python_sandbox({"code": "def f(x):\n    return x"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_syntax_error(self):
+        r = python_sandbox({"code": "1 +"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIn("语法错误", r["message"])
+
+    def test_runtime_error(self):
+        r = python_sandbox({"code": "result = 1 / 0"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+        self.assertIn("ZeroDivisionError", r["message"])
+
+    def test_empty(self):
+        r = python_sandbox({"code": ""})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+
 class TestToolDescriptions(unittest.TestCase):
-    def test_all_9_tools_have_descriptions(self):
+    def test_all_15_tools_have_descriptions(self):
         expected = (
             "calculator", "datetime", "wikipedia", "document_read",
             "regex_extract", "text_stats", "json_query", "http_get", "text_summarize",
+            "code_lint", "email_send", "image_describe",
+            "weather", "currency_convert", "python_sandbox",
         )
         for name in expected:
             self.assertIn(name, TOOL_DESCRIPTIONS, name)

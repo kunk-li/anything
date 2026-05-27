@@ -13,6 +13,12 @@ from .builtin_tools import (
     json_query,
     http_get,
     make_text_summarize_tool,
+    code_lint,
+    make_email_send_tool,
+    make_image_describe_tool,
+    weather,
+    currency_convert,
+    python_sandbox,
     TOOL_DESCRIPTIONS,
 )
 
@@ -26,5 +32,11 @@ __all__ = [
     "json_query",
     "http_get",
     "make_text_summarize_tool",
+    "code_lint",
+    "make_email_send_tool",
+    "make_image_describe_tool",
+    "weather",
+    "currency_convert",
+    "python_sandbox",
     "TOOL_DESCRIPTIONS",
 ]

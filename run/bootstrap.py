@@ -278,6 +278,33 @@ def build_business_layer(
         description=TOOL_DESCRIPTIONS["text_summarize"],
     )
 
+    # Task #42: 再 6 个工具
+    from agent_module.tools import (
+        code_lint, make_email_send_tool, make_image_describe_tool,
+        weather, currency_convert, python_sandbox,
+    )
+    tool_registry.register("code_lint", code_lint, description=TOOL_DESCRIPTIONS["code_lint"])
+    tool_registry.register("weather", weather, description=TOOL_DESCRIPTIONS["weather"])
+    tool_registry.register("currency_convert", currency_convert, description=TOOL_DESCRIPTIONS["currency_convert"])
+    tool_registry.register("python_sandbox", python_sandbox, description=TOOL_DESCRIPTIONS["python_sandbox"])
+
+    # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
+    smtp_cfg = deps.config.get_config("smtp", {}) or {}
+    tool_registry.register(
+        "email_send",
+        make_email_send_tool(smtp_cfg),
+        description=TOOL_DESCRIPTIONS["email_send"],
+    )
+
+    # image_describe: 闭包 llm_client (LLMService 才有 call_llm 方法, DummyLLMClient 没)
+    llm_for_image = data_layer.get("llm_client")
+    if hasattr(llm_for_image, "call_llm"):
+        tool_registry.register(
+            "image_describe",
+            make_image_describe_tool(llm_for_image),
+            description=TOOL_DESCRIPTIONS["image_describe"],
+        )
+
     agent = SimpleAgent(
         state_store=data_layer.get("state_store"),
         tool_registry=tool_registry,
