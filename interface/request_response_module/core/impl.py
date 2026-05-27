@@ -12,6 +12,7 @@ from .base import BaseRequestHandler
 from ..utils.tool_functions import validate_request_params, build_error_details
 
 from deps_module import BasicDeps, build_basic_deps
+from observability_module import trace_span
 
 
 class RequestHandler(BaseRequestHandler):
@@ -95,7 +96,15 @@ class RequestHandler(BaseRequestHandler):
                 f"trace_id={trace_id}, session_id={standardized_request.get('session_id')}"
             )
 
-            result = self.orchestrator.route(standardized_request)
+            with trace_span(
+                "handler.route",
+                attributes={
+                    "anything.request_type": standardized_request.get("type"),
+                    "anything.trace_id": trace_id,
+                    "anything.session_id": standardized_request.get("session_id") or "-",
+                },
+            ):
+                result = self.orchestrator.route(standardized_request)
 
             response = self.format_response(
                 code=result.get("code", "SUCCESS"),

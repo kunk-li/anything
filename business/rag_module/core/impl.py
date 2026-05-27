@@ -11,6 +11,7 @@ from llm_compat import call_llm_compat
 from .base import BaseRAG
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
+from observability_module import trace_span
 
 
 class SimpleRAG(BaseRAG):
@@ -202,8 +203,24 @@ class SimpleRAG(BaseRAG):
                 f"RAG 执行开始：trace_id={trace_id}, top_k={request.get('top_k')}, session_id={request.get('session_id')}"
             )
 
-            retrieved_chunks = self.retrieve(request)
-            generated = self.generate(request, retrieved_chunks)
+            with trace_span(
+                "rag.retrieve",
+                attributes={
+                    "anything.trace_id": trace_id or "-",
+                    "rag.top_k": int(request.get("top_k") or 0),
+                    "rag.enable_rerank": self.enable_rerank,
+                    "rag.enable_rewrite": self.enable_rewrite,
+                },
+            ) as span:
+                retrieved_chunks = self.retrieve(request)
+                span.set_attribute("rag.retrieved_count", len(retrieved_chunks))
+
+            with trace_span(
+                "rag.generate",
+                attributes={"anything.trace_id": trace_id or "-"},
+            ) as span:
+                generated = self.generate(request, retrieved_chunks)
+                span.set_attribute("rag.citations_count", len(generated.get("citations", [])))
 
             return {
                 "code": "SUCCESS",

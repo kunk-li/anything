@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from deps_module import BasicDeps, build_basic_deps
+from observability_module import trace_span
 
 
 class ApiService:
@@ -250,8 +251,18 @@ class ApiService:
                     headers={"X-Request-Id": trace_id},
                 )
 
-            # 4. 透传到接口层：业务语义校验交给 handler
-            result = self.handler.handle(body, trace_id=trace_id)
+            # 4. 透传到接口层 (OTel root span 包住整个请求)
+            with trace_span(
+                "api.invoke",
+                attributes={
+                    "http.method": "POST",
+                    "http.route": "/invoke",
+                    "anything.trace_id": trace_id,
+                    "anything.request_type": str(body.get("type", "unknown")),
+                },
+            ) as span:
+                result = self.handler.handle(body, trace_id=trace_id)
+                span.set_attribute("anything.response_code", str(result.get("code", "UNKNOWN_ERROR")))
 
             # 5. 应用层只负责业务码 -> HTTP 状态码映射
             http_status = self._map_code_to_http_status(result.get("code", "UNKNOWN_ERROR"))

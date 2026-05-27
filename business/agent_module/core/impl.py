@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional, Callable
 from .base import BaseAgent
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
+from observability_module import trace_span
 
 
 class SimpleAgent(BaseAgent):
@@ -168,12 +169,22 @@ class SimpleAgent(BaseAgent):
                 },
             )
 
-            plan = self.parse_task(
-                task=task,
-                session_id=session_id,
-                trace_id=trace_id,
-                extra_params=extra_params,
-            )
+            with trace_span(
+                "agent.parse_task",
+                attributes={
+                    "anything.trace_id": trace_id or "-",
+                    "agent.execution_mode": execution_mode,
+                    "agent.execution_strategy": strategy,
+                },
+            ) as span:
+                plan = self.parse_task(
+                    task=task,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    extra_params=extra_params,
+                )
+                span.set_attribute("agent.plan_source", str(plan.get("plan_source", "?")))
+                span.set_attribute("agent.steps_count", len(plan.get("steps", [])))
 
             self._append_state_event(
                 session_id=session_id,
