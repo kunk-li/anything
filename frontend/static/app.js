@@ -383,6 +383,13 @@
             renderAgentSteps(payload?.data?.steps || []);
             if (payload?.code && payload.code !== 'SUCCESS') {
                 toast('error', payload.code, payload.message || '');
+                // AUTH_REQUIRED / TENANT_REQUIRED -> 主动提示用户去设置里填 key
+                if (payload.code === 'AUTH_REQUIRED' || payload.code === 'TENANT_REQUIRED') {
+                    setTimeout(() => {
+                        toast('info', t('settings.title'), t('settings.apiKey'));
+                        openDrawer('settings');
+                    }, 300);
+                }
             }
         } catch (err) {
             updateMessage(placeholderId, {

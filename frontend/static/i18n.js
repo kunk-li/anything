@@ -311,3 +311,7 @@ const I18n = (() => {
 
     return { t, setLocale, getLocale, locales, onChange, applyToDom };
 })();
+
+// 浏览器全局脚本里 `const` 不会自动挂到 window 上 (跟 `var` 不同),
+// 显式 attach 让 app.js 里 `window.I18n.t(...)` 这种调用能工作。
+if (typeof window !== 'undefined') window.I18n = I18n;

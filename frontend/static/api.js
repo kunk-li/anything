@@ -260,3 +260,6 @@ const ApiClient = (() => {
         getSettings,
     };
 })();
+
+// 显式挂到 window (const 在 browser global 脚本不会自动 attach)
+if (typeof window !== 'undefined') window.ApiClient = ApiClient;
