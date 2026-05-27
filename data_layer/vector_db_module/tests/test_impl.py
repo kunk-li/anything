@@ -105,6 +105,39 @@ class TestFaissVectorDB(unittest.TestCase):
             self.db.upsert_vectors(bad)
         self.assertEqual(ctx.exception.code, "VECTOR_INSERT_FAILED")
 
+    # ============ Task #33 PR3a: tenant_id 接口扩展 ============
+
+    def test_tenant_id_default_when_not_specified(self):
+        """不传 tenant_id 应走 default(向后兼容)"""
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db = FaissVectorDB(cfg=cfg)
+        self.assertEqual(db.tenant_id, "default")
+
+    def test_tenant_id_stored_when_specified(self):
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db = FaissVectorDB(cfg=cfg, tenant_id="tenant-a")
+        self.assertEqual(db.tenant_id, "tenant-a")
+
+    def test_tenant_id_invalid_charset_rejected(self):
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        for bad in ("Acme Corp", "../../etc", "ab", "x" * 33, "tenant/a", 123):
+            with self.assertRaises(VectorDBException, msg=f"should reject {bad!r}"):
+                FaissVectorDB(cfg=cfg, tenant_id=bad)
+
+    def test_tenant_id_does_not_change_behavior_yet(self):
+        """PR3a 行为不变: tenant_id 仅记录, query/upsert 走单一物理路径"""
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db_a = FaissVectorDB(cfg=cfg, tenant_id="tenant-a")
+        db_a.upsert_vectors([{
+            "vector_id": "v1", "embedding": [1.0] + [0.0] * 63,
+            "metadata": {"doc_id": "d1", "chunk_id": "c1"},
+        }])
+        # 不同 tenant_id 但同 store_dir 在 PR3a 阶段仍能互相看见
+        # (PR3b 才会按目录隔离, 届时该测试需要更新)
+        db_b = FaissVectorDB(cfg=cfg, tenant_id="tenant-b")
+        res = db_b.query([1.0] + [0.0] * 63, top_k=5)
+        self.assertEqual(len(res), 1, "PR3a 行为不变: 跨租户仍可见; PR3b 后此断言会反转")
+
 
 if __name__ == "__main__":
     unittest.main()

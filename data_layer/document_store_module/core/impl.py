@@ -38,11 +38,17 @@ class LocalDocumentStore(BaseDocumentStore):
     - Hash map:      {storage_dir}/.hash_doc_map.json (hash -> doc_id)
     """
 
-    def __init__(self, deps: Optional[BasicDeps] = None):
+    def __init__(self, deps: Optional[BasicDeps] = None, tenant_id: str = "default"):
+        """
+        Args:
+            tenant_id: 租户标识 (Task #33 PR3a, 字符集 [a-z0-9_-] 3-32 字符).
+                本 PR 仅记录, 数据路径仍单一 (PR3b 起按 tenant 切目录).
+        """
         from deps_module import build_basic_deps
         deps = deps or build_basic_deps()
         self.config_manager = deps.config
         self.logger = deps.logger
+        self.tenant_id = self._validate_tenant_id(tenant_id)
 
         defaults = DocumentStoreConfig()
 
@@ -73,6 +79,16 @@ class LocalDocumentStore(BaseDocumentStore):
         self.hash_doc_map: Dict[str, str] = self._load_hash_map()
 
         self._init_storage_dir()
+
+    @staticmethod
+    def _validate_tenant_id(tenant_id: str) -> str:
+        """字符集白名单校验 (深度防御, 防 path traversal). 见 docs/multi-tenancy-design.md §9.2"""
+        import re
+        if not isinstance(tenant_id, str) or not re.match(r"^[a-z0-9_-]{3,32}$", tenant_id):
+            raise ValueError(
+                f"tenant_id 必须是 3-32 位 [a-z0-9_-] 字符, 实际收到: {tenant_id!r}"
+            )
+        return tenant_id
 
     def _init_storage_dir(self) -> None:
         """Ensure storage_dir and backup_dir exist."""

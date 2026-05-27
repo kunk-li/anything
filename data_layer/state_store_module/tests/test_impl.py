@@ -1,4 +1,8 @@
 import os
+
+# 单独跑本测试时启用 dev mode 避免 build_basic_deps 触发 secrets fail-fast
+os.environ.setdefault("ANYTHING_DEV_MODE", "1")
+
 import tempfile
 import unittest
 
@@ -78,6 +82,24 @@ class TestLocalStateStore(unittest.TestCase):
             self.state_store.get_state("..//bad")
         with self.assertRaises(ValueError):
             self.state_store.clear_state("bad id")
+
+    # ============ Task #33 PR3a: tenant_id 接口扩展 ============
+
+    def test_tenant_id_default(self):
+        from state_store_module.core.impl import LocalStateStore
+        s = LocalStateStore(store_dir=self.store_dir)
+        self.assertEqual(s.tenant_id, "default")
+
+    def test_tenant_id_specified(self):
+        from state_store_module.core.impl import LocalStateStore
+        s = LocalStateStore(store_dir=self.store_dir, tenant_id="tenant-a")
+        self.assertEqual(s.tenant_id, "tenant-a")
+
+    def test_tenant_id_invalid_charset_rejected(self):
+        from state_store_module.core.impl import LocalStateStore
+        for bad in ("Acme Corp", "../../etc", "ab", "x" * 33):
+            with self.assertRaises(ValueError, msg=f"should reject {bad!r}"):
+                LocalStateStore(store_dir=self.store_dir, tenant_id=bad)
 
 
 if __name__ == "__main__":

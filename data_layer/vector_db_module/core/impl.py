@@ -50,8 +50,21 @@ class FaissVectorDB(BaseVectorDB):
     - 更新策略：IndexFlatIP 不支持原位更新，因此 upsert 会在内存中更新映射并重建索引
     """
 
-    def __init__(self, cfg: Optional[VectorDBConfig] = None, deps: Optional[BasicDeps] = None):
+    def __init__(
+        self,
+        cfg: Optional[VectorDBConfig] = None,
+        deps: Optional[BasicDeps] = None,
+        tenant_id: str = "default",
+    ):
+        """
+        Args:
+            tenant_id: 租户标识(Task #33 PR3a 起接收, PR3b 起按 tenant 切目录).
+                本 PR 仅记录, 数据路径仍单一(行为不变).
+                字符集校验在数据层重复一次, 防止上游被绕过(深度防御, 见
+                docs/multi-tenancy-design.md §9.2).
+        """
         self.cfg = cfg or VectorDBConfig()
+        self.tenant_id = self._validate_tenant_id(tenant_id)
         self.dim = int(self.cfg.get_vector_dimension())
         self.store_dir = self.cfg.get_local_store_dir()
 
@@ -158,6 +171,20 @@ class FaissVectorDB(BaseVectorDB):
         self.index = faiss.IndexFlatIP(self.dim)
         if self.embeddings is not None and self.embeddings.shape[0] > 0:
             self.index.add(self.embeddings)
+
+    @staticmethod
+    def _validate_tenant_id(tenant_id: str) -> str:
+        """字符集白名单校验 (深度防御, 防 path traversal). 见 docs/multi-tenancy-design.md §9.2
+
+        本期数据路径还没用 tenant_id (PR3a), 但接口先验证, 让恶意值在最早期暴露.
+        """
+        import re
+        if not isinstance(tenant_id, str) or not re.match(r"^[a-z0-9_-]{3,32}$", tenant_id):
+            raise VectorDBException(
+                "PARAM_INVALID",
+                f"tenant_id 必须是 3-32 位 [a-z0-9_-] 字符, 实际收到: {tenant_id!r}",
+            )
+        return tenant_id
 
     # ------------------------- interface -------------------------
     def upsert_vectors(self, vectors: List[Dict]) -> bool:

@@ -25,6 +25,7 @@ modules=(
   "data_layer/chunker_module"
   "data_layer/vector_db_module"
   "data_layer/document_store_module"
+  "data_layer/state_store_module"
   "business/rag_module"
   "business/agent_module"
   "interface/request_response_module"

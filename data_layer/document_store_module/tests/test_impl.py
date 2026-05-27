@@ -89,5 +89,21 @@ class TestLocalDocumentStore(unittest.TestCase):
         self.assertGreaterEqual(res["total"], 1)
         self.assertIsNone(self.store.get_document(doc["doc_id"]))
 
+    # ============ Task #33 PR3a: tenant_id 接口扩展 ============
+
+    def test_tenant_id_default(self):
+        # setUp 已构造 store(无 tenant_id)
+        self.assertEqual(self.store.tenant_id, "default")
+
+    def test_tenant_id_specified(self):
+        store = LocalDocumentStore(tenant_id="tenant-a")
+        self.assertEqual(store.tenant_id, "tenant-a")
+
+    def test_tenant_id_invalid_charset_rejected(self):
+        for bad in ("Acme Corp", "../../etc", "ab", "x" * 33, 123, "tenant.id"):
+            with self.assertRaises(ValueError, msg=f"should reject {bad!r}"):
+                LocalDocumentStore(tenant_id=bad)
+
+
 if __name__ == "__main__":
     unittest.main()

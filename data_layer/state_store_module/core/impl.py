@@ -37,10 +37,15 @@ class LocalStateStore(BaseStateStore):
         self,
         store_dir: Optional[str] = None,
         deps: Optional[BasicDeps] = None,
+        tenant_id: str = "default",
         # 旧风格兼容入参(已废弃,保留是为了不破坏既有调用)
         config_manager=None,
         logger=None,
     ):
+        """
+        Args:
+            tenant_id: 租户标识 (Task #33 PR3a). 本 PR 仅记录, 路径仍单一.
+        """
         # 优先级: 显式 config_manager/logger > deps > 默认 build_basic_deps
         if config_manager is not None or logger is not None:
             from deps_module import build_basic_deps
@@ -53,6 +58,7 @@ class LocalStateStore(BaseStateStore):
                 deps = build_basic_deps()
             self.config_manager = deps.config
             self.logger = deps.logger
+        self.tenant_id = self._validate_tenant_id(tenant_id)
 
         # 加载配置
         try:
@@ -108,6 +114,16 @@ class LocalStateStore(BaseStateStore):
                     self.logger.info(f"清理过期状态文件：{fp}", logger_name="state_store_module")
                 except Exception as e:
                     self.logger.warning(f"清理过期状态文件失败：{fp} - {e}", logger_name="state_store_module")
+
+    @staticmethod
+    def _validate_tenant_id(tenant_id: str) -> str:
+        """字符集白名单校验 (深度防御, 防 path traversal). 见 docs/multi-tenancy-design.md §9.2"""
+        import re
+        if not isinstance(tenant_id, str) or not re.match(r"^[a-z0-9_-]{3,32}$", tenant_id):
+            raise ValueError(
+                f"tenant_id 必须是 3-32 位 [a-z0-9_-] 字符, 实际收到: {tenant_id!r}"
+            )
+        return tenant_id
 
     def save_state(self, session_id: str, state: Dict[str, Any]) -> bool:
         try:
