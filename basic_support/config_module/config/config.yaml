@@ -45,7 +45,7 @@ llm:
     max_retry: 1
 
   default_vector_model: "text-embedding-3-small"
-  default_chat_model: "qwen3.5-flash-2026-02-23"
+  default_chat_model: "qwen-turbo"
   default_multimodal_model: "gpt-4o-mini"
 
   openai:
@@ -55,7 +55,7 @@ llm:
       api_key: "${OPENAI_API_KEY}"
       api_base: "https://api.openai.com/v1"
 
-    qwen3.5-flash-2026-02-23:
+    qwen-turbo:
       request_type: "CHAT"
       adapter_class: "OpenAIChatAdapter"
       api_key: "${DASHSCOPE_API_KEY}"

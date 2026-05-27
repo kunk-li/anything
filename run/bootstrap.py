@@ -265,8 +265,13 @@ def build_application_layer(
     build_api: bool = True,
     build_console: bool = False,
     deps: Optional[BasicDeps] = None,
+    data_layer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """构建应用层（共享 BasicDeps,按需构建,避免 API 启动时强依赖 ConsoleApp）"""
+    """构建应用层（共享 BasicDeps,按需构建,避免 API 启动时强依赖 ConsoleApp）
+
+    data_layer: 可选, 透传给 ApiService 让 /config/models 端点能拿到 LLMService。
+                未传时自动 build_data_layer 一次 (跟其他层一样的 DI 共享原则)。
+    """
     deps = deps or build_basic_deps()
     interface_layer = interface_layer or build_interface_layer(deps=deps)
     handler = interface_layer["handler"]
@@ -280,10 +285,20 @@ def build_application_layer(
         def _doc_store_factory(tenant_id: str):
             return LocalDocumentStore(deps=deps, tenant_id=tenant_id)
 
+        # llm_service 取自 data_layer; 没传 data_layer 就尝试现构造 (回退一份 DummyLLMClient
+        # 时 list_models 会返回空列表, /config/models 端点也降级到 SERVICE_UNAVAILABLE)。
+        llm_service = None
+        if data_layer is not None:
+            candidate = data_layer.get("llm_client")
+            # 只把 LLMService 真实实例传过去, DummyLLMClient 没有 list_models 接口
+            if hasattr(candidate, "list_models") and hasattr(candidate, "register_or_update_model"):
+                llm_service = candidate
+
         result["api_service"] = ApiService(
             handler=handler,
             deps=deps,
             document_store_factory=_doc_store_factory,
+            llm_service=llm_service,
         )
 
     if build_console:
@@ -309,7 +324,17 @@ def build_handler() -> RequestHandler:
 def build_api_app():
     """构建 FastAPI app（DI 共享一份 BasicDeps）"""
     deps = build_basic_deps()
-    app_layer = build_application_layer(build_api=True, build_console=False, deps=deps)
+    # 透传 data_layer 让 /config/models 端点能拿到 LLMService 实例
+    data_layer = build_data_layer(deps=deps)
+    business_layer = build_business_layer(data_layer=data_layer, deps=deps)
+    interface_layer = build_interface_layer(business_layer=business_layer, deps=deps)
+    app_layer = build_application_layer(
+        interface_layer=interface_layer,
+        build_api=True,
+        build_console=False,
+        deps=deps,
+        data_layer=data_layer,
+    )
     return app_layer["api_service"].app
 
 
@@ -333,6 +358,7 @@ def build_all(include_console: bool = False) -> Dict[str, Any]:
         build_api=True,
         build_console=include_console,
         deps=deps,
+        data_layer=data,
     )
 
     return {

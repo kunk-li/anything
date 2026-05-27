@@ -103,6 +103,39 @@ const ApiClient = (() => {
         return _doFetch('GET', `/index/job/${encodeURIComponent(jobId)}`);
     }
 
+    // ==================== 模型配置 ====================
+    /**
+     * GET /config/models — 拿当前注册的所有 LLM 模型 (api_key 已脱敏)
+     */
+    async function listModels() {
+        return _doFetch('GET', '/config/models');
+    }
+
+    /**
+     * POST /config/models — 注册或更新一个模型
+     * body 必填: name / request_type / adapter_class
+     *     可选: api_key / api_base / set_as_default
+     */
+    async function registerModel(model) {
+        return _doFetch('POST', '/config/models', { body: model });
+    }
+
+    /**
+     * DELETE /config/models/{name}
+     */
+    async function deleteModel(name) {
+        return _doFetch('DELETE', `/config/models/${encodeURIComponent(name)}`);
+    }
+
+    /**
+     * POST /config/models/{name}/set-default — 设为对应 request_type 的默认
+     */
+    async function setDefaultModel(name, requestType) {
+        return _doFetch('POST', `/config/models/${encodeURIComponent(name)}/set-default`, {
+            body: { request_type: requestType || '' },
+        });
+    }
+
     /**
      * 文档预览: GET /documents/{doc_id}/preview
      * @param {string} docId
@@ -218,6 +251,10 @@ const ApiClient = (() => {
         buildIndex,
         getIndexJob,
         getDocumentPreview,
+        listModels,
+        registerModel,
+        deleteModel,
+        setDefaultModel,
         openStream,
         configure,
         getSettings,

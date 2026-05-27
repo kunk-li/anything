@@ -22,8 +22,16 @@ from ..utils.tool_functions import (
 # 基础依赖通过 deps 注入,不直接 import ConfigManager/SystemLogger/CommonUtils
 from exception_module import RAGException  # type: ignore
 from llm_adapter_module import LLMService  # type: ignore
-from sentence_transformers import SentenceTransformer  # type: ignore
 from deps_module import BasicDeps
+
+# sentence-transformers 是可选 heavy 依赖, 未装时 STEmbedding 退化为
+# _deterministic_vector (跟 document_parser 的 PyPDF2/docx 一样的可选 import 模式)。
+try:
+    from sentence_transformers import SentenceTransformer  # type: ignore
+    _ST_AVAILABLE = True
+except Exception:  # pragma: no cover
+    SentenceTransformer = None  # type: ignore
+    _ST_AVAILABLE = False
 
 
 def _deterministic_vector(text: str, dim: int) -> List[float]:

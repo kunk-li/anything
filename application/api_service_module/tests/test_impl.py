@@ -691,6 +691,159 @@ class TestWebSocketStream(unittest.TestCase):
         self.assertEqual(types[-1], "done")
 
 
+class TestModelConfigEndpoints(unittest.TestCase):
+    """运行期 LLM 模型注册表管理: GET/POST/DELETE /config/models + set-default"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+
+    def test_endpoints_unavailable_without_llm_service(self):
+        """没注入 llm_service 时所有 /config/models* 端点返回 501"""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        for path, method in [
+            ("/config/models", "GET"),
+            ("/config/models", "POST"),
+            ("/config/models/whatever", "DELETE"),
+            ("/config/models/whatever/set-default", "POST"),
+        ]:
+            r = client.request(method, path, json={})
+            self.assertEqual(r.status_code, 501, path)
+            self.assertEqual(r.json()["code"], "SERVICE_UNAVAILABLE")
+
+    def test_list_models(self):
+        """GET /config/models 返回脱敏 key 的列表"""
+        class _LLM:
+            def list_models(self, *, mask_keys=True):
+                assert mask_keys is True
+                return [
+                    {
+                        "name": "qwen-turbo",
+                        "request_type": "CHAT",
+                        "adapter_class": "OpenAIChatAdapter",
+                        "api_base": "https://x",
+                        "api_key": "sk-****c1a",
+                        "configured": True,
+                        "is_default": True,
+                    }
+                ]
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.get("/config/models")
+        self.assertEqual(r.status_code, 200)
+        d = r.json()["data"]
+        self.assertEqual(len(d["models"]), 1)
+        self.assertEqual(d["models"][0]["name"], "qwen-turbo")
+        # api_key 被脱敏
+        self.assertIn("****", d["models"][0]["api_key"])
+
+    def test_register_model(self):
+        """POST /config/models 注册新模型"""
+        captured = {}
+
+        class _LLM:
+            def list_models(self, *, mask_keys=True):
+                return []
+
+            def register_or_update_model(self, name, request_type, adapter_class,
+                                          api_key, api_base, *, extra=None, set_as_default=False):
+                captured.update({
+                    "name": name, "request_type": request_type,
+                    "adapter_class": adapter_class, "api_key": api_key,
+                    "api_base": api_base, "set_as_default": set_as_default,
+                })
+                return {
+                    "name": name, "request_type": request_type,
+                    "adapter_class": adapter_class,
+                    "api_base": api_base, "api_key": "sk-****",
+                    "configured": True, "is_default": set_as_default,
+                }
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.post("/config/models", json={
+            "name": "qwen-plus",
+            "request_type": "chat",
+            "adapter_class": "OpenAIChatAdapter",
+            "api_key": "sk-real-secret",
+            "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "set_as_default": True,
+        })
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["code"], "SUCCESS")
+        # impl 收到的 request_type 被 upper 后变 CHAT
+        self.assertEqual(captured["request_type"], "CHAT")
+        self.assertEqual(captured["set_as_default"], True)
+
+    def test_register_model_missing_required(self):
+        """POST /config/models 缺必填字段 -> 400 PARAM_MISSING"""
+        class _LLM:
+            def list_models(self, *, mask_keys=True): return []
+            def register_or_update_model(self, **kw): raise ValueError("不应到这里")
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.post("/config/models", json={"name": "only-name"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["code"], "PARAM_MISSING")
+
+    def test_register_model_invalid_param(self):
+        """impl raise ValueError -> 400 PARAM_INVALID"""
+        class _LLM:
+            def list_models(self, *, mask_keys=True): return []
+            def register_or_update_model(self, **kw):
+                raise ValueError("adapter_class 未知")
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.post("/config/models", json={
+            "name": "x", "request_type": "CHAT", "adapter_class": "UnknownAdapter",
+        })
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["code"], "PARAM_INVALID")
+        self.assertIn("adapter_class 未知", r.json()["message"])
+
+    def test_delete_model(self):
+        class _LLM:
+            def list_models(self, *, mask_keys=True): return []
+            def unregister_model(self, name): return name == "exists"
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r1 = client.delete("/config/models/exists")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1.json()["code"], "SUCCESS")
+        r2 = client.delete("/config/models/missing")
+        self.assertEqual(r2.status_code, 404)
+        self.assertEqual(r2.json()["code"], "MODEL_NOT_FOUND")
+
+    def test_set_default(self):
+        class _LLM:
+            def list_models(self, *, mask_keys=True): return []
+            def set_default_model(self, name, request_type=None):
+                if name == "ghost":
+                    raise ValueError("不存在")
+                return {"request_type": "CHAT", "default_model": name}
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        r = client.post("/config/models/qwen-turbo/set-default", json={"request_type": "CHAT"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["data"]["default_model"], "qwen-turbo")
+
+        r2 = client.post("/config/models/ghost/set-default", json={})
+        self.assertEqual(r2.status_code, 400)
+        self.assertEqual(r2.json()["code"], "PARAM_INVALID")
+
+
 class TestDocumentPreview(unittest.TestCase):
     """GET /documents/{doc_id}/preview — 跟 chunk 跳转回原文功能配套"""
 

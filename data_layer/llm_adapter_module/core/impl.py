@@ -320,7 +320,148 @@ class LLMService(BaseLLMService):
         self.cfg = LLMAdapterConfig(self.config_manager)
 
         self.adapters: Dict[str, Any] = {}  # model_name -> adapter
+        # 运行期注册的 model 配置 (备份 model_cfg, 让 list_models 能返回 api_base 等元数据)
+        self._model_configs: Dict[str, Dict[str, Any]] = {}
+        # 运行期默认模型覆盖 (request_type -> model_name), 优先于 yaml 配置
+        self._default_overrides: Dict[str, str] = {}
         self.init_adapters()
+
+    # ------------------------------------------------------------------
+    # 运行期管理 API (供 ApiService /config/models 端点使用)
+    # ------------------------------------------------------------------
+
+    def _mask_key(self, key: str) -> str:
+        """脱敏: sk-1234567890abcdef -> sk-****cdef (只留首 3 + 末 4)"""
+        if not key:
+            return ""
+        s = str(key)
+        if len(s) <= 8:
+            return "****"
+        return f"{s[:3]}****{s[-4:]}"
+
+    def list_models(self, *, mask_keys: bool = True) -> List[Dict[str, Any]]:
+        """返回当前注册的所有模型元数据.
+
+        Args:
+            mask_keys: 默认 True, 把 api_key 脱敏 (sk-***cdef);
+                       设 False 返回原文 (只该用在内部审计/测试)。
+        """
+        # 真实记录的 cfg 优先, 否则从 cfg 配置回读
+        out: List[Dict[str, Any]] = []
+        for name, adapter in self.adapters.items():
+            mcfg = self._model_configs.get(name) or getattr(adapter, "model_cfg", {}) or {}
+            req_type = str(mcfg.get("request_type", "")).upper()
+            api_key = mcfg.get("api_key") or getattr(adapter, "api_key", "") or ""
+            api_base = mcfg.get("api_base") or getattr(adapter, "api_base", "") or ""
+            adapter_class = str(mcfg.get("adapter_class", "") or type(adapter).__name__)
+            entry = {
+                "name": name,
+                "request_type": req_type,
+                "adapter_class": adapter_class,
+                "api_base": api_base,
+                "api_key": self._mask_key(api_key) if mask_keys else api_key,
+                "configured": bool(api_key and api_base),
+                "is_default": self.get_default_model(req_type) == name,
+            }
+            out.append(entry)
+        # 按 request_type 然后 name 排序, 让 UI 显示稳定
+        return sorted(out, key=lambda e: (e["request_type"], e["name"]))
+
+    def get_default_model(self, request_type: str) -> str:
+        """读默认模型: 运行期覆盖优先, 否则走 yaml 配置 (cfg.get_default_model)."""
+        rt = (request_type or "").upper()
+        if rt in self._default_overrides:
+            return self._default_overrides[rt]
+        try:
+            return self.cfg.get_default_model(rt) or ""
+        except Exception:
+            return ""
+
+    def register_or_update_model(
+        self,
+        name: str,
+        request_type: str,
+        adapter_class: str,
+        api_key: str,
+        api_base: str,
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+        set_as_default: bool = False,
+    ) -> Dict[str, Any]:
+        """运行期注册或更新一个模型. 返回脱敏后的条目.
+
+        约束:
+            - name: 非空, 用于 _resolve_model_name 查表
+            - request_type: VECTOR / CHAT / MULTIMODAL 之一
+            - adapter_class: 必须在 _build_adapter mapping 里 (OpenAI* 三种之一)
+            - api_key / api_base: 缺一则 check_config = False (适配器走 mock)
+
+        side-effect:
+            - 覆盖 self.adapters[name] (旧实例被丢弃)
+            - 写 self._model_configs[name]
+            - set_as_default=True 时更新 self._default_overrides[request_type]
+        """
+        if not name:
+            raise ValueError("model name 不能为空")
+        rt = str(request_type or "").upper()
+        if rt not in {"VECTOR", "CHAT", "MULTIMODAL"}:
+            raise ValueError(f"request_type 仅支持 VECTOR/CHAT/MULTIMODAL, 收到: {request_type!r}")
+
+        model_cfg = {
+            "request_type": rt,
+            "adapter_class": adapter_class,
+            "api_key": api_key or "",
+            "api_base": api_base or "",
+        }
+        if extra:
+            model_cfg.update(extra)
+
+        common_cfg = self.cfg.get_common() if isinstance(self.cfg.get_common(), dict) else {}
+        adapter = self._build_adapter(adapter_class, name, model_cfg, common_cfg)
+        if adapter is None:
+            raise ValueError(f"无法构造适配器: adapter_class={adapter_class!r}")
+
+        self.adapters[name] = adapter
+        self._model_configs[name] = model_cfg
+        if set_as_default:
+            self._default_overrides[rt] = name
+
+        self.logger.info(
+            f"[llm_adapter] runtime register model={name} type={rt} adapter={adapter_class} "
+            f"default={set_as_default} key={'***'+str(api_key)[-4:] if api_key else 'empty'}",
+            logger_name="llm_adapter",
+        )
+        return self.list_models()[
+            next((i for i, e in enumerate(self.list_models()) if e["name"] == name), 0)
+        ]
+
+    def unregister_model(self, name: str) -> bool:
+        """从 adapters / _model_configs 移除. 若该模型是某 request_type 的默认, 同步清覆盖."""
+        existed = name in self.adapters
+        self.adapters.pop(name, None)
+        self._model_configs.pop(name, None)
+        # 清掉运行期覆盖 (如果它是)
+        for rt, mname in list(self._default_overrides.items()):
+            if mname == name:
+                self._default_overrides.pop(rt, None)
+        if existed:
+            self.logger.info(f"[llm_adapter] unregistered model={name}", logger_name="llm_adapter")
+        return existed
+
+    def set_default_model(self, name: str, request_type: Optional[str] = None) -> Dict[str, Any]:
+        """把 name 设为 request_type 的默认. request_type 不传时从已注册条目推导."""
+        if name not in self.adapters:
+            raise ValueError(f"model {name!r} 未注册")
+        rt = (request_type or "").upper()
+        if not rt:
+            # 推导
+            mcfg = self._model_configs.get(name) or getattr(self.adapters[name], "model_cfg", {}) or {}
+            rt = str(mcfg.get("request_type", "")).upper()
+        if rt not in {"VECTOR", "CHAT", "MULTIMODAL"}:
+            raise ValueError(f"无法推导 request_type, 请显式传参")
+        self._default_overrides[rt] = name
+        self.logger.info(f"[llm_adapter] set default {rt}={name}", logger_name="llm_adapter")
+        return {"request_type": rt, "default_model": name}
 
     def init_adapters(self) -> None:
         # 从配置扫描所有模型
@@ -381,7 +522,12 @@ class LLMService(BaseLLMService):
     def _resolve_model_name(self, request: LLMRequest) -> str:
         name = request.model_name or "default"
         if name == "default":
-            return self.cfg.get_default_model((request.request_type or "").upper())
+            # PR: 优先用运行期 default override, 否则回退 yaml 配置
+            rt = (request.request_type or "").upper()
+            override = self._default_overrides.get(rt)
+            if override:
+                return override
+            return self.cfg.get_default_model(rt)
         return name
 
     def _get_adapter(self, model_name: str):

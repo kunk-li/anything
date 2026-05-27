@@ -175,6 +175,80 @@
                         <button type="button" class="lang-opt" data-locale="en">English</button>
                     </div>
                 </div>
+
+                <!-- ============== LLM 模型管理 ============== -->
+                <hr class="form-divider" />
+                <h4 class="form-section-title" data-i18n="models.title">LLM 模型管理</h4>
+                <p class="hint" data-i18n="models.hint">
+                    运行期注册的模型 + key, 不持久化到 yaml (重启丢失)。生产部署应在网关屏蔽 /config/* 端点。
+                </p>
+
+                <div class="models-toolbar">
+                    <button type="button" class="small-btn" id="models-refresh"
+                            data-i18n="models.refresh">刷新</button>
+                    <button type="button" class="small-btn" id="models-add"
+                            data-i18n="models.add">+ 新增</button>
+                </div>
+                <table class="models-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="models.col.name">名称</th>
+                            <th data-i18n="models.col.type">类型</th>
+                            <th data-i18n="models.col.key">Key</th>
+                            <th data-i18n="models.col.action">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="models-tbody">
+                        <tr><td colspan="4" class="empty-state" data-i18n="models.empty">点击刷新查看模型列表</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- 编辑表单 (折叠) -->
+                <div class="model-form" id="model-form" hidden>
+                    <div class="model-form-grid">
+                        <label>
+                            <span data-i18n="models.field.name">模型名</span>
+                            <input type="text" id="mf-name" placeholder="qwen-turbo" />
+                        </label>
+                        <label>
+                            <span data-i18n="models.field.type">类型</span>
+                            <select id="mf-type">
+                                <option value="CHAT">CHAT</option>
+                                <option value="VECTOR">VECTOR</option>
+                                <option value="MULTIMODAL">MULTIMODAL</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span data-i18n="models.field.adapter">适配器</span>
+                            <select id="mf-adapter">
+                                <option value="OpenAIChatAdapter">OpenAIChatAdapter</option>
+                                <option value="OpenAIVectorAdapter">OpenAIVectorAdapter</option>
+                                <option value="OpenAIMultimodalAdapter">OpenAIMultimodalAdapter</option>
+                            </select>
+                        </label>
+                        <label class="full-row">
+                            <span data-i18n="models.field.apiBase">API Base</span>
+                            <input type="text" id="mf-api-base" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+                        </label>
+                        <label class="full-row">
+                            <span data-i18n="models.field.apiKey">API Key</span>
+                            <input type="password" id="mf-api-key" placeholder="sk-..." />
+                        </label>
+                        <label class="full-row checkbox-row">
+                            <input type="checkbox" id="mf-default" />
+                            <span data-i18n="models.field.setDefault">同时设为该类型的默认</span>
+                        </label>
+                    </div>
+                    <div class="model-form-actions">
+                        <button type="button" class="primary-btn" id="mf-submit"
+                                data-i18n="models.submit">保存</button>
+                        <button type="button" class="secondary-btn" id="mf-cancel"
+                                data-i18n="models.cancel">取消</button>
+                    </div>
+                </div>
+
+                <hr class="form-divider" />
+
                 <div class="form-row">
                     <button id="save-settings" class="primary-btn" data-i18n="settings.save">保存</button>
                     <button id="clear-history" class="secondary-btn" data-i18n="settings.clear">清空对话历史</button>
