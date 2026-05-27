@@ -88,11 +88,77 @@ class ApiService:
             "duration_count_by_type": {},  # (type, tenant) -> count
         }
 
+        # PR4b: 配额体系 — 已知 tenant 集合 + per-tenant QPS 滑窗
+        # known_tenants = api_keys 配置出现的 + quotas 配置出现的 + 'default'
+        # 未在此集合中, 但 body 显式声明的 tenant_id -> 404 TENANT_NOT_FOUND
+        quota_tids = set(
+            (self.config.get_config("quotas", {}) or {}).keys()
+        )
+        # 移除非 tenant 性质的全局键(如 tenant_deletion_grace_hours 见 §9.4.1)
+        quota_tids = {t for t in quota_tids if isinstance(t, str) and t != "tenant_deletion_grace_hours"}
+        self._known_tenants = set(self._key_to_tenant.values()) | quota_tids | {"default"}
+
+        # QPS 滑窗: per-tenant deque[float timestamp], 窗口 1s, max_qps 阈值从 quotas 取
+        from collections import deque as _deque
+        self._qps_lock = threading.Lock()
+        self._qps_windows: Dict[str, "_deque[float]"] = {}
+
         self._register_middlewares()
         self._register_routes()
         self._register_exception_handlers()
 
         self.logger.info("API 服务模块初始化完成")
+
+    def _is_known_tenant(self, tenant_id: str) -> bool:
+        """PR4b: tenant_id 是否在已知集合中.
+
+        未知 tenant_id (即便格式合法) -> ApiService 返回 404 TENANT_NOT_FOUND,
+        防租户枚举攻击 (§9.3 统一不区分"存在但无权"与"不存在")。
+        """
+        return tenant_id in self._known_tenants
+
+    def _check_qps_quota(self, tenant_id: str) -> bool:
+        """PR4b QPS 滑动窗口检查.
+
+        策略: per-tenant 1 秒窗口 deque[timestamp], 新请求来时:
+            1. 弹掉窗外的旧 timestamp
+            2. 若剩余数 >= max_qps 阈值, 拒绝并 ERROR 日志
+            3. 否则 push 新 timestamp
+
+        返回:
+            True 表示放行, False 表示被限流 (调用方应返回 429 API_RATE_LIMITED)。
+        """
+        try:
+            max_qps = self.config.get_config(f"quotas.{tenant_id}.max_qps", None)
+        except Exception:
+            max_qps = None
+        if max_qps is None:
+            return True
+        try:
+            max_qps_n = int(max_qps)
+        except (TypeError, ValueError):
+            return True
+        if max_qps_n <= 0:
+            return True
+
+        from collections import deque as _deque
+        now = time.time()
+        with self._qps_lock:
+            window = self._qps_windows.get(tenant_id)
+            if window is None:
+                window = _deque()
+                self._qps_windows[tenant_id] = window
+            # 弹出 1s 窗外的
+            while window and (now - window[0]) > 1.0:
+                window.popleft()
+            if len(window) >= max_qps_n:
+                self.logger.error(
+                    f"[quota] QPS rate limit exceeded: tenant={tenant_id} "
+                    f"current_window={len(window)} max_qps={max_qps_n}"
+                )
+                return False
+            window.append(now)
+        return True
 
     def _bucket_tenant(self, tenant_id: Optional[str]) -> str:
         """租户 cardinality 守护: allowlist 之外的全部聚合为 "other".
@@ -327,6 +393,54 @@ class ApiService:
             # PR4a (§7.3.1): 把 reconcile 后的 tenant_id 注入 ContextVar,
             # 让所有 trace_span / 业务日志能自动拿到. body 没声明就用 default。
             effective_tid = str(body.get("tenant_id") or "default")
+
+            # PR4b: 未知 tenant -> 404 TENANT_NOT_FOUND (§9.3 防枚举, 跟 DOCUMENT_NOT_FOUND 同桶)
+            if not self._is_known_tenant(effective_tid):
+                self.logger.warning(
+                    f"[security] unknown tenant_id={effective_tid!r} trace_id={trace_id}"
+                )
+                duration = time.time() - start_time
+                self._record_metrics(
+                    req_type=str(body.get("type", "unknown")),
+                    code="TENANT_NOT_FOUND",
+                    duration=duration,
+                    tenant_id=effective_tid,
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "code": "TENANT_NOT_FOUND",
+                        "message": "tenant 不存在或无权访问",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,  # §9.3: 不暴露存在性
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
+            # PR4b: per-tenant QPS 滑窗限流 (§8 沿用 API_RATE_LIMITED 429)
+            if not self._check_qps_quota(effective_tid):
+                duration = time.time() - start_time
+                self._record_metrics(
+                    req_type=str(body.get("type", "unknown")),
+                    code="API_RATE_LIMITED",
+                    duration=duration,
+                    tenant_id=effective_tid,
+                )
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "code": "API_RATE_LIMITED",
+                        "message": "请求频率超出租户配额, 请稍后重试",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": True,
+                        "details": {"tenant_id": effective_tid},
+                    },
+                    headers={"X-Request-Id": trace_id, "Retry-After": "1"},
+                )
+
             tenant_token = set_current_tenant(effective_tid)
             try:
                 # 4. 透传到接口层 (OTel root span 包住整个请求)
@@ -643,11 +757,18 @@ class ApiService:
         """应用层负责业务码 -> HTTP 状态码映射"""
         success_codes = {"SUCCESS"}
         bad_request_codes = {"PARAM_MISSING", "PARAM_INVALID", "BAD_REQUEST", "TOOL_NOT_FOUND"}
-        unauthorized_codes = {"AUTH_REQUIRED"}
+        # PR4b: TENANT_REQUIRED 401 (未携带合法 tenant 或被停用), 与 AUTH_REQUIRED 同语义
+        unauthorized_codes = {"AUTH_REQUIRED", "TENANT_REQUIRED"}
         forbidden_codes = {"AUTH_FORBIDDEN"}
-        not_found_codes = {"DOCUMENT_NOT_FOUND", "FOLDER_NOT_FOUND", "STATE_NOT_FOUND"}
+        # PR4b: TENANT_NOT_FOUND 404 (§9.3 防租户枚举, 跟 DOCUMENT_NOT_FOUND 同桶)
+        not_found_codes = {
+            "DOCUMENT_NOT_FOUND", "FOLDER_NOT_FOUND", "STATE_NOT_FOUND", "TENANT_NOT_FOUND",
+        }
         unsupported_codes = {"UNSUPPORTED_FILE_TYPE"}
-        rate_limit_codes = {"API_RATE_LIMITED"}
+        # PR4b: QUOTA_* 429, retryable (复用现有 API_RATE_LIMITED 桶)
+        rate_limit_codes = {
+            "API_RATE_LIMITED", "QUOTA_DOC_EXCEEDED", "QUOTA_STORAGE_EXCEEDED",
+        }
         timeout_codes = {"AGENT_TIMEOUT", "LLM_TIMEOUT"}
         not_implemented_codes = {"VECTOR_DELETE_NOT_SUPPORTED"}
 

@@ -33,6 +33,12 @@ EXCEPTION_CODE_MAP: Dict[str, str] = {
 
     # 异常处理模块自身
     "EXCEPTION_HANDLER_ERROR": "异常处理器执行失败，请检查日志模块或异常配置",
+
+    # 多租户隔离 (Task #33 PR4b, 见 docs/multi-tenancy-design.md §8)
+    "TENANT_REQUIRED": "请求未携带合法 tenant_id 或已被停用",
+    "TENANT_NOT_FOUND": "tenant_id 格式合法但不在配置中",
+    "QUOTA_DOC_EXCEEDED": "文档数超过租户配额 {max_documents}",
+    "QUOTA_STORAGE_EXCEEDED": "存储空间超过租户配额 {max_vector_store_mb} MB",
 }
 
 

@@ -281,6 +281,10 @@ class TestMetricsTenantLabel(unittest.TestCase):
         self.handler = MockHandler()
         self.service = ApiService(handler=self.handler)
         self.service.auth_enabled = False
+        # PR4b: 把所有测试用 tenant 加入 known_tenants 集合, 否则会被 404 拦截
+        self.service._known_tenants.update({
+            "tenant-a", "tenant-b", "tenant-zz", "tenant-zy",
+        })
         self.client = TestClient(self.service.app)
 
     def test_metrics_tenant_label_in_output(self):
@@ -359,6 +363,8 @@ class TestContextVarIsolation(unittest.TestCase):
         self.service = ApiService(handler=self.handler)
         self.service.auth_enabled = False
         self.service.internal_whitelist = ["testclient"]
+        # PR4b: 把测试用 tenant 加入 known_tenants, 否则会被 404 拦截
+        self.service._known_tenants.update({"tenant-a", "tenant-b"})
         self.client = TestClient(self.service.app)
 
     def test_contextvar_does_not_leak_across_requests(self):
@@ -414,6 +420,171 @@ class TestContextVarIsolation(unittest.TestCase):
 
         # 即使 handler 炸了, ContextVar 必须回到 None
         self.assertIsNone(get_current_tenant())
+
+
+class TestQuotaAndTenantNotFound(unittest.TestCase):
+    """Task #33 PR4b: TENANT_NOT_FOUND + QPS 滑窗限流"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+        self.service = ApiService(handler=self.handler)
+        self.service.auth_enabled = False
+        self.service.internal_whitelist = ["testclient"]
+        self.client = TestClient(self.service.app)
+
+    def test_known_tenant_passes(self):
+        """default 在 _known_tenants 中, 请求应该正常通过"""
+        # 默认无 quota config 时 _known_tenants = {'default'}
+        self.assertIn("default", self.service._known_tenants)
+        response = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_unknown_tenant_returns_tenant_not_found_404(self):
+        """body 显式声明的未知 tenant -> 404 TENANT_NOT_FOUND"""
+        # 此时 _known_tenants 仅 {'default'}, body 声明 tenant-xyz 不在
+        response = self.client.post(
+            "/invoke",
+            json={"type": "rag", "query": "x", "tenant_id": "tenant-xyz"},
+        )
+        self.assertEqual(response.status_code, 404)
+        payload = response.json()
+        self.assertEqual(payload["code"], "TENANT_NOT_FOUND")
+        # §9.3: details 不暴露存在性
+        self.assertIsNone(payload["details"])
+
+    def test_known_tenant_after_quota_config(self):
+        """quotas 配置里出现的 tenant 自动加入 _known_tenants"""
+        # 模拟 reload 后, 把 tenant-a 加入 known
+        self.service._known_tenants.add("tenant-a")
+        response = self.client.post(
+            "/invoke",
+            json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_qps_quota_no_config_passes(self):
+        """没配 max_qps -> 不限流"""
+        # 默认配置无 quotas.default.max_qps
+        for _ in range(10):
+            response = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+            self.assertEqual(response.status_code, 200)
+
+    def test_qps_quota_under_limit_passes(self):
+        """配 max_qps=10 跑 5 次 -> 全过"""
+        original_get = self.service.config.get_config
+
+        def patched(key, default=None):
+            if key == "quotas.default.max_qps":
+                return 10
+            return original_get(key, default)
+
+        self.service.config.get_config = patched
+        for _ in range(5):
+            r = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+            self.assertEqual(r.status_code, 200)
+
+    def test_qps_quota_over_limit_429(self):
+        """配 max_qps=2 跑 5 次 -> 后 3 次应该 429 API_RATE_LIMITED"""
+        original_get = self.service.config.get_config
+
+        def patched(key, default=None):
+            if key == "quotas.default.max_qps":
+                return 2
+            return original_get(key, default)
+
+        self.service.config.get_config = patched
+
+        statuses = []
+        for _ in range(5):
+            r = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+            statuses.append(r.status_code)
+        # 前 2 个应 200, 后 3 个 429
+        self.assertEqual(statuses.count(200), 2)
+        self.assertEqual(statuses.count(429), 3)
+
+        # 检查 429 响应体格式
+        r_last = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+        self.assertEqual(r_last.status_code, 429)
+        payload = r_last.json()
+        self.assertEqual(payload["code"], "API_RATE_LIMITED")
+        self.assertTrue(payload["retryable"])
+        self.assertIn("Retry-After", r_last.headers)
+
+    def test_qps_window_slides_after_1s(self):
+        """1 秒窗口: 等 1.1s 后再发, 旧 timestamp 被弹出, 应能继续"""
+        import time as _t
+        original_get = self.service.config.get_config
+
+        def patched(key, default=None):
+            if key == "quotas.default.max_qps":
+                return 1
+            return original_get(key, default)
+
+        self.service.config.get_config = patched
+
+        r1 = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+        self.assertEqual(r1.status_code, 200)
+        r2 = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+        self.assertEqual(r2.status_code, 429)
+        # 等窗口滑过
+        _t.sleep(1.1)
+        r3 = self.client.post("/invoke", json={"type": "rag", "query": "x"})
+        self.assertEqual(r3.status_code, 200)
+
+    def test_qps_per_tenant_isolated(self):
+        """tenant-a 限 1 QPS 不应影响 tenant-b"""
+        self.service._known_tenants.update({"tenant-a", "tenant-b"})
+        original_get = self.service.config.get_config
+
+        def patched(key, default=None):
+            if key in ("quotas.tenant-a.max_qps", "quotas.tenant-b.max_qps"):
+                return 1
+            return original_get(key, default)
+
+        self.service.config.get_config = patched
+
+        # tenant-a 第二次应被限
+        ra1 = self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+        )
+        ra2 = self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-a"},
+        )
+        self.assertEqual(ra1.status_code, 200)
+        self.assertEqual(ra2.status_code, 429)
+        # tenant-b 仍允许第一次
+        rb1 = self.client.post(
+            "/invoke", json={"type": "rag", "query": "x", "tenant_id": "tenant-b"},
+        )
+        self.assertEqual(rb1.status_code, 200)
+
+
+class TestHTTPStatusMapping(unittest.TestCase):
+    """PR4b: 新错误码 -> HTTP 状态码映射"""
+
+    def setUp(self):
+        self.handler = MockHandler()
+        self.service = ApiService(handler=self.handler)
+
+    def test_tenant_required_401(self):
+        self.assertEqual(self.service._map_code_to_http_status("TENANT_REQUIRED"), 401)
+
+    def test_tenant_not_found_404(self):
+        self.assertEqual(self.service._map_code_to_http_status("TENANT_NOT_FOUND"), 404)
+
+    def test_quota_doc_exceeded_429(self):
+        self.assertEqual(self.service._map_code_to_http_status("QUOTA_DOC_EXCEEDED"), 429)
+
+    def test_quota_storage_exceeded_429(self):
+        self.assertEqual(self.service._map_code_to_http_status("QUOTA_STORAGE_EXCEEDED"), 429)
+
+    def test_legacy_codes_unchanged(self):
+        """原有码不应受影响"""
+        self.assertEqual(self.service._map_code_to_http_status("SUCCESS"), 200)
+        self.assertEqual(self.service._map_code_to_http_status("PARAM_MISSING"), 400)
+        self.assertEqual(self.service._map_code_to_http_status("AUTH_REQUIRED"), 401)
+        self.assertEqual(self.service._map_code_to_http_status("DOCUMENT_NOT_FOUND"), 404)
+        self.assertEqual(self.service._map_code_to_http_status("API_RATE_LIMITED"), 429)
 
 
 if __name__ == "__main__":

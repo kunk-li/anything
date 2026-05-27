@@ -204,5 +204,80 @@ class TestFaissVectorDB(unittest.TestCase):
         self.assertEqual(len(res), 0, "非 default 租户必须看不到老扁平路径数据")
 
 
+@unittest.skipUnless(FAISS_AVAILABLE, "faiss not installed")
+class TestQuotaStorage(unittest.TestCase):
+    """Task #33 PR4b: quotas.<tid>.max_vector_store_mb 配额硬限"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _patch_quota(self, db, quota_mb, tenant_id="default"):
+        original_get = db.config_manager.get_config
+
+        def patched(key, default=None):
+            if key == f"quotas.{tenant_id}.max_vector_store_mb":
+                return quota_mb
+            return original_get(key, default)
+
+        db.config_manager.get_config = patched
+
+    def test_quota_not_configured_no_limit(self):
+        """没配 quota -> 不限制, 可任意写入"""
+        db = FaissVectorDB(cfg=self.cfg, tenant_id="default")
+        ok = db.upsert_vectors([
+            {"vector_id": f"v{i}", "embedding": [0.1] * 64,
+             "metadata": {"doc_id": "d", "chunk_id": f"c{i}"}}
+            for i in range(50)
+        ])
+        self.assertTrue(ok)
+
+    def test_quota_within_limit_passes(self):
+        """quota=10MB 写少量向量 -> 通过"""
+        db = FaissVectorDB(cfg=self.cfg, tenant_id="default")
+        self._patch_quota(db, quota_mb=10)
+        ok = db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64,
+             "metadata": {"doc_id": "d", "chunk_id": "c1"}}
+        ])
+        self.assertTrue(ok)
+
+    def test_quota_exceeded_raises(self):
+        """quota=0.001MB (1KB) 写 1000 向量 (256KB) -> QUOTA_STORAGE_EXCEEDED"""
+        db = FaissVectorDB(cfg=self.cfg, tenant_id="default")
+        self._patch_quota(db, quota_mb=0.001)
+        with self.assertRaises(VectorDBException) as ctx:
+            db.upsert_vectors([
+                {"vector_id": f"v{i}", "embedding": [0.1] * 64,
+                 "metadata": {"doc_id": "d", "chunk_id": f"c{i}"}}
+                for i in range(1000)
+            ])
+        self.assertEqual(ctx.exception.code, "QUOTA_STORAGE_EXCEEDED")
+
+    def test_quota_per_tenant_isolated(self):
+        """tenant-a 配额满, tenant-b 应不受影响"""
+        db_a = FaissVectorDB(cfg=self.cfg, tenant_id="tenant-a")
+        db_b = FaissVectorDB(cfg=self.cfg, tenant_id="tenant-b")
+        # 只给 tenant-a 配 0.0001MB (几乎为 0), tenant-b 不 patch -> 无 quota
+        self._patch_quota(db_a, quota_mb=0.0001, tenant_id="tenant-a")
+
+        with self.assertRaises(VectorDBException) as ctx:
+            db_a.upsert_vectors([
+                {"vector_id": "va1", "embedding": [0.1] * 64,
+                 "metadata": {"doc_id": "d", "chunk_id": "c1"}}
+            ])
+        self.assertEqual(ctx.exception.code, "QUOTA_STORAGE_EXCEEDED")
+
+        # tenant-b 不受影响
+        ok = db_b.upsert_vectors([
+            {"vector_id": "vb1", "embedding": [0.1] * 64,
+             "metadata": {"doc_id": "d", "chunk_id": "c1"}}
+        ])
+        self.assertTrue(ok)
+
+
 if __name__ == "__main__":
     unittest.main()

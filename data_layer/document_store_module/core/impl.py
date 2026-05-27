@@ -27,6 +27,21 @@ from ..utils.tool_functions import (
 # 注: ConfigManager / SystemLogger 由 deps 注入,不在此直接 import
 from deps_module import BasicDeps
 
+try:
+    from exception_module.core.impl import SystemBaseException
+except Exception:  # pragma: no cover
+    class SystemBaseException(Exception):  # type: ignore
+        def __init__(self, code: str, message: str, *, details=None):
+            self.code = code
+            self.message = message
+            self.details = details or {}
+            super().__init__(message)
+
+
+class DocumentStoreException(SystemBaseException):
+    """文档存储模块异常 (DOCUMENT_* / QUOTA_DOC_EXCEEDED)."""
+    pass
+
 
 
 class LocalDocumentStore(BaseDocumentStore):
@@ -216,6 +231,38 @@ class LocalDocumentStore(BaseDocumentStore):
         }
         return document
 
+    def _check_doc_quota(self, document: Dict[str, str]) -> None:
+        """PR4b: 写入前查 quotas.<tid>.max_documents 配额。
+
+        以 hash_doc_map 当前大小 + 1 (若新 content_hash) 估算下界, 超限抛 QUOTA_DOC_EXCEEDED。
+        相同 content_hash 视为更新, 不算新文档, 不查 quota (允许重复写)。
+
+        - 没配置 quota = 不限制 (向后兼容)
+        - 配置 quota 为 0 = 拒绝任何新文档 (运维有意冻结)
+        """
+        try:
+            key = f"quotas.{self.tenant_id}.max_documents"
+            limit = self.config_manager.get_config(key, None)
+        except Exception:
+            limit = None
+        if limit is None:
+            return
+        content_hash = str(document.get("content_hash") or "").lower()
+        # 已存在该 hash -> 算作更新而非新增, 直接放行
+        if content_hash and content_hash in self.hash_doc_map:
+            return
+        projected = len(self.hash_doc_map) + 1
+        if projected > int(limit):
+            self.logger.error(
+                f"[quota] document quota exceeded: tenant={self.tenant_id} "
+                f"projected={projected} limit={limit}"
+            )
+            raise DocumentStoreException(
+                "QUOTA_DOC_EXCEEDED",
+                f"文档数超过租户配额: projected={projected}, limit={limit} "
+                f"(tenant={self.tenant_id})",
+            )
+
     def save_document(self, document: Dict[str, str]) -> bool:
         required = [
             "doc_id", "content", "file_name", "file_type", "storage_type",
@@ -228,6 +275,9 @@ class LocalDocumentStore(BaseDocumentStore):
         doc_id = document["doc_id"]
         if not is_uuid4(doc_id):
             raise ValueError("doc_id格式非法，需为UUID4")
+
+        # PR4b: 配额硬限放在 try 之前, 让 DocumentStoreException 直接上抛 (不被 except 吞)
+        self._check_doc_quota(document)
 
         storage_type = self._storage_type_for(document.get("storage_type") or document.get("file_type") or "unknown")
         doc_path, info_path = self._doc_paths(doc_id, storage_type)

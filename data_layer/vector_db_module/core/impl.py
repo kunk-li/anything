@@ -86,12 +86,16 @@ class FaissVectorDB(BaseVectorDB):
         self.meta_path = os.path.join(self.store_dir, "meta.json")
         self.emb_path = os.path.join(self.store_dir, "embeddings.npy")
 
-        # logger 优先走 DI 注入;未注入时延迟构造一份(向后兼容)
+        # logger / config_manager 优先走 DI 注入;未注入时延迟构造一份(向后兼容)。
+        # config_manager 用于 PR4b 配额查询 (quotas.<tid>.max_vector_store_mb)。
         if deps is not None:
             self.logger = deps.logger
+            self.config_manager = deps.config
         else:
             from deps_module import build_basic_deps
-            self.logger = build_basic_deps().logger
+            _deps = build_basic_deps()
+            self.logger = _deps.logger
+            self.config_manager = _deps.config
 
         # 内存数据结构
         self.id_map: List[str] = []
@@ -228,9 +232,43 @@ class FaissVectorDB(BaseVectorDB):
         return tenant_id
 
     # ------------------------- interface -------------------------
+    def _check_storage_quota(self, new_vector_count: int) -> None:
+        """PR4b: 写入前查 quotas.<tid>.max_vector_store_mb 配额。
+
+        预估写入后总大小 = (现有向量数 + 新增向量数) * dim * 4 bytes (float32),
+        超过配置即抛 QUOTA_STORAGE_EXCEEDED (HTTP 429, retryable)。
+
+        - 没配置 quota = 不限制 (向后兼容老部署)
+        - 配额命中时 ERROR 级日志, 便于运维定位
+        """
+        try:
+            key = f"quotas.{self.tenant_id}.max_vector_store_mb"
+            limit_mb = self.config_manager.get_config(key, None)
+        except Exception:
+            limit_mb = None
+        if limit_mb is None:
+            return
+        current_n = self.embeddings.shape[0] if self.embeddings is not None else 0
+        projected_bytes = (current_n + max(new_vector_count, 0)) * self.dim * 4
+        projected_mb = projected_bytes / (1024 * 1024)
+        if projected_mb > float(limit_mb):
+            if self.logger:
+                self.logger.error(
+                    f"[quota] vector storage quota exceeded: tenant={self.tenant_id} "
+                    f"projected={projected_mb:.1f}MB limit={limit_mb}MB",
+                    logger_name="vector_db_module",
+                )
+            raise VectorDBException(
+                "QUOTA_STORAGE_EXCEEDED",
+                f"向量存储超过租户配额: projected={projected_mb:.1f}MB, "
+                f"limit={limit_mb}MB (tenant={self.tenant_id})",
+            )
+
     def upsert_vectors(self, vectors: List[Dict]) -> bool:
         """写入/更新向量（示例实现：重建索引）。"""
         try:
+            # PR4b: 写前做配额硬限校验, 超限直接 429 不浪费 CPU 算 embedding
+            self._check_storage_quota(len(vectors) if vectors else 0)
             items = validate_vectors(vectors, self.dim)
             # 转为 dict 便于更新
             new_embs: Dict[str, np.ndarray] = {}

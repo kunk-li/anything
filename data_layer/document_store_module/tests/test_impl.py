@@ -1,4 +1,8 @@
 import os
+
+# 单独跑本测试时启用 dev mode 避免 build_basic_deps 触发 secrets fail-fast
+os.environ.setdefault("ANYTHING_DEV_MODE", "1")
+
 import shutil
 import tempfile
 import unittest
@@ -103,6 +107,85 @@ class TestLocalDocumentStore(unittest.TestCase):
         for bad in ("Acme Corp", "../../etc", "ab", "x" * 33, 123, "tenant.id"):
             with self.assertRaises(ValueError, msg=f"should reject {bad!r}"):
                 LocalDocumentStore(tenant_id=bad)
+
+
+class TestQuotaDoc(unittest.TestCase):
+    """Task #33 PR4b: quotas.<tid>.max_documents 配额硬限
+
+    每个 case 用唯一 tenant_id 保证 hash_doc_map 隔离 (env var override
+    在当前 ConfigManager 不被支持, 不能用 tmpdir 隔离 storage_dir)。
+    """
+
+    _COUNTER = 0
+
+    def setUp(self):
+        # 唯一 tenant_id, 保证 hash_doc_map / 文件不被其他测试污染
+        type(self)._COUNTER += 1
+        self.tid = f"q-test-{type(self)._COUNTER:03d}"
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = LocalDocumentStore(tenant_id=self.tid)
+
+    def tearDown(self):
+        # 清理本 tenant 的子目录
+        try:
+            shutil.rmtree(self.store.storage_dir, ignore_errors=True)
+            shutil.rmtree(self.store.backup_dir, ignore_errors=True)
+        except Exception:
+            pass
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _patch_quota(self, limit):
+        original_get = self.store.config_manager.get_config
+        tenant_id = self.tid
+
+        def patched(key, default=None):
+            if key == f"quotas.{tenant_id}.max_documents":
+                return limit
+            return original_get(key, default)
+
+        self.store.config_manager.get_config = patched
+
+    def _make_and_save(self, content="hello"):
+        doc = self.store.create_document(
+            content, "a.md", "md", calculate_content_hash(content)
+        )
+        return self.store.save_document(doc)
+
+    def test_quota_not_configured_no_limit(self):
+        """没配 quota -> 不限制"""
+        for i in range(5):
+            self.assertTrue(self._make_and_save(content=f"v{i}"))
+
+    def test_quota_within_limit_passes(self):
+        """quota=3, 写 2 个 -> OK"""
+        self._patch_quota(limit=3)
+        self.assertTrue(self._make_and_save(content="v1"))
+        self.assertTrue(self._make_and_save(content="v2"))
+
+    def test_quota_exceeded_raises(self):
+        """quota=2, 写第 3 个 (新 content_hash) -> QUOTA_DOC_EXCEEDED"""
+        from document_store_module.core.impl import DocumentStoreException
+        self._patch_quota(limit=2)
+        self.assertTrue(self._make_and_save(content="v1"))
+        self.assertTrue(self._make_and_save(content="v2"))
+        with self.assertRaises(DocumentStoreException) as ctx:
+            self._make_and_save(content="v3")
+        self.assertEqual(ctx.exception.code, "QUOTA_DOC_EXCEEDED")
+
+    def test_quota_same_content_hash_not_counted(self):
+        """同 content_hash 视为更新, 不算新增, 不查 quota"""
+        self._patch_quota(limit=1)
+        self.assertTrue(self._make_and_save(content="v1"))
+        # 再写一次同样内容 (相同 hash) - 不应被 quota 拦截
+        self.assertTrue(self._make_and_save(content="v1"))
+
+    def test_quota_zero_rejects_all_new(self):
+        """quota=0 表示运维有意冻结, 拒绝任何新文档"""
+        from document_store_module.core.impl import DocumentStoreException
+        self._patch_quota(limit=0)
+        with self.assertRaises(DocumentStoreException) as ctx:
+            self._make_and_save(content="anything")
+        self.assertEqual(ctx.exception.code, "QUOTA_DOC_EXCEEDED")
 
 
 if __name__ == "__main__":
