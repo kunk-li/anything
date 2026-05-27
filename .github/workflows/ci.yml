@@ -37,21 +37,8 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          # 项目 requirements.txt 是 UTF-16 编码,先转为 UTF-8 再 pip install
-          python - <<'PY'
-          from pathlib import Path
-          raw = Path("requirements.txt").read_bytes()
-          # 兼容 UTF-16 LE / UTF-8 BOM / 普通 UTF-8
-          for enc in ("utf-16", "utf-16-le", "utf-8-sig", "utf-8"):
-              try:
-                  text = raw.decode(enc)
-                  break
-              except UnicodeDecodeError:
-                  continue
-          Path("requirements.utf8.txt").write_text(text, encoding="utf-8")
-          PY
-          pip install -r requirements.utf8.txt
-          # 测试用额外依赖(主项目可能未显式声明的)
+          pip install -r requirements.txt
+          # 测试 / 运行时额外依赖(主 requirements 可能未显式声明)
           pip install pydantic 'numpy<3' faiss-cpu sentence-transformers
 
       - name: Run unit tests per module
