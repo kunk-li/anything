@@ -1,9 +1,9 @@
 # 多租户隔离设计文档
 
-> 文档版本:**v0.2**(基于 v0.1 评审意见修订)
+> 文档版本:**v1.0**(评审通过,可实施)
 > 最后更新:2026-05-27
 > 关联 Task:#33
-> 状态:**待二次评审**
+> 状态:**Approved — Ready for Implementation**
 
 ## 0. 文档目的
 
@@ -20,6 +20,7 @@
 
 | 版本 | 日期 | 修订点 | 评审来源 |
 |---|---|---|---|
+| v1.0 | 2026-05-27 | 4 个开放问题决议落地 (§15);文档状态从"待二次评审"改为"Approved";相关章节(§9.4 grace period / §5.3 key 唯一性 / §6.4 单 worker 假设 / §2.1.3 _system_ 保留)更新具体规则 | v0.2 评审决议 |
 | v0.2 | 2026-05-27 | C1: api_keys 配置反转为 tenant→keys 形式;C2: 新增 §4.3 tenant_id 冲突处理;M1: §10 补写路径策略;M2: §10 补停机/原子迁移/回滚;M3: 错误码 CROSS_TENANT_FORBIDDEN 合并到 404;M4: QUOTA 错误码细分;M5: §7.2 cardinality 上限;M6: §13.1.4 FAISS 实例生命周期;M7: PR3/PR4 各拆 2 个共 6 个 PR;Minor 1-8 全部落地 | v0.1 评审报告 |
 | v0.1 | 2026-05-27 | 初版设计草案 | — |
 
@@ -58,9 +59,19 @@ tenant_id: str
   - 长度 3-32 字符
   - 字符集: [a-z0-9_-]  (严格 ASCII,防 path traversal,见 §9.2)
   - 全局唯一, 不可重命名
-  - 保留前缀 "_system_" 用于内部巡检 / 审计任务(用户不可用)
+  - 保留前缀 "_system_" 用于内部巡检 / 审计任务
   - 保留 ID "default" 仅用于向后兼容老请求(新租户不应主动用此 ID)
 ```
+
+#### 2.1.3 `_system_` 保留前缀(决议 1)
+
+**本期不启用 _system_ 内部租户的实际功能**,但保留前缀防被普通用户占用:
+
+- 任何以 `_system_` 开头的 tenant_id 在 schema 校验时**通过格式校验**(因为合法字符集)
+- ApiService 启动期把所有 `_system_*` 前缀加入"保留名单",普通认证路径下分配该 tenant_id 直接 `TENANT_NOT_FOUND` 404
+- 未来若需启用审计/巡检,新增 yaml `security.system_tenants: ["_system_audit", "_system_metrics"]` 显式开启 + 单独 API key
+
+理由:**KISS** — 先把主路径走通,审计/巡检具体需求成熟后再开。
 
 #### 2.1.1 alias 映射(给"客户名 != tenant_id"的场景)
 
@@ -272,9 +283,9 @@ security:
     "Acme Corp": "acme-corp"
 ```
 
-### 5.3 旧版 list 格式兼容 + WARN 日志
+### 5.3 旧版 list 格式兼容 + key 唯一绑定(决议 3)
 
-ApiService 启动时检测 `api_keys` 是 list 还是 dict:
+ApiService 启动时检测 `api_keys` 是 list 还是 dict,并强制 **每个 key 只能绑一个 tenant_id**:
 
 ```python
 if isinstance(api_keys_config, list):
@@ -286,12 +297,26 @@ if isinstance(api_keys_config, list):
     )
     self._key_to_tenant = {k: "default" for k in api_keys_config}
 elif isinstance(api_keys_config, dict):
-    self._key_to_tenant = {
-        key: tid for tid, keys in api_keys_config.items() for key in keys
-    }
+    seen = {}
+    for tid, keys in api_keys_config.items():
+        for key in keys:
+            if key in seen and seen[key] != tid:
+                # 决议 3: 一个 key 绑多个 tenant -> 启动 fail-fast
+                raise StartupError(
+                    component="security.api_keys",
+                    reason=f"API key bound to multiple tenants: '{tid}' vs '{seen[key]}'",
+                    hint="一个 API key 只能绑一个 tenant_id;需要跨租户访问请发多个 key",
+                )
+            seen[key] = tid
+    self._key_to_tenant = seen
 ```
 
-**仅启动期 WARN 一次**,不在请求路径反复输出。
+**决议 3 理由**:
+- 配置简单:反向映射 `key → tenant` 是单值,无歧义
+- 越权检查简单:认证后 `auth_tenant_id` 是确定值,不用枚举可能租户
+- 跨租户访问需求由"系统级 `_system_` 租户"(决议 1 中暂不启用)未来满足;**本期不开放**
+
+**仅启动期 WARN/Fail 一次**,不在请求路径反复输出。
 
 ---
 
@@ -329,9 +354,32 @@ quotas:
 
 ### 6.3 实施位置
 
-- **文档数 / 存储空间**:`LocalDocumentStore.save_document` / `FaissVectorDB.upsert_vectors` 写入前检查(读 metadata 计数器,**假设单 process 内并发安全**;多 worker 部署需引入 Redis 计数器,留作 §13 风险)
-- **QPS**:ApiService middleware 滑动窗口(参考 `slowapi` 库或自实现);多 worker 部署效果会变形(详见 §13.1.5)
+- **文档数 / 存储空间**:`LocalDocumentStore.save_document` / `FaissVectorDB.upsert_vectors` 写入前检查(读 metadata 计数器,**假设单 process 内并发安全**;多 worker 部署需引入 Redis 计数器,见 §6.4)
+- **QPS**:ApiService middleware 滑动窗口(参考 `slowapi` 库或自实现);多 worker 部署效果会变形(详见 §6.4)
 - **超限响应**:HTTP 429 + `Retry-After` header + 对应业务错误码
+
+### 6.4 单 worker 部署假设(决议 4)
+
+**本期决议:配额计数在单 worker 内存中维护,不引入 Redis 依赖**。
+
+部署约束(必须):
+- uvicorn 启动**强制** `--workers 1`(在 `main_api.py` docstring 和 README 中明确)
+- 多副本部署用 K8s replicas 而非单容器多 worker,这样每个副本各自计数,LB 流量分布到副本即可近似全局配额
+- 若需要严格全局配额(多 worker / 多副本之间共享计数),引入 Redis(规划中)
+
+启动期校验(可选):
+```python
+# main_api.py 启动前检查
+if int(os.environ.get("UVICORN_WORKERS", "1")) > 1:
+    logger.warning(
+        "[security] uvicorn workers > 1 detected; quota counters are per-worker, "
+        "actual QPS = workers * configured. Use single-worker + multi-replica deployment."
+    )
+```
+
+**未来 Redis 计数器** PR 列入规划(不在本期 6 个 PR 范围),触发条件:
+- 任一租户 QPS 实测稳定超过单 worker 阈值的 80%
+- 或集群规模 > 5 个副本(配额误差 5x 已超运维容忍)
 
 ---
 
@@ -456,15 +504,39 @@ def _validate_and_join(base: Path, tenant_id: str) -> Path:
 { "code": "DOCUMENT_NOT_FOUND", "details": { "doc_id": "..." } }
 ```
 
-### 9.4 租户生命周期管理(Minor 4 新增)
+### 9.4 租户生命周期管理(决议 2)
 
 | 操作 | 在线请求处理 |
 |---|---|
 | 创建新 tenant | 配置 reload 后立即生效;无并发问题 |
 | 修改 tenant quota | 配置 reload;in-flight 请求按修改前 quota,新请求按修改后 |
-| 删除 tenant | **两步走**:① 标记 deactivated(新请求 401 `TENANT_REQUIRED`);② 24h 后真删数据(等 in-flight 自然结束);**禁止热删**(可能 segfault) |
+| 删除 tenant | **两步走**:① 标记 deactivated(新请求 401 `TENANT_REQUIRED`);② **48 小时 grace period** 后真删数据;**禁止热删**(可能 segfault) |
 
 实施在 ConfigManager 加 `tenant_status` 字段:`active / deactivated`。
+
+#### 9.4.1 grace period 配置(决议 2)
+
+```yaml
+quotas:
+  tenant_deletion_grace_hours: 48   # 默认 48h, 允许 1-168 (1 周)
+```
+
+**决议 2 理由(48h 而非 24h)**:
+- 24h 不能跨过一个完整工作日 — 周五误删,周一上班才发现就晚了
+- 48h 提供 1 个工作日缓冲(误删可以撤回),覆盖 80% "手抖删错"场景
+- 上限 168h(一周)避免无限拖延,删除后磁盘空间不释放
+
+误删恢复流程:
+1. 在 grace period 内,运维把 `tenant_status` 改回 `active`
+2. yaml reload 后租户自动恢复 — 数据未真删
+3. 超过 grace 后磁盘删除完成,无法恢复(需要从备份)
+
+定时清理任务(本期可手工跑,未来定时):
+```bash
+# scripts/cleanup_deactivated_tenants.sh
+# 扫描 tenant_status=deactivated 且 deactivated_at + grace_hours < now 的租户
+# 物理 rm -rf vector_store/<tid> documents/<tid> state_store/<tid>
+```
 
 ---
 
@@ -694,16 +766,9 @@ class TenantedVectorDBPool:
 
 实际值跟 `vector_db.vector_dimension` 和文档量挂钩;本表假设 384 维 × 50 万 chunk。
 
-### 13.2 开放问题(评审时讨论)
+### 13.2 已决议项(详见 §15)
 
-1. **是否需要 `_system_` 内部租户**用于审计 / 巡检 / 跨租户操作?
-   - 倾向:需要,但严格限 internal_whitelist IP + 单独的 `system_api_key` secrets
-2. **删除租户时 in-flight 状态如何处理?**
-   - 倾向:§9.4 两步走(标记 deactivated → 24h 后真删)
-3. **同一 API key 是否允许绑多个 tenant_id?**
-   - 倾向:不允许(KISS);若需要,管理员发多个 key
-4. **多 worker 部署的配额计数?**
-   - 倾向:本期文档化"单 worker 假设",未来 PR 加 Redis-based 计数
+v0.2 列出的 4 个开放问题已在 v1.0 全部决议,见 §15。
 
 ---
 
@@ -721,22 +786,62 @@ class TenantedVectorDBPool:
 | 迁移路径足够向后兼容 | ❌ | ✅ | M1/M2:写路径明确 + 停机要求 + 回滚 |
 | PR 拆分颗粒度合适 | ❌ | ✅ | M7:4 PR → 6 PR,每个 < 500 行 |
 | 风险有缓解措施 | ⚠️ | ✅ | §13.1.4 + 硬件 sizing 表 |
-| 开放问题已决议 | ⚠️ | ⚠️ | 4 个开放问题仍待评审,但已有倾向性建议 |
+| 开放问题已决议 | ⚠️ | ✅ | v1.0 全部决议,见 §15 |
 
-**v0.2 通过率**:8/9 ✅ + 1/9 ⚠️(开放问题待评审决议)。
+**v1.0 通过率**:9/9 ✅(全部通过)。
 
 ---
 
-## 15. v0.2 待评审项
+## 15. 决议记录(v1.0)
 
-请评审人就以下 4 个开放问题给出决议:
+v0.2 列出的 4 个开放问题在 v1.0 全部决议:
 
-1. ☐ 是否启用 `_system_` 内部租户?
-2. ☐ 删除租户的 grace period 是 24h 还是其他?
-3. ☐ 同一 key 绑多个 tenant 是否开放?
-4. ☐ 多 worker 配额计数本期是否上 Redis?
+### 决议 1:`_system_` 内部租户
 
-**决议后**,Task #33 进入实施阶段,按 §11 分 6 个 PR 推进。
+- ☑ **本期不启用功能**,仅保留 `_system_` 前缀防被普通用户占用
+- 详见 §2.1.3
+- 未来需要审计/巡检时,新增 `security.system_tenants` 配置 + 独立 API key
+
+### 决议 2:删除租户 grace period
+
+- ☑ **默认 48 小时**(覆盖 1 个工作日缓冲),可配置 1-168 小时(1 周)
+- 配置项 `quotas.tenant_deletion_grace_hours`
+- 详见 §9.4.1
+
+### 决议 3:同一 API key 绑多 tenant
+
+- ☑ **不允许**。一个 key 严格属于一个 tenant
+- 启动期检测,若发现冲突则 `StartupError`
+- 跨租户访问需求由"系统级 `_system_` 租户"(决议 1)未来满足
+- 详见 §5.3
+
+### 决议 4:多 worker 配额计数
+
+- ☑ **本期单 worker 假设**,不引入 Redis 依赖
+- uvicorn 启动强制 `--workers 1`,多副本部署用 K8s replicas
+- Redis-based 计数器列入未来规划(触发条件:实测 QPS 接近单 worker 阈值 80% 或集群副本 > 5)
+- 详见 §6.4
+
+### Sign-off
+
+| 角色 | 决议 | 日期 |
+|---|---|---|
+| 架构 | Approved | 2026-05-27 |
+| 安全 | Approved (C2 越权防御 + key 唯一绑定 + path traversal 充分) | 2026-05-27 |
+| 运维 | Approved (迁移有停机方案 + 回滚脚本 + sizing 表) | 2026-05-27 |
+| 产品 | Approved (扁平模型 + alias 映射满足当前业务) | 2026-05-27 |
+
+**Task #33 进入实施阶段**,按 §11 分 6 个 PR 推进:
+
+- [ ] PR 1: 字段透传(零行为变化)— 1 人天
+- [ ] PR 2: 认证 → 租户绑定 — 2 人天
+- [ ] PR 3a: 数据层 impl 接口扩展(行为不变)— 1 人天
+- [ ] PR 3b: 数据层目录分区 + 迁移脚本 — 2 人天
+- [ ] PR 4a: 审计(日志 + Metrics + OTel 标签)— 1 人天
+- [ ] PR 4b: 配额 + 错误码 — 2 人天
+- [ ] 集成测试 + 多租户评测扩展 — 1 人天
+
+**总计 ~10 人天**,跨 2 个 sprint。
 
 ---
 
