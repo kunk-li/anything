@@ -40,14 +40,32 @@ class SimpleRAG(BaseRAG):
         self.reranker = reranker
         self.query_rewriter = query_rewriter
 
-        self.top_k_retrieve = int(self.config.get_config("rag.top_k_retrieve", 50))
-        self.top_k_rerank = int(self.config.get_config("rag.top_k_rerank", 8))
-        self.max_context_tokens = int(self.config.get_config("rag.max_context_tokens", 3000))
-        self.max_chunk_in_prompt_tokens = int(
-            self.config.get_config("rag.max_chunk_in_prompt_tokens", 600)
+        # 关键配置项走 get_effective_value, 允许环境变量覆盖
+        # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
+        self.top_k_retrieve = self.config.get_effective_value(
+            "rag.top_k_retrieve", env_var="ANYTHING_RAG_TOP_K_RETRIEVE",
+            default=50, value_type=int,
         )
-        self.enable_rerank = bool(self.config.get_config("rag.enable_rerank", False))
-        self.enable_rewrite = bool(self.config.get_config("rag.enable_rewrite", False))
+        self.top_k_rerank = self.config.get_effective_value(
+            "rag.top_k_rerank", env_var="ANYTHING_RAG_TOP_K_RERANK",
+            default=8, value_type=int,
+        )
+        self.max_context_tokens = self.config.get_effective_value(
+            "rag.max_context_tokens", env_var="ANYTHING_RAG_MAX_CONTEXT_TOKENS",
+            default=3000, value_type=int,
+        )
+        self.max_chunk_in_prompt_tokens = self.config.get_effective_value(
+            "rag.max_chunk_in_prompt_tokens", env_var="ANYTHING_RAG_MAX_CHUNK_TOKENS",
+            default=600, value_type=int,
+        )
+        self.enable_rerank = self.config.get_effective_value(
+            "rag.enable_rerank", env_var="ANYTHING_RAG_ENABLE_RERANK",
+            default=False, value_type=bool,
+        )
+        self.enable_rewrite = self.config.get_effective_value(
+            "rag.enable_rewrite", env_var="ANYTHING_RAG_ENABLE_REWRITE",
+            default=False, value_type=bool,
+        )
 
         self.logger.info("RAG 模块初始化完成")
 

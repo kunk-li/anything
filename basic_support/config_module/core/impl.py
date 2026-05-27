@@ -131,6 +131,7 @@ class ConfigManager(BaseConfigManager):
         key: str,
         env_var: Optional[str] = None,
         default: Any = None,
+        value_type: Optional[type] = None,
     ) -> Any:
         """按显式优先级解析配置项,返回最终生效值。
 
@@ -139,26 +140,58 @@ class ConfigManager(BaseConfigManager):
             2. 全局/局部 yaml 配置 (走 get_config)
             3. default 兜底
 
-        相比 get_config(key, default), 本方法把"环境变量覆盖"作为显式优先项,
-        让调用方更明确地表达"这个值允许环境变量覆盖"。
+        参数:
+            key: 配置 key (如 "rag.top_k_retrieve")
+            env_var: 允许覆盖的环境变量名 (如 "ANYTHING_RAG_TOP_K_RETRIEVE")
+            default: 兜底值
+            value_type: 可选 — 把环境变量字符串值转为指定类型 (int/float/bool).
+                yaml 与 default 已经是合适类型, 主要给环境变量用.
+                bool 规则: str.lower() in ("1","true","yes","on") -> True
 
         示例:
-            timeout = config.get_effective_value(
-                "rag.llm_timeout", env_var="ANYTHING_RAG_TIMEOUT", default=30
+            top_k = config.get_effective_value(
+                "rag.top_k_retrieve",
+                env_var="ANYTHING_RAG_TOP_K_RETRIEVE",
+                default=50,
+                value_type=int,
             )
 
         参考 docs/configuration-priority.md 第 2 节"5 个配置源 + 优先级"。
         """
+        raw: Any = None
+        from_env = False
+
         if env_var:
             env_val = os.environ.get(env_var)
             if env_val is not None and env_val != "":
-                return env_val
+                raw = env_val
+                from_env = True
 
-        yaml_val = self.get_config(key, None)
-        if yaml_val is not None:
-            return yaml_val
+        if raw is None:
+            raw = self.get_config(key, None)
 
-        return default
+        if raw is None:
+            raw = default
+
+        # 类型转换:主要给来自环境变量的 str 用; yaml/default 已经是合适类型,
+        # 但二次确认也无害(int(50) == 50)
+        if value_type is not None and raw is not None:
+            try:
+                if value_type is bool:
+                    if isinstance(raw, bool):
+                        return raw
+                    raw_str = str(raw).strip().lower()
+                    return raw_str in ("1", "true", "yes", "on")
+                return value_type(raw)
+            except (ValueError, TypeError):
+                # 类型转换失败 -> 回退到 default 而非崩 (生产更安全)
+                if from_env:
+                    self.logger.warning(
+                        f"[config] env_var={env_var} 值 '{raw}' 无法转为 {value_type.__name__}, 回退到 default"
+                    ) if hasattr(self, "logger") else None
+                return default
+
+        return raw
 
     def update_config(self, key: str, value: Any, persist: bool = False) -> bool:
         self._check_hot_reload()

@@ -166,6 +166,58 @@ class TestGetEffectiveValue(unittest.TestCase):
         )
         self.assertEqual(v, "development")
 
+    def test_value_type_int_from_env(self):
+        """value_type=int 把环境变量 str 转 int"""
+        os.environ["ANYTHING_TEST_INT"] = "42"
+        v = self.cfg.get_effective_value(
+            key="nonexistent.path",
+            env_var="ANYTHING_TEST_INT",
+            default=0,
+            value_type=int,
+        )
+        self.assertEqual(v, 42)
+        self.assertIsInstance(v, int)
+
+    def test_value_type_bool_truthy(self):
+        for s in ("1", "true", "True", "yes", "on"):
+            os.environ["ANYTHING_TEST_BOOL"] = s
+            v = self.cfg.get_effective_value(
+                key="nonexistent.path",
+                env_var="ANYTHING_TEST_BOOL",
+                default=False,
+                value_type=bool,
+            )
+            self.assertTrue(v, f"expect True for {s!r}")
+
+    def test_value_type_bool_falsy(self):
+        for s in ("0", "false", "no", "off", ""):
+            if s == "":
+                # 空串视为未设, 走 default
+                os.environ["ANYTHING_TEST_BOOL"] = s
+                v = self.cfg.get_effective_value(
+                    "nonexistent.path", env_var="ANYTHING_TEST_BOOL",
+                    default=False, value_type=bool,
+                )
+                self.assertFalse(v)
+                continue
+            os.environ["ANYTHING_TEST_BOOL"] = s
+            v = self.cfg.get_effective_value(
+                "nonexistent.path", env_var="ANYTHING_TEST_BOOL",
+                default=True, value_type=bool,
+            )
+            self.assertFalse(v, f"expect False for {s!r}")
+
+    def test_value_type_conversion_failure_falls_back_to_default(self):
+        """env_var 设了非法数字时应回退到 default 而非崩"""
+        os.environ["ANYTHING_TEST_BAD_INT"] = "not_a_number"
+        v = self.cfg.get_effective_value(
+            "nonexistent.path",
+            env_var="ANYTHING_TEST_BAD_INT",
+            default=99,
+            value_type=int,
+        )
+        self.assertEqual(v, 99)
+
 
 if __name__ == "__main__":
     unittest.main()

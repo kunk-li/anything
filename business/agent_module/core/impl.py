@@ -47,18 +47,38 @@ class SimpleAgent(BaseAgent):
 
         self.state_store = state_store
         self.tool_registry = tool_registry
-        self.timeout = int(self.config.get_config("agent.timeout", timeout))
-        self.max_retries = int(self.config.get_config("agent.max_retries", max_retries))
+        # 关键配置项走 get_effective_value, 允许环境变量覆盖
+        # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
+        self.timeout = self.config.get_effective_value(
+            "agent.timeout", env_var="ANYTHING_AGENT_TIMEOUT",
+            default=timeout, value_type=int,
+        )
+        self.max_retries = self.config.get_effective_value(
+            "agent.max_retries", env_var="ANYTHING_AGENT_MAX_RETRIES",
+            default=max_retries, value_type=int,
+        )
         self.session_prefix = self.config.get_config("agent.session_prefix", session_prefix)
         self.default_execution_mode = self.config.get_config("agent.default_execution_mode", "agent")
         # 是否启用 LLM 规划(默认 True; 失败时仍会 fallback 到规则式)
-        self.use_llm_planner = bool(self.config.get_config("agent.use_llm_planner", True))
+        self.use_llm_planner = self.config.get_effective_value(
+            "agent.use_llm_planner", env_var="ANYTHING_AGENT_USE_LLM_PLANNER",
+            default=True, value_type=bool,
+        )
         # LLM 规划最多生成的 step 数,避免无限链路
-        self.max_planner_steps = int(self.config.get_config("agent.max_planner_steps", 3))
+        self.max_planner_steps = self.config.get_effective_value(
+            "agent.max_planner_steps", env_var="ANYTHING_AGENT_MAX_PLANNER_STEPS",
+            default=3, value_type=int,
+        )
         # 执行策略: "single_shot" (默认,一次性规划 + 顺序执行) 或 "react" (多轮 observe-reflect-next)
-        self.execution_strategy = self.config.get_config("agent.execution_strategy", "single_shot")
+        self.execution_strategy = self.config.get_effective_value(
+            "agent.execution_strategy", env_var="ANYTHING_AGENT_EXECUTION_STRATEGY",
+            default="single_shot",
+        )
         # ReAct 模式最大轮数
-        self.max_react_iterations = int(self.config.get_config("agent.max_react_iterations", 5))
+        self.max_react_iterations = self.config.get_effective_value(
+            "agent.max_react_iterations", env_var="ANYTHING_AGENT_MAX_REACT_ITER",
+            default=5, value_type=int,
+        )
 
         self.logger.info("Agent 模块初始化完成")
 
