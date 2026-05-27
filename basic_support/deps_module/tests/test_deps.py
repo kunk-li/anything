@@ -171,5 +171,65 @@ class TestHandleExceptionToEnvelope(unittest.TestCase):
             self.assertIn(field, env, f"信封缺字段: {field}")
 
 
+class TestLoadDotenv(unittest.TestCase):
+    """_load_dotenv_if_exists: 启动期可选加载 .env"""
+
+    def setUp(self):
+        import tempfile
+        self._tmpdir = tempfile.mkdtemp()
+        self._orig_cwd = os.getcwd()
+        os.chdir(self._tmpdir)
+        # 隔离测试环境变量
+        for k in ("MY_TEST_KEY_A", "MY_TEST_KEY_B", "MY_TEST_KEY_EXISTING"):
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        import shutil
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        for k in ("MY_TEST_KEY_A", "MY_TEST_KEY_B", "MY_TEST_KEY_EXISTING"):
+            os.environ.pop(k, None)
+
+    def _write_env(self, content: str):
+        from pathlib import Path
+        (Path(self._tmpdir) / ".env").write_text(content, encoding="utf-8")
+
+    def test_loads_keys(self):
+        from deps_module.deps import _load_dotenv_if_exists
+        self._write_env("MY_TEST_KEY_A=value_a\nMY_TEST_KEY_B=value_b\n")
+        _load_dotenv_if_exists()
+        self.assertEqual(os.environ.get("MY_TEST_KEY_A"), "value_a")
+        self.assertEqual(os.environ.get("MY_TEST_KEY_B"), "value_b")
+
+    def test_skips_comments_and_blanks(self):
+        from deps_module.deps import _load_dotenv_if_exists
+        self._write_env("# comment\n\nMY_TEST_KEY_A=ok\n# MY_TEST_KEY_B=should_be_ignored\n")
+        _load_dotenv_if_exists()
+        self.assertEqual(os.environ.get("MY_TEST_KEY_A"), "ok")
+        self.assertIsNone(os.environ.get("MY_TEST_KEY_B"))
+
+    def test_strips_quotes(self):
+        from deps_module.deps import _load_dotenv_if_exists
+        self._write_env('MY_TEST_KEY_A="quoted value"\nMY_TEST_KEY_B=\'single quoted\'\n')
+        _load_dotenv_if_exists()
+        self.assertEqual(os.environ.get("MY_TEST_KEY_A"), "quoted value")
+        self.assertEqual(os.environ.get("MY_TEST_KEY_B"), "single quoted")
+
+    def test_existing_env_not_overridden(self):
+        from deps_module.deps import _load_dotenv_if_exists
+        os.environ["MY_TEST_KEY_EXISTING"] = "from_env"
+        self._write_env("MY_TEST_KEY_EXISTING=from_dotenv\n")
+        _load_dotenv_if_exists()
+        # env 应该保持原值,不被 .env 覆盖
+        self.assertEqual(os.environ.get("MY_TEST_KEY_EXISTING"), "from_env")
+
+    def test_no_file_does_not_crash(self):
+        """没 .env 时静默返回, 不报错"""
+        from deps_module.deps import _load_dotenv_if_exists
+        _load_dotenv_if_exists()  # 不应抛
+        # 没 .env 时 env 应保持原状(我们 setUp 已清掉测试 key)
+        self.assertIsNone(os.environ.get("MY_TEST_KEY_A"))
+
+
 if __name__ == "__main__":
     unittest.main()

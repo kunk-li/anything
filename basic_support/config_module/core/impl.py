@@ -193,6 +193,38 @@ class ConfigManager(BaseConfigManager):
 
         return raw
 
+    def check_required_secrets(self) -> List[str]:
+        """扫描 config tree, 找出仍是 "${XXX}" 形态(即环境变量未设)的占位符。
+
+        substitute_env 在 load_config 阶段会把 ${XXX} 替换为实际值; 若环境
+        变量没设, 占位符会保留原样。本方法用来在启动期检测哪些 secrets 未填。
+
+        返回:
+            未填的环境变量名列表(去重 + 排序), 空列表表示全部已填。
+
+        典型用法 (bootstrap 启动时):
+            unfilled = config.check_required_secrets()
+            if unfilled and not dev_mode:
+                raise StartupError(component="secrets", reason=f"未设: {unfilled}")
+        """
+        from ..utils.tool_functions import ENV_PATTERN
+        unfilled = set()
+
+        def _scan(node: Any) -> None:
+            if isinstance(node, dict):
+                for v in node.values():
+                    _scan(v)
+            elif isinstance(node, list):
+                for v in node:
+                    _scan(v)
+            elif isinstance(node, str):
+                m = ENV_PATTERN.match(node.strip())
+                if m:
+                    unfilled.add(m.group(1))
+
+        _scan(self.config)
+        return sorted(unfilled)
+
     def update_config(self, key: str, value: Any, persist: bool = False) -> bool:
         self._check_hot_reload()
 

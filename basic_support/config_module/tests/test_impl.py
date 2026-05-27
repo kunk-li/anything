@@ -219,5 +219,43 @@ class TestGetEffectiveValue(unittest.TestCase):
         self.assertEqual(v, 99)
 
 
+class TestCheckRequiredSecrets(unittest.TestCase):
+    """check_required_secrets: 扫描未填 ${XXX} 占位符"""
+
+    def setUp(self):
+        self.cfg = ConfigManager()
+        self.cfg.load_config()
+        self._env_snapshot = dict(os.environ)
+        # 清掉已设环境变量,让扫描能稳定地"发现未填"
+        for k in ("OPENAI_API_KEY", "DASHSCOPE_API_KEY", "VECTOR_DB_API_KEY",
+                  "JWT_SECRET", "SENSITIVE_CONFIG_SECRET", "API_KEY_1"):
+            os.environ.pop(k, None)
+        # 重新 load 让 substitute_env 看到当前 env 状态
+        self.cfg.load_config()
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env_snapshot)
+
+    def test_detects_unfilled_secrets(self):
+        """yaml 默认配置含 ${OPENAI_API_KEY} 等占位, 当 env 没设时应被检出"""
+        unfilled = self.cfg.check_required_secrets()
+        # 至少应该包含几个我们已知的 yaml 占位
+        self.assertIn("OPENAI_API_KEY", unfilled)
+        self.assertIn("DASHSCOPE_API_KEY", unfilled)
+        self.assertIn("JWT_SECRET", unfilled)
+
+    def test_returns_sorted_unique_list(self):
+        unfilled = self.cfg.check_required_secrets()
+        self.assertEqual(unfilled, sorted(unfilled))
+        self.assertEqual(len(unfilled), len(set(unfilled)))
+
+    def test_filled_secrets_not_in_result(self):
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+        self.cfg.load_config()  # 重新替换占位
+        unfilled = self.cfg.check_required_secrets()
+        self.assertNotIn("OPENAI_API_KEY", unfilled)
+
+
 if __name__ == "__main__":
     unittest.main()

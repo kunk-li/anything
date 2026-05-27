@@ -138,15 +138,58 @@ class BasicDeps:
     exception_handler: Any
 
 
+def _load_dotenv_if_exists() -> None:
+    """启动期可选加载项目根目录的 .env 文件(简单实现,不引入 python-dotenv 依赖)。
+
+    解析规则:
+        - 跳过空行 / # 开头注释
+        - "KEY=value" 格式, value 两端的 " 或 ' 引号会被剥除
+        - 已设置的环境变量不会被 .env 覆盖(env > .env)
+
+    定位策略:
+        - 当前 cwd / .env
+        - 找不到也不报错(可选机制)
+    """
+    from pathlib import Path
+    candidates = [Path.cwd() / ".env"]
+    for env_file in candidates:
+        if not env_file.exists():
+            continue
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                    v = v[1:-1]
+                # 现有环境变量优先, 不被 .env 覆盖
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        except Exception:
+            # 任何解析错误静默忽略, .env 是可选机制
+            pass
+        return  # 只加载第一个找到的
+
+
 def build_basic_deps() -> BasicDeps:
     """工厂方法：按默认方式构造一套 BasicDeps。
 
     本方法是 bootstrap.build_basic_support 的功能等价物，但返回结构化容器
     便于直接注入下游模块；bootstrap 应优先调用本方法。
 
+    新增 (Task #30):
+        - 自动加载项目根的 .env 文件 (若存在)
+        - 加载 config 后扫描未填 secrets, dev 模式 WARN, 生产抛 StartupError
+
     注意：import 延迟到函数内，避免模块导入期触发 ConfigManager 加载，
     单测时可只 import BasicDeps 而不触发实例化。
     """
+    # 0. 优先加载 .env 让后续 ConfigManager 替换占位符时能拿到值
+    _load_dotenv_if_exists()
+
     from common_utils_module.core.impl import CommonUtils
     from config_module.core.impl import ConfigManager
     from log_module.core.impl import SystemLogger
@@ -158,6 +201,26 @@ def build_basic_deps() -> BasicDeps:
         config.load_config()
     elif hasattr(config, "load"):
         config.load()
+
+    # 检测未填 secrets (yaml 中 ${XXX} 但环境没设)
+    if hasattr(config, "check_required_secrets"):
+        unfilled = config.check_required_secrets()
+        if unfilled:
+            dev = is_dev_mode()
+            msg = (
+                f"以下 secrets 未在环境变量中提供(yaml 占位符 ${{XXX}} 未被替换): "
+                f"{', '.join(unfilled)}"
+            )
+            if dev:
+                # dev 模式: WARN, 让真实功能(LLM/向量库 api_key) 走 fallback
+                print(f"[bootstrap][DEV_MODE] {msg}")
+            else:
+                # 生产模式: fail-fast, 避免 401/部分功能不可用
+                raise StartupError(
+                    component="secrets",
+                    reason=msg,
+                    hint="见 docs/secrets-management.md 配置 .env 或 GitHub Secrets",
+                )
 
     return BasicDeps(
         config=config,

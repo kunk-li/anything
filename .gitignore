@@ -4,3 +4,18 @@
 /config/
 __pycache__/
 *.pyc
+
+# Secrets (用 .env.example 作为模板)
+.env
+.env.local
+*.local.env
+
+# Local runtime data
+/logs/
+/state_store/
+/vector_store/
+/documents/
+/run/logs/
+/run/state_store/
+/run/vector_store/
+/run/documents/
