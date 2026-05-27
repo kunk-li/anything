@@ -1,7 +1,8 @@
 """llm_adapter_module package.
 
-Expose core service for external modules.
+Expose core service + abstract base for external modules.
 """
+from .core.base import BaseLLMService
 from .core.impl import LLMService
 from .model.data_model import (
     FileContent, MediaContent,
@@ -9,6 +10,7 @@ from .model.data_model import (
 )
 
 __all__ = [
+    "BaseLLMService",
     "LLMService",
     "FileContent", "MediaContent",
     "LLMRequest", "LLMResponse", "LLMParam", "MultimodalResult",
