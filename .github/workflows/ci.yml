@@ -89,13 +89,13 @@ jobs:
           python scripts/check_abc_alignment.py --ci
 
       # =====================================================================
-      # 非阻塞步骤 (continue-on-error): smoke test
-      # 需 sentence-transformers 下载模型 + LLM 调用(401 时走 DummyLLM),
-      # 在 ubuntu-latest 上偶发慢/超时, 不阻塞 PR 红绿
+      # 阻塞步骤 (失败 -> CI 红): smoke test 端到端
+      # Run 26489096309 已证明在 ubuntu-latest 上 sentence-transformers
+      # 模型下载 + RAG/Agent/Hybrid 3 个 case 都能稳定跑通 (HF cache 命中后
+      # 模型不需重新下载). 现去掉 continue-on-error 提升 CI 严格度.
       # =====================================================================
 
-      - name: Run smoke test (end-to-end, non-blocking)
-        continue-on-error: true
+      - name: Run smoke test (end-to-end)
         timeout-minutes: 8
         run: |
           cd run
