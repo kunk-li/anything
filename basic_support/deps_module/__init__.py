@@ -11,6 +11,6 @@ deps_module: 基础支撑层依赖容器
     是依赖打包容器，没有抽象/实现二分需求。
 """
 
-from .deps import BasicDeps, build_basic_deps
+from .deps import BasicDeps, build_basic_deps, StartupError, is_dev_mode
 
-__all__ = ["BasicDeps", "build_basic_deps"]
+__all__ = ["BasicDeps", "build_basic_deps", "StartupError", "is_dev_mode"]

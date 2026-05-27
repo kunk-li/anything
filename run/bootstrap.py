@@ -11,7 +11,7 @@ from common_utils_module import CommonUtils
 from config_module import ConfigManager
 from log_module import SystemLogger
 from exception_module import ExceptionHandler
-from deps_module import BasicDeps, build_basic_deps
+from deps_module import BasicDeps, build_basic_deps, StartupError, is_dev_mode
 
 # 数据层
 from document_parser_module.core.impl import LocalDocumentParser
@@ -68,50 +68,69 @@ def build_basic_support() -> Dict[str, Any]:
     }
 
 
-def build_data_layer(use_dummy_llm: bool = True) -> Dict[str, Any]:
+def _build_component(name: str, factory, hint: str = "") -> Any:
+    """构建单个组件,失败时根据 dev_mode 决定是抛 StartupError 还是返回 None。
+
+    生产/严格模式(默认): 抛 StartupError,系统拒绝启动
+    开发模式 (ANYTHING_DEV_MODE=1): 打印 WARNING 并返回 None,允许下游用占位
     """
-    构建数据层。
-    说明：
-    - 这里优先采用“能跑起来”的最小装配。
-    - 若真实 provider 未接通，可先使用占位 LLM。
+    try:
+        return factory()
+    except Exception as e:
+        if is_dev_mode():
+            print(f"[bootstrap][DEV_MODE] {name} 初始化失败,回退 None: {e}")
+            return None
+        raise StartupError(
+            component=name,
+            reason=str(e),
+            hint=hint or "设置环境变量 ANYTHING_DEV_MODE=1 可在本地用占位实现继续运行",
+        ) from e
+
+
+def build_data_layer(use_dummy_llm: Optional[bool] = None) -> Dict[str, Any]:
+    """构建数据层(fail-fast)。
+
+    参数:
+        use_dummy_llm: None 表示根据 dev_mode 自动决定(dev=True / 生产=False);
+                       显式 True/False 优先于环境变量
+
+    生产/严格模式(默认):
+        - 任一关键组件初始化失败 → 抛 StartupError,系统拒绝启动
+        - 不再静默用 DummyLLMClient / None 兜底
+
+    开发模式(ANYTHING_DEV_MODE=1):
+        - 关键组件失败时打印 WARNING 并回退 None
+        - LLM 失败时使用 DummyLLMClient(便于无网络/无 API key 时本地调试)
     """
+    dev = is_dev_mode()
+    if use_dummy_llm is None:
+        use_dummy_llm = dev
+
+    # LLM client: 失败时 dev 模式回退 Dummy,生产抛 StartupError
     try:
         llm_client = LLMService()
         print(f"[bootstrap] llm_client 已启用真实 LLMService: {type(llm_client).__name__}")
-        print(f"[bootstrap] llm_client methods: {[x for x in dir(llm_client) if not x.startswith('_')][:80]}")
     except Exception as e:
-        print(f"[bootstrap] llm_client 初始化失败，回退 DummyLLMClient: {e}")
-        llm_client = DummyLLMClient() if use_dummy_llm else None
+        if use_dummy_llm:
+            print(f"[bootstrap][DEV_MODE] llm_client 初始化失败,回退 DummyLLMClient: {e}")
+            llm_client = DummyLLMClient()
+        else:
+            raise StartupError(
+                component="llm_client",
+                reason=str(e),
+                hint="检查 llm 配置(api_key/api_base/model_name);或设置 ANYTHING_DEV_MODE=1 启用 DummyLLMClient",
+            ) from e
 
-    try:
-        embedding = STEmbedding()
-    except Exception as e:
-        print(f"[bootstrap] embedding 初始化失败: {e}")
-        embedding = None
-
-    try:
-        vector_db = FaissVectorDB()
-    except Exception as e:
-        print(f"[bootstrap] vector_db 初始化失败: {e}")
-        vector_db = None
-
-    try:
-        document_store = LocalDocumentStore()
-    except Exception as e:
-        print(f"[bootstrap] document_store 初始化失败: {e}")
-        document_store = None
-
-    try:
-        state_store = LocalStateStore()
-    except Exception as e:
-        print(f"[bootstrap] state_store 初始化失败: {e}")
-        state_store = None
-
-    try:
-        document_parser = LocalDocumentParser()
-    except Exception as e:
-        print(f"[bootstrap] document_parser 初始化失败: {e}")
-        document_parser = None
+    embedding = _build_component("embedding", STEmbedding,
+                                 hint="检查 sentence-transformers 模型是否可用")
+    vector_db = _build_component("vector_db", FaissVectorDB,
+                                 hint="检查 faiss-cpu 是否安装,以及 vector_db.vector_dimension 配置")
+    document_store = _build_component("document_store", LocalDocumentStore,
+                                      hint="检查 document_store.dir 配置与目录写入权限")
+    state_store = _build_component("state_store", LocalStateStore,
+                                   hint="检查 state_store.dir 配置与目录写入权限")
+    document_parser = _build_component("document_parser", LocalDocumentParser,
+                                       hint="检查文档解析依赖(pypdf/python-docx 等)")
 
     return {
         "llm_client": llm_client,

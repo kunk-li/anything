@@ -13,8 +13,41 @@ BasicDeps: 基础支撑层依赖容器
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
+
+
+class StartupError(RuntimeError):
+    """系统启动阶段的关键依赖初始化失败异常。
+
+    与运行时业务异常区分:启动期错误意味着系统不应进入服务态,
+    应该在最早的时机暴露,而不是默默回退到占位实现让真实请求才挂。
+
+    使用约定:
+    - 配置缺失 / 模块未安装 / 关键组件初始化抛错 → 包装为 StartupError 抛出
+    - 在 ANYTHING_DEV_MODE=1 环境下,允许部分组件回退到占位实现以便本地调试
+    """
+
+    def __init__(self, component: str, reason: str, hint: Optional[str] = None):
+        self.component = component
+        self.reason = reason
+        self.hint = hint
+        msg = f"[startup] {component} 初始化失败: {reason}"
+        if hint:
+            msg += f" | hint: {hint}"
+        super().__init__(msg)
+
+
+def is_dev_mode() -> bool:
+    """是否启用开发模式(允许占位实现 / 静默回退)。
+
+    优先级:
+        1. 环境变量 ANYTHING_DEV_MODE in ("1","true","True","yes")
+        2. 默认 False(生产/严格模式)
+    """
+    val = os.environ.get("ANYTHING_DEV_MODE", "")
+    return val.lower() in ("1", "true", "yes", "on")
 
 
 @dataclass
