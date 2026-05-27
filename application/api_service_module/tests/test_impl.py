@@ -691,6 +691,36 @@ class TestWebSocketStream(unittest.TestCase):
         self.assertEqual(types[-1], "done")
 
 
+class TestDevModeAuthAutoDisable(unittest.TestCase):
+    """DEV_MODE 启动 + yaml api_keys 全是未解析 ${ENV} 占位符 -> 自动关 auth"""
+
+    def test_dev_mode_with_placeholder_keys_disables_auth(self):
+        """DEV_MODE=1 + key 列表全是 ${X} 字面量 -> auth_enabled 应被自动关掉"""
+        # 通过 patching ApiService 内部读到的 config 来模拟 yaml 状态
+        from unittest.mock import patch
+        # 默认 ApiService 走 build_basic_deps + config_module, 其 security.api_keys 是
+        # ["${API_KEY_1}"] (因为环境变量没设, 占位符未被替换)。DEV_MODE 是 setUp 已设。
+        # 直接构造看 auth_enabled 是否变 False:
+        svc = ApiService(handler=MockHandler())
+        # 老 yaml 默认 auth_enabled=true + auth_type=apikey + 1 个占位符 key
+        # -> 启动期自动关 auth
+        self.assertFalse(svc.auth_enabled, "DEV_MODE + 占位符 key 时应自动关 auth")
+        # _key_to_tenant 反向索引仍构建好了 (字面量 ${API_KEY_1} -> default)
+        self.assertIn("${API_KEY_1}", svc._key_to_tenant)
+
+    def test_dev_mode_with_real_keys_keeps_auth_on(self):
+        """DEV_MODE=1 但 yaml 里全是真实 key 时, auth 不自动关 (用户显式想用 auth)"""
+        # patch _build_key_to_tenant_index 让它返回非占位符的真实 key
+        from unittest.mock import patch
+        with patch.object(
+            ApiService, "_build_key_to_tenant_index",
+            return_value={"real-key-123": "default"},
+        ):
+            svc = ApiService(handler=MockHandler())
+        # auth_enabled 应保留 yaml 配置 (true)
+        self.assertTrue(svc.auth_enabled, "有真实 key 时应保持 auth_enabled=true")
+
+
 class TestModelConfigEndpoints(unittest.TestCase):
     """运行期 LLM 模型注册表管理: GET/POST/DELETE /config/models + set-default"""
 

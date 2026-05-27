@@ -73,6 +73,23 @@ class ApiService:
         self._key_to_tenant: Dict[str, str] = self._build_key_to_tenant_index(raw_api_keys)
         # 兼容: 老代码若直接读 self.api_keys 看是否在列表内, 仍能工作
         self.api_keys = list(self._key_to_tenant.keys())
+
+        # Dev 友好: DEV_MODE 启动 + yaml 里全是未解析 ${ENV} 占位符时, 自动关掉认证
+        # 让浏览器 UI 直接能用, 不强迫新手第一次就去填 X-API-Key。
+        # 真实部署 (export API_KEY_1=xxx + 关 DEV_MODE) 不受影响。
+        dev_mode = os.environ.get("ANYTHING_DEV_MODE", "").lower() in ("1", "true", "yes")
+        all_placeholders = bool(self._key_to_tenant) and all(
+            k.startswith("${") and k.endswith("}") for k in self._key_to_tenant
+        )
+        if dev_mode and self.auth_enabled and self.auth_type == "apikey" and (
+            not self._key_to_tenant or all_placeholders
+        ):
+            reason = "未配置 api_keys" if not self._key_to_tenant else "api_keys 全是未解析 ${ENV} 占位符"
+            self.logger.warning(
+                f"[security] DEV_MODE 检测到 {reason}, 自动关闭 auth。"
+                f"生产部署请: (1) export 真实 API_KEY_1 环境变量 (2) 不要设 ANYTHING_DEV_MODE。"
+            )
+            self.auth_enabled = False
         # 内部白名单 (本期占位, 真实使用在 §4.3 冲突处理): 配置 internal_whitelist 后, 这些 IP 可仅靠 body tenant_id
         self.internal_whitelist: List[str] = list(
             self.config.get_config("security.internal_whitelist", []) or []
@@ -1192,14 +1209,31 @@ class ApiService:
 
         index_path = frontend_dir / "index.html"
 
+        # 给主页 HTML 加 no-cache header, 避免浏览器缓存老 UI 导致 user 看不到新功能。
+        # 静态资源 (/static/*) 由 StaticFiles 处理, 自带 Last-Modified, 304 协商缓存也能避免问题,
+        # 但极端时仍可能命中旧版 — 用户可强制刷新 (Ctrl+Shift+R)。
+        _NO_CACHE_HEADERS = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+
         @self.app.get("/")
         async def _root():
-            return FileResponse(str(index_path), media_type="text/html; charset=utf-8")
+            return FileResponse(
+                str(index_path),
+                media_type="text/html; charset=utf-8",
+                headers=_NO_CACHE_HEADERS,
+            )
 
         # 也支持 /ui 别名 (有些反代会在 / 挂别的内容)
         @self.app.get("/ui")
         async def _ui():
-            return FileResponse(str(index_path), media_type="text/html; charset=utf-8")
+            return FileResponse(
+                str(index_path),
+                media_type="text/html; charset=utf-8",
+                headers=_NO_CACHE_HEADERS,
+            )
 
         self.logger.info(f"Web UI 已挂载: GET / 提供 index.html, 静态资源 from {static_dir}")
 
