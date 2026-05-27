@@ -1,4 +1,8 @@
 import os
+
+# 单独跑本测试时启用 dev mode 避免 build_basic_deps 触发 secrets fail-fast
+os.environ.setdefault("ANYTHING_DEV_MODE", "1")
+
 import shutil
 import tempfile
 import unittest
@@ -124,19 +128,80 @@ class TestFaissVectorDB(unittest.TestCase):
             with self.assertRaises(VectorDBException, msg=f"should reject {bad!r}"):
                 FaissVectorDB(cfg=cfg, tenant_id=bad)
 
-    def test_tenant_id_does_not_change_behavior_yet(self):
-        """PR3a 行为不变: tenant_id 仅记录, query/upsert 走单一物理路径"""
+    def test_tenant_isolation_cross_tenant_zero_hit(self):
+        """PR3b 行为反转: tenant A 写, tenant B 读应 0 命中 (目录分区)"""
         cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
         db_a = FaissVectorDB(cfg=cfg, tenant_id="tenant-a")
         db_a.upsert_vectors([{
             "vector_id": "v1", "embedding": [1.0] + [0.0] * 63,
             "metadata": {"doc_id": "d1", "chunk_id": "c1"},
         }])
-        # 不同 tenant_id 但同 store_dir 在 PR3a 阶段仍能互相看见
-        # (PR3b 才会按目录隔离, 届时该测试需要更新)
+        # 验证物理目录隔离
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "tenant-a", "faiss.index")))
+
         db_b = FaissVectorDB(cfg=cfg, tenant_id="tenant-b")
         res = db_b.query([1.0] + [0.0] * 63, top_k=5)
-        self.assertEqual(len(res), 1, "PR3a 行为不变: 跨租户仍可见; PR3b 后此断言会反转")
+        self.assertEqual(len(res), 0, "PR3b: 跨租户必须 0 命中(目录已隔离)")
+
+    def test_tenant_isolation_same_tenant_can_see(self):
+        """同 tenant 跨实例仍可见(持久化 + 加载 OK)"""
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db1 = FaissVectorDB(cfg=cfg, tenant_id="tenant-a")
+        db1.upsert_vectors([{
+            "vector_id": "v1", "embedding": [1.0] + [0.0] * 63,
+            "metadata": {"doc_id": "d1", "chunk_id": "c1"},
+        }])
+        # 新实例加载同 tenant 数据
+        db2 = FaissVectorDB(cfg=cfg, tenant_id="tenant-a")
+        res = db2.query([1.0] + [0.0] * 63, top_k=5)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["vector_id"], "v1")
+
+    def test_default_tenant_fallback_reads_legacy_flat(self):
+        """default 租户当子目录无数据时, fallback 读老扁平路径"""
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        # 直接在 self.tmp (扁平路径) 写一份老数据
+        # 用一个临时实例伪装 default 写, 但要让数据先落在扁平路径
+        # 简单做法: 先建实例写入 tenant=default 后, 把数据搬到扁平路径
+        db_seed = FaissVectorDB(cfg=cfg, tenant_id="default")
+        db_seed.upsert_vectors([{
+            "vector_id": "legacy_v1", "embedding": [1.0] + [0.0] * 63,
+            "metadata": {"doc_id": "d_legacy", "chunk_id": "c_legacy"},
+        }])
+        # 模拟"老数据在扁平路径": 把 default 子目录文件搬到 self.tmp
+        import shutil
+        for fname in ("faiss.index", "meta.json", "embeddings.npy"):
+            src = os.path.join(self.tmp, "default", fname)
+            if os.path.exists(src):
+                shutil.move(src, os.path.join(self.tmp, fname))
+        shutil.rmtree(os.path.join(self.tmp, "default"), ignore_errors=True)
+
+        # 新建 default 租户实例: 子目录已空, 应 fallback 读老扁平
+        db_new = FaissVectorDB(cfg=cfg, tenant_id="default")
+        res = db_new.query([1.0] + [0.0] * 63, top_k=5)
+        self.assertEqual(len(res), 1, "default 租户应 fallback 读到老扁平数据")
+        self.assertEqual(res[0]["vector_id"], "legacy_v1")
+
+    def test_non_default_tenant_no_fallback(self):
+        """非 default 租户禁止 fallback 老扁平路径(防越权)"""
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        # 在扁平路径放假数据 (模拟其他租户的老数据混在里面)
+        import shutil
+        db_seed = FaissVectorDB(cfg=cfg, tenant_id="default")
+        db_seed.upsert_vectors([{
+            "vector_id": "should_not_be_seen", "embedding": [1.0] + [0.0] * 63,
+            "metadata": {"doc_id": "d", "chunk_id": "c"},
+        }])
+        for fname in ("faiss.index", "meta.json", "embeddings.npy"):
+            src = os.path.join(self.tmp, "default", fname)
+            if os.path.exists(src):
+                shutil.move(src, os.path.join(self.tmp, fname))
+        shutil.rmtree(os.path.join(self.tmp, "default"), ignore_errors=True)
+
+        # tenant-x 不应该看到扁平路径的数据
+        db_x = FaissVectorDB(cfg=cfg, tenant_id="tenant-x")
+        res = db_x.query([1.0] + [0.0] * 63, top_k=5)
+        self.assertEqual(len(res), 0, "非 default 租户必须看不到老扁平路径数据")
 
 
 if __name__ == "__main__":

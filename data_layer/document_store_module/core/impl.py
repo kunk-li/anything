@@ -41,8 +41,12 @@ class LocalDocumentStore(BaseDocumentStore):
     def __init__(self, deps: Optional[BasicDeps] = None, tenant_id: str = "default"):
         """
         Args:
-            tenant_id: 租户标识 (Task #33 PR3a, 字符集 [a-z0-9_-] 3-32 字符).
-                本 PR 仅记录, 数据路径仍单一 (PR3b 起按 tenant 切目录).
+            tenant_id: 租户标识 (Task #33). 数据按 tenant_id 切目录:
+                <base_storage_dir>/<tenant_id>/{doc_id}.{ext}
+
+                关键约定 (docs/multi-tenancy-design.md §10):
+                - 写永远写到 <base>/<tenant_id>/
+                - 读优先查子目录, 未找到时仅 default 租户 fallback 老扁平路径
         """
         from deps_module import build_basic_deps
         deps = deps or build_basic_deps()
@@ -52,11 +56,15 @@ class LocalDocumentStore(BaseDocumentStore):
 
         defaults = DocumentStoreConfig()
 
-        self.storage_dir = self.config_manager.get_config("document_store.storage_dir", default=defaults.storage_dir)
+        # base = yaml 配置; storage_dir = base/<tenant_id>/ (实际工作目录)
+        self.base_storage_dir = self.config_manager.get_config(
+            "document_store.storage_dir", default=defaults.storage_dir
+        )
+        self.storage_dir = os.path.join(self.base_storage_dir, self.tenant_id)
+
         self.supported_file_types = self.config_manager.get_config(
             "document_store.supported_file_types", default=defaults.supported_file_types
         )
-        # ConfigManager may return string for list; normalize.
         if isinstance(self.supported_file_types, str):
             self.supported_file_types = [x.strip().lower() for x in self.supported_file_types.split(",") if x.strip()]
 
@@ -72,10 +80,24 @@ class LocalDocumentStore(BaseDocumentStore):
         if isinstance(self.core_doc_prefix, str):
             self.core_doc_prefix = [x.strip() for x in self.core_doc_prefix.split(",") if x.strip()]
 
-        self.backup_dir = self.config_manager.get_config("document_store.backup_dir", default=defaults.backup_dir)
+        self.base_backup_dir = self.config_manager.get_config("document_store.backup_dir", default=defaults.backup_dir)
+        self.backup_dir = os.path.join(self.base_backup_dir, self.tenant_id)
         self.hash_map_filename = self.config_manager.get_config("document_store.hash_map_filename", default=defaults.hash_map_filename)
 
         self.hash_map_path = os.path.join(self.storage_dir, self.hash_map_filename)
+        # default 租户: 若子目录 hash_map 不存在, fallback 加载老扁平路径
+        if not os.path.exists(self.hash_map_path) and self.tenant_id == "default":
+            legacy = os.path.join(self.base_storage_dir, self.hash_map_filename)
+            if os.path.exists(legacy):
+                self._legacy_hash_map_path = legacy
+                self.logger.info(
+                    f"[migration] tenant=default 从老扁平 hash_map fallback: {legacy}"
+                )
+            else:
+                self._legacy_hash_map_path = None
+        else:
+            self._legacy_hash_map_path = None
+
         self.hash_doc_map: Dict[str, str] = self._load_hash_map()
 
         self._init_storage_dir()
@@ -96,10 +118,17 @@ class LocalDocumentStore(BaseDocumentStore):
         os.makedirs(self.backup_dir, exist_ok=True)
 
     def _load_hash_map(self) -> Dict[str, str]:
-        """Load persisted hash->doc_id map, or return empty dict."""
+        """Load persisted hash->doc_id map, or return empty dict.
+
+        Task #33 PR3b: 若子目录 hash_map 不存在且当前是 default 租户,
+        从老扁平路径 fallback 加载 (写仍写到子目录).
+        """
         try:
-            if os.path.exists(self.hash_map_path):
-                data = json_load(self.hash_map_path)
+            load_path = self.hash_map_path
+            if not os.path.exists(load_path) and getattr(self, "_legacy_hash_map_path", None):
+                load_path = self._legacy_hash_map_path
+            if os.path.exists(load_path):
+                data = json_load(load_path)
                 if isinstance(data, dict):
                     # normalize values
                     return {str(k): str(v) for k, v in data.items()}

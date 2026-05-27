@@ -68,7 +68,10 @@ class LocalStateStore(BaseStateStore):
             self.logger.warning(f"state_store配置加载失败，使用默认配置：{e}", logger_name="state_store_module")
             cfg = StateStoreConfig()
 
-        self.store_dir = store_dir or cfg.dir or "state_store"
+        # Task #33 PR3b: 按 tenant_id 切目录
+        # base = 显式入参 / yaml; store_dir = base/<tenant_id>/ (实际工作目录)
+        self.base_store_dir = store_dir or cfg.dir or "state_store"
+        self.store_dir = os.path.join(self.base_store_dir, self.tenant_id)
         self.expire_hours = cfg.expire_hours
         self.max_size = cfg.max_size
 
@@ -81,8 +84,21 @@ class LocalStateStore(BaseStateStore):
             self.logger.warning(f"过期状态清理失败（忽略）：{e}", logger_name="state_store_module")
 
     def _get_state_path(self, session_id: str) -> str:
+        """主路径: 子目录 <base>/<tenant_id>/<session_id>.json (写永远走这里)"""
         validate_session_id(session_id)
         return os.path.join(self.store_dir, f"{session_id}.json")
+
+    def _resolve_read_path(self, session_id: str) -> str:
+        """读路径: 主路径无文件且 default 租户 -> fallback 老扁平路径"""
+        validate_session_id(session_id)
+        primary = os.path.join(self.store_dir, f"{session_id}.json")
+        if os.path.exists(primary):
+            return primary
+        if self.tenant_id == "default":
+            legacy = os.path.join(self.base_store_dir, f"{session_id}.json")
+            if os.path.exists(legacy):
+                return legacy
+        return primary
 
     def _now_iso(self) -> str:
         # 使用UTC时间，避免跨时区问题
@@ -151,7 +167,8 @@ class LocalStateStore(BaseStateStore):
     def get_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         try:
             self._cleanup_expired_states()
-            path = self._get_state_path(session_id)
+            # 读优先走主路径,缺则 default 租户 fallback 老扁平路径
+            path = self._resolve_read_path(session_id)
             if not os.path.exists(path):
                 return None
             data = safe_read_json(path)

@@ -58,15 +58,22 @@ class FaissVectorDB(BaseVectorDB):
     ):
         """
         Args:
-            tenant_id: 租户标识(Task #33 PR3a 起接收, PR3b 起按 tenant 切目录).
-                本 PR 仅记录, 数据路径仍单一(行为不变).
-                字符集校验在数据层重复一次, 防止上游被绕过(深度防御, 见
-                docs/multi-tenancy-design.md §9.2).
+            tenant_id: 租户标识 (Task #33). 数据按 tenant_id 切目录:
+                <base_store_dir>/<tenant_id>/{faiss.index, meta.json, embeddings.npy}
+
+                关键约定 (docs/multi-tenancy-design.md §10):
+                - 写永远写到子目录 <base>/<tenant_id>/...
+                - 读优先查子目录, 未找到时:
+                  * 仅当 tenant_id == "default" 才 fallback 到老扁平路径 <base>/...
+                  * 其他租户禁止 fallback (防越权)
+                - 字符集白名单见 _validate_tenant_id (深度防御)
         """
         self.cfg = cfg or VectorDBConfig()
         self.tenant_id = self._validate_tenant_id(tenant_id)
         self.dim = int(self.cfg.get_vector_dimension())
-        self.store_dir = self.cfg.get_local_store_dir()
+        # base = yaml 配置的根目录; store_dir = base/<tenant_id>/ (实际工作目录)
+        self.base_store_dir = self.cfg.get_local_store_dir()
+        self.store_dir = os.path.join(self.base_store_dir, self.tenant_id)
 
         if not os.path.exists(self.store_dir):
             os.makedirs(self.store_dir, exist_ok=True)
@@ -74,6 +81,7 @@ class FaissVectorDB(BaseVectorDB):
         if faiss is None:
             raise VectorDBException("VECTOR_DB_CONNECT_FAILED", "未安装 faiss，请在 requirements 中添加 faiss-cpu")
 
+        # 写路径: 子目录(永远)
         self.index_path = os.path.join(self.store_dir, "faiss.index")
         self.meta_path = os.path.join(self.store_dir, "meta.json")
         self.emb_path = os.path.join(self.store_dir, "embeddings.npy")
@@ -94,18 +102,51 @@ class FaissVectorDB(BaseVectorDB):
 
         self._load_if_exists()
 
+    def _resolve_load_paths(self) -> tuple:
+        """决定从哪三个文件路径加载 (Task #33 PR3b: 双重读 fallback).
+
+        策略:
+            1. 子目录 <base>/<tenant_id>/ 存在数据 -> 用子目录 (主路径)
+            2. 子目录无数据 + tenant_id == "default" + 老扁平路径有数据 -> fallback
+            3. 其他情况 -> 用子目录 (空,正常)
+
+        非 default 租户禁止 fallback (防越权读到老扁平路径中其他租户数据).
+        """
+        if os.path.exists(self.meta_path):
+            return self.meta_path, self.index_path, self.emb_path
+
+        # 子目录无数据
+        if self.tenant_id != "default":
+            return self.meta_path, self.index_path, self.emb_path
+
+        legacy_meta = os.path.join(self.base_store_dir, "meta.json")
+        legacy_index = os.path.join(self.base_store_dir, "faiss.index")
+        legacy_emb = os.path.join(self.base_store_dir, "embeddings.npy")
+        if os.path.exists(legacy_meta):
+            if self.logger:
+                self.logger.info(
+                    f"[migration] tenant=default 从老扁平路径 fallback 读取: {self.base_store_dir} "
+                    "(运维迁移完成后, 新写入会到 <base>/default/, 此 fallback 自动消失)",
+                    logger_name="vector_db_module",
+                )
+            return legacy_meta, legacy_index, legacy_emb
+
+        return self.meta_path, self.index_path, self.emb_path
+
     # ------------------------- persistence -------------------------
     def _load_if_exists(self) -> None:
         """加载已存在的索引与元数据（若有）。"""
         try:
-            if os.path.exists(self.meta_path):
-                with open(self.meta_path, "r", encoding="utf-8") as f:
+            meta_path, index_path, emb_path = self._resolve_load_paths()
+
+            if os.path.exists(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                 self.id_map = list(meta.get("id_map", []))
                 self.meta_map = dict(meta.get("meta_map", {}))
 
-            if os.path.exists(self.emb_path):
-                self.embeddings = np.load(self.emb_path).astype("float32", copy=False)
+            if os.path.exists(emb_path):
+                self.embeddings = np.load(emb_path).astype("float32", copy=False)
                 # 防御：维度不符则忽略并重建为空
                 if self.embeddings.ndim != 2 or self.embeddings.shape[1] != self.dim:
                     self.embeddings = None
@@ -113,8 +154,8 @@ class FaissVectorDB(BaseVectorDB):
                     self.meta_map = {}
 
             # index 文件存在则加载；否则用 embeddings 重建
-            if os.path.exists(self.index_path):
-                self.index = faiss.read_index(self.index_path)
+            if os.path.exists(index_path):
+                self.index = faiss.read_index(index_path)
             elif self.embeddings is not None and len(self.id_map) == self.embeddings.shape[0]:
                 self._rebuild_index()
 
