@@ -244,10 +244,13 @@ def build_business_layer(
         description='调用大语言模型生成文本。input: {"prompt": str}',
     )
 
-    # 扩展工具集 (Task #37): calculator / datetime / wikipedia / document_read
+    # 扩展工具集 (Task #37 + #41): calculator / datetime / wikipedia / document_read
+    # + regex_extract / text_stats / json_query / http_get / text_summarize
     from agent_module.tools import (
         calculator_tool, datetime_tool, wikipedia_tool,
         make_document_read_tool, TOOL_DESCRIPTIONS,
+        regex_extract, text_stats, json_query, http_get,
+        make_text_summarize_tool,
     )
     tool_registry.register("calculator", calculator_tool, description=TOOL_DESCRIPTIONS["calculator"])
     tool_registry.register("datetime", datetime_tool, description=TOOL_DESCRIPTIONS["datetime"])
@@ -259,6 +262,20 @@ def build_business_layer(
         "document_read",
         make_document_read_tool(_doc_store_for_tool),
         description=TOOL_DESCRIPTIONS["document_read"],
+    )
+
+    # Task #41: 5 个新增工具
+    tool_registry.register("regex_extract", regex_extract, description=TOOL_DESCRIPTIONS["regex_extract"])
+    tool_registry.register("text_stats", text_stats, description=TOOL_DESCRIPTIONS["text_stats"])
+    tool_registry.register("json_query", json_query, description=TOOL_DESCRIPTIONS["json_query"])
+    tool_registry.register("http_get", http_get, description=TOOL_DESCRIPTIONS["http_get"])
+    # text_summarize 闭包 llm_client (复用 call_llm_compat)
+    def _llm_call_for_summarize(prompt: str) -> str:
+        return call_llm_compat(llm_client=data_layer.get("llm_client"), prompt=prompt)
+    tool_registry.register(
+        "text_summarize",
+        make_text_summarize_tool(_llm_call_for_summarize),
+        description=TOOL_DESCRIPTIONS["text_summarize"],
     )
 
     agent = SimpleAgent(

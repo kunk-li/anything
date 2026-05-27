@@ -16,6 +16,11 @@ from agent_module.tools import (
     datetime_tool,
     wikipedia_tool,
     make_document_read_tool,
+    regex_extract,
+    text_stats,
+    json_query,
+    http_get,
+    make_text_summarize_tool,
     TOOL_DESCRIPTIONS,
 )
 
@@ -184,10 +189,188 @@ class TestDocumentReadTool(unittest.TestCase):
         self.assertEqual(r["code"], "TOOL_CALL_FAILED")
 
 
+class TestRegexExtract(unittest.TestCase):
+
+    def test_simple_match(self):
+        r = regex_extract({
+            "text": "Contact: alice@example.com or bob@test.org",
+            "pattern": r"[\w.]+@[\w.]+",
+        })
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["match_count"], 2)
+        self.assertEqual(r["data"]["matches"][0]["match"], "alice@example.com")
+
+    def test_with_groups(self):
+        r = regex_extract({
+            "text": "phone: 010-12345678, mobile: 138-0000-1234",
+            "pattern": r"(\d{3,4})-(\d{4,8})(?:-(\d{4}))?",
+        })
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["matches"][0]["groups"][0], "010")
+
+    def test_named_groups(self):
+        r = regex_extract({
+            "text": "ver 1.2.3 released",
+            "pattern": r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)",
+        })
+        self.assertEqual(r["data"]["matches"][0]["named"], {
+            "major": "1", "minor": "2", "patch": "3",
+        })
+
+    def test_flags_ignorecase(self):
+        r = regex_extract({"text": "Hello HELLO hello", "pattern": "hello", "flags": "i"})
+        self.assertEqual(r["data"]["match_count"], 3)
+
+    def test_max_matches_truncates(self):
+        r = regex_extract({"text": "x" * 100, "pattern": "x", "max_matches": 5})
+        self.assertEqual(r["data"]["match_count"], 5)
+        self.assertTrue(r["data"]["truncated"])
+
+    def test_invalid_pattern(self):
+        r = regex_extract({"text": "abc", "pattern": "("})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIn("正则编译失败", r["message"])
+
+    def test_empty_text(self):
+        r = regex_extract({"text": "", "pattern": "x"})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+
+class TestTextStats(unittest.TestCase):
+
+    def test_basic(self):
+        r = text_stats({"text": "Hello 你好\nWorld 世界"})
+        self.assertEqual(r["code"], "SUCCESS")
+        d = r["data"]
+        self.assertEqual(d["line_count"], 2)
+        self.assertEqual(d["cjk_chars"], 4)  # 你好世界
+        self.assertGreater(d["ascii_chars"], 0)
+
+    def test_digits_and_no_space(self):
+        r = text_stats({"text": "abc 123\n456"})
+        d = r["data"]
+        self.assertEqual(d["digit_chars"], 6)  # 1 2 3 4 5 6
+        self.assertEqual(d["char_count_no_space"], 9)  # abc123456
+
+    def test_not_string(self):
+        r = text_stats({"text": 123})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_too_long(self):
+        r = text_stats({"text": "x" * 2_000_000})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+
+class TestJsonQuery(unittest.TestCase):
+
+    def test_simple_path(self):
+        r = json_query({"data": {"user": {"name": "Alice", "age": 30}}, "path": "user.name"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], "Alice")
+
+    def test_array_index(self):
+        r = json_query({"data": {"items": [{"title": "a"}, {"title": "b"}]}, "path": "items.[1].title"})
+        self.assertEqual(r["data"]["result"], "b")
+
+    def test_negative_index(self):
+        r = json_query({"data": {"items": [10, 20, 30]}, "path": "items.[-1]"})
+        self.assertEqual(r["data"]["result"], 30)
+
+    def test_wildcard(self):
+        r = json_query({"data": {"items": [{"v": 1}, {"v": 2}, {"v": 3}]}, "path": "items.*.v"})
+        self.assertEqual(r["data"]["result"], [1, 2, 3])
+
+    def test_json_text(self):
+        r = json_query({"json_text": '{"a": [1, 2, 3]}', "path": "a.[2]"})
+        self.assertEqual(r["data"]["result"], 3)
+
+    def test_key_not_found(self):
+        r = json_query({"data": {"a": 1}, "path": "b"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+    def test_index_out_of_range(self):
+        r = json_query({"data": {"items": [1, 2]}, "path": "items.[10]"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+    def test_invalid_json_text(self):
+        r = json_query({"json_text": "{not valid", "path": "a"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_neither_data_nor_text(self):
+        r = json_query({"path": "x"})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+
+class TestHttpGet(unittest.TestCase):
+
+    def test_reject_non_http_scheme(self):
+        r = http_get({"url": "file:///etc/passwd"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIn("http / https", r["message"])
+
+    def test_reject_private_ip_literal(self):
+        for ip in ("127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1"):
+            r = http_get({"url": f"http://{ip}/x"})
+            self.assertEqual(r["code"], "PARAM_INVALID", ip)
+            self.assertIn("SSRF", r["message"])
+
+    def test_reject_loopback_ipv6(self):
+        r = http_get({"url": "http://[::1]/x"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_dns_resolution_failure(self):
+        """不存在的域名 -> PARAM_INVALID (DNS 失败也算 SSRF 防御)"""
+        r = http_get({"url": "http://this-domain-definitely-does-not-exist-xxxyyy.invalid/path"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+
+    def test_empty_url(self):
+        r = http_get({"url": ""})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+
+class TestTextSummarize(unittest.TestCase):
+
+    def test_calls_llm(self):
+        called = {}
+        def _fake_llm(prompt):
+            called["prompt"] = prompt
+            return "这是压缩后的 3 句摘要。第二句。第三句。"
+        tool = make_text_summarize_tool(_fake_llm)
+        r = tool({"text": "很长很长很长" * 100, "max_sentences": 3})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertIn("压缩成 3 句话", called["prompt"])
+        self.assertEqual(r["data"]["max_sentences"], 3)
+
+    def test_lang_english(self):
+        called = {}
+        def _fake_llm(prompt):
+            called["prompt"] = prompt
+            return "summary."
+        tool = make_text_summarize_tool(_fake_llm)
+        tool({"text": "lorem", "lang": "en"})
+        self.assertIn("Summarize the following", called["prompt"])
+
+    def test_empty_text(self):
+        tool = make_text_summarize_tool(lambda p: "x")
+        r = tool({"text": ""})
+        self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_llm_failure(self):
+        def _bad(p): raise RuntimeError("LLM down")
+        tool = make_text_summarize_tool(_bad)
+        r = tool({"text": "some content"})
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+        self.assertTrue(r["retryable"])
+
+
 class TestToolDescriptions(unittest.TestCase):
-    def test_all_4_tools_have_descriptions(self):
-        for name in ("calculator", "datetime", "wikipedia", "document_read"):
-            self.assertIn(name, TOOL_DESCRIPTIONS)
+    def test_all_9_tools_have_descriptions(self):
+        expected = (
+            "calculator", "datetime", "wikipedia", "document_read",
+            "regex_extract", "text_stats", "json_query", "http_get", "text_summarize",
+        )
+        for name in expected:
+            self.assertIn(name, TOOL_DESCRIPTIONS, name)
             self.assertGreater(len(TOOL_DESCRIPTIONS[name]), 20)
 
 

@@ -8,6 +8,11 @@ from .builtin_tools import (
     datetime_tool,
     wikipedia_tool,
     make_document_read_tool,
+    regex_extract,
+    text_stats,
+    json_query,
+    http_get,
+    make_text_summarize_tool,
     TOOL_DESCRIPTIONS,
 )
 
@@ -16,5 +21,10 @@ __all__ = [
     "datetime_tool",
     "wikipedia_tool",
     "make_document_read_tool",
+    "regex_extract",
+    "text_stats",
+    "json_query",
+    "http_get",
+    "make_text_summarize_tool",
     "TOOL_DESCRIPTIONS",
 ]
