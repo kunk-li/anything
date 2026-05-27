@@ -4,6 +4,8 @@ Agent 模块具体实现类
 负责任务解析、工具调用、状态记录与结果聚合
 """
 
+import json
+import re
 import time
 import uuid
 from typing import Dict, Any, List, Optional, Callable
@@ -14,7 +16,13 @@ from deps_module import BasicDeps, build_basic_deps
 
 
 class SimpleAgent(BaseAgent):
-    """标准 Agent 实现：任务解析 -> 工具调用 -> 状态记录 -> 结果聚合"""
+    """标准 Agent 实现：任务解析 -> 工具调用 -> 状态记录 -> 结果聚合
+
+    任务解析(parse_task)优先使用 LLM 规划:
+        - 通过 LLM 让模型自己决定调用工具序列,符合"智能代理"语义
+        - 任一失败(LLM 不可用 / JSON 解析失败 / 工具不在注册表)→ fallback 到规则式
+        - 通过配置 agent.use_llm_planner=False 可强制关闭 LLM 规划
+    """
 
     def __init__(
             self,
@@ -23,6 +31,7 @@ class SimpleAgent(BaseAgent):
             timeout: int = 60,
             max_retries: int = 2,
             session_prefix: str = "session",
+            llm_planner: Optional[Callable[[str], str]] = None,
             deps: Optional[BasicDeps] = None,
     ):
         # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
@@ -32,12 +41,20 @@ class SimpleAgent(BaseAgent):
         self.config = deps.config
         self.exception_handler = deps.exception_handler
 
+        # LLM 规划器: 可显式注入 callable (prompt -> str);
+        # 未注入时回退到 tool_registry["llm_generate"]
+        self.llm_planner = llm_planner
+
         self.state_store = state_store
         self.tool_registry = tool_registry
         self.timeout = int(self.config.get_config("agent.timeout", timeout))
         self.max_retries = int(self.config.get_config("agent.max_retries", max_retries))
         self.session_prefix = self.config.get_config("agent.session_prefix", session_prefix)
         self.default_execution_mode = self.config.get_config("agent.default_execution_mode", "agent")
+        # 是否启用 LLM 规划(默认 True; 失败时仍会 fallback 到规则式)
+        self.use_llm_planner = bool(self.config.get_config("agent.use_llm_planner", True))
+        # LLM 规划最多生成的 step 数,避免无限链路
+        self.max_planner_steps = int(self.config.get_config("agent.max_planner_steps", 3))
 
         self.logger.info("Agent 模块初始化完成")
 
@@ -214,57 +231,270 @@ class SimpleAgent(BaseAgent):
             trace_id: Optional[str] = None,
             extra_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """解析任务并生成执行计划。当前版本采用规则式解析。"""
+        """解析任务并生成执行计划。
+
+        策略:
+            1. 若 use_llm_planner=True 且能拿到 LLM 调用通道 -> 让 LLM 规划
+            2. LLM 规划失败 / JSON 解析失败 / 工具不在注册表 -> fallback 规则式
+            3. hybrid 模式或没有 LLM 通道 -> 直接走规则式
+
+        返回结构:
+            {"session_id", "task", "steps", "plan_source": "llm"|"rule_based"}
+        """
         extra_params = extra_params or {}
         execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
 
-        steps: List[Dict[str, Any]] = []
+        # 优先 LLM 规划(仅 agent 模式;hybrid 由文档定义为固定 rag + llm 两步)
+        if self.use_llm_planner and execution_mode != "hybrid":
+            llm_steps = self._llm_plan_task(
+                task=task,
+                trace_id=trace_id,
+                extra_params=extra_params,
+            )
+            if llm_steps:
+                return {
+                    "session_id": session_id,
+                    "task": task,
+                    "steps": llm_steps,
+                    "plan_source": "llm",
+                }
 
-        if execution_mode == "hybrid":
-            steps.append(
-                {
-                    "step_id": "s1",
-                    "tool_name": "rag_search",
-                    "description": "先做知识库检索",
-                    "input_data": {
-                        "query": task,
-                        "top_k": extra_params.get("top_k", 5),
-                        "trace_id": trace_id,
-                        "extra_params": extra_params,
-                    },
-                }
-            )
-            steps.append(
-                {
-                    "step_id": "s2",
-                    "tool_name": "llm_generate",
-                    "description": "基于检索结果生成总结",
-                    "input_data": {
-                        "prompt": task,
-                        "trace_id": trace_id,
-                        "extra_params": extra_params,
-                    },
-                }
-            )
-        else:
-            steps.append(
-                {
-                    "step_id": "s1",
-                    "tool_name": "llm_generate",
-                    "description": "执行通用文本生成",
-                    "input_data": {
-                        "prompt": task,
-                        "trace_id": trace_id,
-                        "extra_params": extra_params,
-                    },
-                }
-            )
-
+        # Fallback: 规则式规划
+        steps = self._rule_based_plan_task(
+            task=task,
+            execution_mode=execution_mode,
+            trace_id=trace_id,
+            extra_params=extra_params,
+        )
         return {
             "session_id": session_id,
             "task": task,
             "steps": steps,
+            "plan_source": "rule_based",
         }
+
+    # =========================
+    # 规划: LLM 驱动版本
+    # =========================
+    def _llm_plan_task(
+            self,
+            task: str,
+            trace_id: Optional[str],
+            extra_params: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """让 LLM 输出 JSON 格式的执行计划; 任一环节失败返回 None 触发 fallback。"""
+        # 1. 拿可调用的 llm 通道
+        llm_call = self._resolve_llm_planner(trace_id=trace_id)
+        if llm_call is None:
+            return None
+
+        # 2. 列出 tool_registry 中实际可用的工具
+        available_tools = self._available_tool_names()
+        if not available_tools:
+            return None
+
+        # 3. 构造 prompt
+        prompt = self._build_planner_prompt(task=task, available_tools=available_tools)
+
+        # 4. 调用 LLM
+        try:
+            raw = llm_call(prompt)
+        except Exception as e:
+            self.logger.warning(f"[planner] LLM 规划调用异常,fallback 规则式: {e}")
+            return None
+
+        # 5. 解析 JSON 与校验
+        plan_steps = self._parse_planner_response(raw=raw, available_tools=available_tools)
+        if not plan_steps:
+            return None
+
+        # 6. 补全 step 字段(trace_id / extra_params)
+        steps: List[Dict[str, Any]] = []
+        for i, step in enumerate(plan_steps[: self.max_planner_steps], start=1):
+            input_data = step.get("input_data") or {}
+            input_data.setdefault("trace_id", trace_id)
+            input_data.setdefault("extra_params", extra_params)
+            # rag_search 默认 top_k
+            if step.get("tool_name") == "rag_search":
+                input_data.setdefault("top_k", extra_params.get("top_k", 5))
+                input_data.setdefault("query", task)
+            # llm_generate 默认 prompt 用 task
+            if step.get("tool_name") == "llm_generate":
+                input_data.setdefault("prompt", task)
+            steps.append({
+                "step_id": step.get("step_id") or f"s{i}",
+                "tool_name": step["tool_name"],
+                "description": step.get("description", ""),
+                "input_data": input_data,
+            })
+
+        self.logger.info(
+            f"[planner] LLM 规划成功: trace_id={trace_id}, steps={len(steps)}, "
+            f"tools={[s['tool_name'] for s in steps]}"
+        )
+        return steps
+
+    def _resolve_llm_planner(self, trace_id: Optional[str]) -> Optional[Callable[[str], str]]:
+        """优先用显式注入的 llm_planner;否则通过 tool_registry 的 llm_generate 调 LLM。"""
+        if self.llm_planner is not None:
+            return self.llm_planner
+
+        if self.tool_registry is None:
+            return None
+
+        tool = None
+        if hasattr(self.tool_registry, "get"):
+            tool = self.tool_registry.get("llm_generate")
+        elif isinstance(self.tool_registry, dict):
+            tool = self.tool_registry.get("llm_generate")
+
+        if tool is None:
+            return None
+
+        def _wrap(prompt: str) -> str:
+            result = tool({"prompt": prompt, "trace_id": trace_id})
+            if isinstance(result, dict):
+                # llm_generate 工具协议: data.text 为文本回复
+                data = result.get("data") or {}
+                return str(data.get("text") or data.get("answer") or "") or ""
+            return str(result) if result is not None else ""
+
+        return _wrap
+
+    def _available_tool_names(self) -> List[str]:
+        if self.tool_registry is None:
+            return []
+        if hasattr(self.tool_registry, "list_tools"):
+            try:
+                return list(self.tool_registry.list_tools())
+            except Exception:
+                pass
+        if isinstance(self.tool_registry, dict):
+            return list(self.tool_registry.keys())
+        return []
+
+    @staticmethod
+    def _build_planner_prompt(task: str, available_tools: List[str]) -> str:
+        """构造 LLM 规划 prompt。"""
+        tool_docs = {
+            "rag_search": "在知识库中检索相关文档片段。input: {\"query\": str, \"top_k\": int}",
+            "llm_generate": "调用大语言模型生成文本。input: {\"prompt\": str}",
+        }
+        tool_lines = []
+        for name in available_tools:
+            doc = tool_docs.get(name, "(无描述)")
+            tool_lines.append(f"- {name}: {doc}")
+
+        return (
+            "你是一个任务规划器。根据用户任务,从可用工具中选择需要按顺序调用的工具序列。\n"
+            "\n"
+            "可用工具:\n"
+            + "\n".join(tool_lines)
+            + "\n"
+            "\n"
+            "规划原则:\n"
+            "- 如果任务需要查阅知识库后再回答,先 rag_search 再 llm_generate\n"
+            "- 如果只是文本生成/创作/计划,直接 llm_generate\n"
+            "- 步骤数不超过 3 步\n"
+            "\n"
+            f"用户任务: {task}\n"
+            "\n"
+            "请只输出严格 JSON(不要任何解释/markdown 围栏),格式:\n"
+            "{\n"
+            "  \"steps\": [\n"
+            "    {\"step_id\": \"s1\", \"tool_name\": \"<工具名>\", \"description\": \"<理由>\", \"input_data\": {...}}\n"
+            "  ]\n"
+            "}\n"
+        )
+
+    @staticmethod
+    def _parse_planner_response(raw: str, available_tools: List[str]) -> Optional[List[Dict[str, Any]]]:
+        """从 LLM 返回中提取 JSON steps 列表,校验工具合法性。"""
+        if not raw or not isinstance(raw, str):
+            return None
+
+        # 尽量从文本中抠出 {...} JSON 块(模型可能加了 markdown 围栏)
+        candidate = raw.strip()
+        if candidate.startswith("```"):
+            # 去掉 markdown 代码围栏
+            candidate = re.sub(r"^```[a-zA-Z]*\n?", "", candidate)
+            candidate = re.sub(r"```\s*$", "", candidate).strip()
+
+        # 抓第一个 { 到匹配的 }
+        match = re.search(r"\{[\s\S]*\}", candidate)
+        if not match:
+            return None
+
+        try:
+            parsed = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+        steps = parsed.get("steps") if isinstance(parsed, dict) else None
+        if not isinstance(steps, list) or not steps:
+            return None
+
+        tool_set = set(available_tools)
+        valid_steps: List[Dict[str, Any]] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            tool_name = step.get("tool_name")
+            if tool_name not in tool_set:
+                # LLM 调了不存在的工具,拒绝整个 plan
+                return None
+            valid_steps.append(step)
+
+        return valid_steps or None
+
+    # =========================
+    # 规划: 规则式 fallback
+    # =========================
+    def _rule_based_plan_task(
+            self,
+            task: str,
+            execution_mode: str,
+            trace_id: Optional[str],
+            extra_params: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """规则式规划(LLM 不可用时的 fallback)。"""
+        steps: List[Dict[str, Any]] = []
+
+        if execution_mode == "hybrid":
+            steps.append({
+                "step_id": "s1",
+                "tool_name": "rag_search",
+                "description": "先做知识库检索",
+                "input_data": {
+                    "query": task,
+                    "top_k": extra_params.get("top_k", 5),
+                    "trace_id": trace_id,
+                    "extra_params": extra_params,
+                },
+            })
+            steps.append({
+                "step_id": "s2",
+                "tool_name": "llm_generate",
+                "description": "基于检索结果生成总结",
+                "input_data": {
+                    "prompt": task,
+                    "trace_id": trace_id,
+                    "extra_params": extra_params,
+                },
+            })
+        else:
+            steps.append({
+                "step_id": "s1",
+                "tool_name": "llm_generate",
+                "description": "执行通用文本生成",
+                "input_data": {
+                    "prompt": task,
+                    "trace_id": trace_id,
+                    "extra_params": extra_params,
+                },
+            })
+
+        return steps
 
     def aggregate_results(
             self,
