@@ -308,6 +308,188 @@ class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
             return LLMResponse(code="RAG_RUN_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
 
 
+class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
+    """Anthropic Claude 原生 API 适配器 (跟 OpenAI 格式不同)
+
+    端点: POST {api_base}/v1/messages   默认 api_base=https://api.anthropic.com
+    Header: x-api-key + anthropic-version (不是 Bearer)
+    Payload: messages 数组 + system 单独字段 + max_tokens 必填
+    Response: {content: [{type:"text", text:"..."}], stop_reason: ...}
+    """
+
+    def __init__(self, model_name, model_cfg, common_cfg, logger):
+        self.model_name = model_name
+        self.model_cfg = model_cfg
+        self.common_cfg = common_cfg
+        self.logger = logger
+        self.api_key = str(model_cfg.get("api_key", "") or "")
+        self.api_base = str(
+            model_cfg.get("api_base", "https://api.anthropic.com") or ""
+        ).rstrip("/")
+        self.anthropic_version = str(model_cfg.get("anthropic_version", "2023-06-01"))
+        self.timeout = int(common_cfg.get("timeout", 30))
+        self.max_retry = int(common_cfg.get("max_retry", 3))
+
+    def check_config(self) -> bool:
+        return bool(self.api_key and self.api_base)
+
+    def generate(self, prompt: str, request: LLMRequest) -> str:
+        return self.chat_with_context([{"role": "user", "content": prompt}], request)
+
+    def chat_with_context(self, messages: List[Dict[str, Any]], request: LLMRequest) -> str:
+        if not self.check_config():
+            return f"[mock-anthropic:{self.model_name}] {messages[-1].get('content','')}"
+
+        # Anthropic 把 system 拆出来, messages 只放 user/assistant
+        system_text = ""
+        api_messages: List[Dict[str, Any]] = []
+        for m in messages:
+            if m.get("role") == "system":
+                system_text = (system_text + "\n" + str(m.get("content", ""))).strip()
+            else:
+                api_messages.append({"role": m["role"], "content": m.get("content", "")})
+
+        url = f"{self.api_base}/v1/messages"
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": self.anthropic_version,
+            "Content-Type": "application/json",
+        }
+        p: LLMParam = request.model_param
+        payload: Dict[str, Any] = {
+            "model": self.model_name,
+            "messages": api_messages,
+            "max_tokens": p.max_tokens or 1024,  # Anthropic max_tokens 必填
+            "temperature": p.temperature,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                data = self._post_json(url, headers, payload, timeout=self.timeout)
+                # content: [{type: "text", text: "..."}]
+                blocks = data.get("content", []) or []
+                texts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
+                return "".join(texts)
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"[llm_adapter] Anthropic chat attempt {attempt+1} failed: {e}",
+                    logger_name="llm_adapter",
+                )
+                time.sleep(min(2 ** attempt, 8))
+        raise last_err or RuntimeError("anthropic chat failed")
+
+    def call(self, request: LLMRequest) -> LLMResponse:
+        start = now_ts()
+        trace_id = gen_trace_id()
+        try:
+            if request.input_text:
+                out = self.generate(request.input_text, request)
+            elif request.file_content:
+                fc = ensure_file_content_splits(request.file_content)
+                prompt = "\n\n".join((fc.split_contents or [])[:5])
+                out = self.generate(prompt, request)
+            else:
+                out = ""
+            return LLMResponse(code="SUCCESS", message="ok", chat_result=out,
+                              cost_time=now_ts() - start, trace_id=trace_id)
+        except Exception as e:
+            return LLMResponse(code="RAG_RUN_FAILED", message=str(e),
+                              cost_time=now_ts() - start, trace_id=trace_id)
+
+
+class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
+    """Ollama 本地大模型适配器 (无需 API key)
+
+    端点: POST {api_base}/api/chat  默认 api_base=http://localhost:11434
+    无需 Auth header (本机服务)
+    Payload: {model, messages, stream:false, options:{temperature, num_predict}}
+    Response: {message:{role,content}, done:true}
+
+    用法: 先 `ollama pull qwen2.5:7b` 或 `ollama pull llama3.2:3b`,
+          model_name 用对应 tag, api_base 默认即可。
+    """
+
+    def __init__(self, model_name, model_cfg, common_cfg, logger):
+        self.model_name = model_name
+        self.model_cfg = model_cfg
+        self.common_cfg = common_cfg
+        self.logger = logger
+        # api_key 对 Ollama 是可选的 (反代加 token 时才用)
+        self.api_key = str(model_cfg.get("api_key", "") or "")
+        self.api_base = str(
+            model_cfg.get("api_base", "http://localhost:11434") or ""
+        ).rstrip("/")
+        self.timeout = int(common_cfg.get("timeout", 60))  # 本地推理可能稍慢
+        self.max_retry = int(common_cfg.get("max_retry", 2))
+
+    def check_config(self) -> bool:
+        return bool(self.api_base)  # Ollama 不强制要 key
+
+    def generate(self, prompt: str, request: LLMRequest) -> str:
+        return self.chat_with_context([{"role": "user", "content": prompt}], request)
+
+    def chat_with_context(self, messages: List[Dict[str, Any]], request: LLMRequest) -> str:
+        if not self.check_config():
+            return f"[mock-ollama:{self.model_name}] {messages[-1].get('content','')}"
+
+        url = f"{self.api_base}/api/chat"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        p: LLMParam = request.model_param
+        payload: Dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [{"role": m.get("role"), "content": m.get("content", "")} for m in messages],
+            "stream": False,
+            "options": {
+                "temperature": p.temperature,
+                "num_predict": p.max_tokens if p.max_tokens else -1,
+            },
+        }
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                data = self._post_json(url, headers, payload, timeout=self.timeout)
+                msg = data.get("message", {}) or {}
+                return str(msg.get("content", "") or "")
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"[llm_adapter] Ollama chat attempt {attempt+1} failed: {e}",
+                    logger_name="llm_adapter",
+                )
+                time.sleep(min(2 ** attempt, 4))
+        raise last_err or RuntimeError("ollama chat failed")
+
+    def call(self, request: LLMRequest) -> LLMResponse:
+        start = now_ts()
+        trace_id = gen_trace_id()
+        try:
+            if request.input_text:
+                out = self.generate(request.input_text, request)
+            elif request.file_content:
+                fc = ensure_file_content_splits(request.file_content)
+                prompt = "\n\n".join((fc.split_contents or [])[:5])
+                out = self.generate(prompt, request)
+            else:
+                out = ""
+            return LLMResponse(code="SUCCESS", message="ok", chat_result=out,
+                              cost_time=now_ts() - start, trace_id=trace_id)
+        except Exception as e:
+            return LLMResponse(code="RAG_RUN_FAILED", message=str(e),
+                              cost_time=now_ts() - start, trace_id=trace_id)
+
+
 class LLMService(BaseLLMService):
     """大模型统一服务实现：对外唯一入口"""
 
@@ -490,6 +672,9 @@ class LLMService(BaseLLMService):
             "OpenAIVectorAdapter": OpenAIVectorAdapter,
             "OpenAIChatAdapter": OpenAIChatAdapter,
             "OpenAIMultimodalAdapter": OpenAIMultimodalAdapter,
+            # 扩展厂商:
+            "AnthropicChatAdapter": AnthropicChatAdapter,
+            "OllamaChatAdapter": OllamaChatAdapter,
         }
         cls = mapping.get(adapter_class)
         if not cls:

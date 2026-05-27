@@ -380,6 +380,9 @@ class SimpleAgent(BaseAgent):
         final_answer: Optional[str] = None
         last_observation: Optional[Dict[str, Any]] = None
 
+        # registry 提供的工具描述, 给 LLM 看 (循环外读一次)
+        tool_descriptions = self._tool_descriptions()
+
         for iteration in range(1, self.max_react_iterations + 1):
             prompt = self._build_react_prompt(
                 task=task,
@@ -387,6 +390,7 @@ class SimpleAgent(BaseAgent):
                 history=history,
                 iteration=iteration,
                 max_iterations=self.max_react_iterations,
+                tool_descriptions=tool_descriptions,
             )
             try:
                 raw = llm_call(prompt)
@@ -501,14 +505,22 @@ class SimpleAgent(BaseAgent):
             history: List[Dict[str, Any]],
             iteration: int,
             max_iterations: int,
+            tool_descriptions: Optional[Dict[str, str]] = None,
     ) -> str:
-        """构造 ReAct prompt: 任务 + 工具 + 历史 + 期望输出格式"""
-        tool_docs = {
+        """构造 ReAct prompt: 任务 + 工具 + 历史 + 期望输出格式
+
+        tool_descriptions 是从 registry.describe_all() 拿到的, 优先级最高;
+        缺失时退回内置 tool_docs (向后兼容 rag_search / llm_generate)。
+        """
+        tool_descriptions = tool_descriptions or {}
+        fallback_docs = {
             "rag_search": '{"query": str, "top_k": int}',
             "llm_generate": '{"prompt": str}',
         }
-        tool_lines = [f"- {n}: input={tool_docs.get(n, '{}')}"
-                      for n in available_tools]
+        tool_lines = []
+        for n in available_tools:
+            desc = tool_descriptions.get(n) or fallback_docs.get(n, '{}')
+            tool_lines.append(f"- {n}: {desc}")
 
         history_lines = []
         for i, h in enumerate(history, start=1):
@@ -599,8 +611,12 @@ class SimpleAgent(BaseAgent):
         if not available_tools:
             return None
 
-        # 3. 构造 prompt
-        prompt = self._build_planner_prompt(task=task, available_tools=available_tools)
+        # 3. 构造 prompt (带 registry 提供的工具描述, 给 LLM 看)
+        prompt = self._build_planner_prompt(
+            task=task,
+            available_tools=available_tools,
+            tool_descriptions=self._tool_descriptions(),
+        )
 
         # 4. 调用 LLM
         try:
@@ -679,16 +695,50 @@ class SimpleAgent(BaseAgent):
             return list(self.tool_registry.keys())
         return []
 
+    def _tool_descriptions(self) -> Dict[str, str]:
+        """从 tool_registry 抽出每个工具的描述. registry 没暴露 describe* 时返回空 dict.
+
+        旧的硬编码 fallback 仍由 _build_planner_prompt / _build_react_prompt 兜底,
+        所以 registry 没描述也不会挂。
+        """
+        if self.tool_registry is None:
+            return {}
+        # 1. describe_all() 优先 (返回完整 dict)
+        if hasattr(self.tool_registry, "describe_all"):
+            try:
+                out = self.tool_registry.describe_all()
+                if isinstance(out, dict):
+                    return {str(k): str(v) for k, v in out.items()}
+            except Exception:
+                pass
+        # 2. 每个工具单独问 describe(name)
+        if hasattr(self.tool_registry, "describe"):
+            names = self._available_tool_names()
+            try:
+                return {n: str(self.tool_registry.describe(n) or "") for n in names}
+            except Exception:
+                pass
+        return {}
+
     @staticmethod
-    def _build_planner_prompt(task: str, available_tools: List[str]) -> str:
-        """构造 LLM 规划 prompt。"""
-        tool_docs = {
+    def _build_planner_prompt(
+        task: str,
+        available_tools: List[str],
+        tool_descriptions: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """构造 LLM 规划 prompt。
+
+        tool_descriptions: 从 registry 取的描述, 优先级最高;
+                           缺失时 fall back 到内置 tool_docs (向后兼容)。
+        """
+        tool_descriptions = tool_descriptions or {}
+        fallback_docs = {
             "rag_search": "在知识库中检索相关文档片段。input: {\"query\": str, \"top_k\": int}",
             "llm_generate": "调用大语言模型生成文本。input: {\"prompt\": str}",
         }
         tool_lines = []
         for name in available_tools:
-            doc = tool_docs.get(name, "(无描述)")
+            doc = tool_descriptions.get(name) or fallback_docs.get(name, "(无描述)")
             tool_lines.append(f"- {name}: {doc}")
 
         return (

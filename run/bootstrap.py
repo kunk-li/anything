@@ -38,19 +38,30 @@ from llm_compat import DummyLLMClient, call_llm_compat
 
 
 class DictToolRegistry:
-    """最小工具注册表实现，兼容 register/get 风格"""
+    """最小工具注册表实现，兼容 register/get 风格 + 工具描述(给 Agent LLM 规划用)"""
 
     def __init__(self):
         self._tools: Dict[str, Any] = {}
+        self._descriptions: Dict[str, str] = {}
 
-    def register(self, name: str, tool: Any) -> None:
+    def register(self, name: str, tool: Any, description: str = "") -> None:
+        """注册工具. description 给 SimpleAgent._build_planner_prompt 用,
+        没传时 Agent fallback 到内置硬编码 (rag_search / llm_generate)。"""
         self._tools[name] = tool
+        if description:
+            self._descriptions[name] = description
 
     def get(self, name: str) -> Any:
         return self._tools.get(name)
 
     def list_tools(self):
         return list(self._tools.keys())
+
+    def describe(self, name: str) -> str:
+        return self._descriptions.get(name, "")
+
+    def describe_all(self) -> Dict[str, str]:
+        return dict(self._descriptions)
 
 
 
@@ -223,8 +234,32 @@ def build_business_layer(
             "details": None,
         }
 
-    tool_registry.register("rag_search", rag_search_tool)
-    tool_registry.register("llm_generate", llm_generate_tool)
+    # 已有的两个核心工具 (描述硬编码兜底, 也写一份给 LLM 看)
+    tool_registry.register(
+        "rag_search", rag_search_tool,
+        description='在知识库中检索相关文档片段。input: {"query": str, "top_k": int}',
+    )
+    tool_registry.register(
+        "llm_generate", llm_generate_tool,
+        description='调用大语言模型生成文本。input: {"prompt": str}',
+    )
+
+    # 扩展工具集 (Task #37): calculator / datetime / wikipedia / document_read
+    from agent_module.tools import (
+        calculator_tool, datetime_tool, wikipedia_tool,
+        make_document_read_tool, TOOL_DESCRIPTIONS,
+    )
+    tool_registry.register("calculator", calculator_tool, description=TOOL_DESCRIPTIONS["calculator"])
+    tool_registry.register("datetime", datetime_tool, description=TOOL_DESCRIPTIONS["datetime"])
+    tool_registry.register("wikipedia", wikipedia_tool, description=TOOL_DESCRIPTIONS["wikipedia"])
+    # document_read 闭包 doc_store_factory (按 tenant 动态构造)
+    def _doc_store_for_tool(tenant_id: str):
+        return LocalDocumentStore(deps=deps, tenant_id=tenant_id)
+    tool_registry.register(
+        "document_read",
+        make_document_read_tool(_doc_store_for_tool),
+        description=TOOL_DESCRIPTIONS["document_read"],
+    )
 
     agent = SimpleAgent(
         state_store=data_layer.get("state_store"),
