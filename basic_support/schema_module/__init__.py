@@ -16,6 +16,12 @@ from .schema import (
     ResponseEnvelope,
     RequestType,
     validate_request_dict,
+    # 内部数据 schema
+    Chunk,
+    ChunkMeta,
+    RetrievedChunk,
+    Citation,
+    ToolStep,
 )
 
 __all__ = [
@@ -23,4 +29,9 @@ __all__ = [
     "ResponseEnvelope",
     "RequestType",
     "validate_request_dict",
+    "Chunk",
+    "ChunkMeta",
+    "RetrievedChunk",
+    "Citation",
+    "ToolStep",
 ]

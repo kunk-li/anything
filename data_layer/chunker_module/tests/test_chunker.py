@@ -147,5 +147,38 @@ class TestBuildUpsertItems(unittest.TestCase):
         self.assertEqual(meta["start_char"], 0)
 
 
+class TestChunkSchemaCompliance(unittest.TestCase):
+    """守护测试: chunk_document 的输出必须符合 schema_module.Chunk 契约。
+
+    这层校验放在测试侧而非运行时,运行时零开销;
+    如果未来代码修改导致 chunk 字段缺失/格式错误,这里立即报错。
+    """
+
+    def test_all_chunks_validate_against_schema(self):
+        from schema_module import Chunk
+
+        content = (
+            "# 标题 1\n" + ("段落一段落一段落一 " * 30) + "\n\n"
+            "# 标题 2\n" + ("段落二段落二段落二 " * 30)
+        )
+        chunks = chunk_document(
+            doc_id="doc-xyz",
+            content=content,
+            file_name="test.md",
+            source="test_src",
+            chunk_size_tokens=50,
+        )
+        self.assertGreater(len(chunks), 0)
+        for c in chunks:
+            # 任一字段缺失/类型错误,Chunk.model_validate 会抛 ValidationError
+            schema_obj = Chunk.model_validate(c)
+            # 顺手验证关键约束
+            self.assertTrue(schema_obj.chunk_id.startswith("doc-xyz#c"))
+            self.assertEqual(schema_obj.meta.file_name, "test.md")
+            self.assertEqual(schema_obj.meta.source, "test_src")
+            self.assertGreaterEqual(schema_obj.meta.chunk_index, 1)
+            self.assertGreaterEqual(schema_obj.meta.end_char, schema_obj.meta.start_char)
+
+
 if __name__ == "__main__":
     unittest.main()

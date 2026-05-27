@@ -5,10 +5,17 @@ schema_module 单元测试
 
 import unittest
 
+from pydantic import ValidationError
+
 from schema_module import (
     RequestEnvelope,
     ResponseEnvelope,
     validate_request_dict,
+    Chunk,
+    ChunkMeta,
+    RetrievedChunk,
+    Citation,
+    ToolStep,
 )
 
 
@@ -108,6 +115,126 @@ class TestResponseEnvelope(unittest.TestCase):
         self.assertEqual(env.code, "RAG_RUN_FAILED")
         self.assertTrue(env.retryable)
         self.assertEqual(env.trace_id, "t1")
+
+
+class TestChunk(unittest.TestCase):
+    def _valid_meta(self, **overrides):
+        base = dict(
+            file_name="f.md",
+            source="local",
+            chunk_index=1,
+            start_char=0,
+            end_char=100,
+            token_count_est=25,
+        )
+        base.update(overrides)
+        return base
+
+    def test_valid_chunk(self):
+        c = Chunk.model_validate({
+            "doc_id": "d1",
+            "chunk_id": "d1#c000001",
+            "content": "hello world",
+            "meta": self._valid_meta(),
+        })
+        self.assertEqual(c.doc_id, "d1")
+        self.assertEqual(c.meta.chunk_index, 1)
+
+    def test_chunk_rejects_empty_content(self):
+        with self.assertRaises(ValidationError):
+            Chunk.model_validate({
+                "doc_id": "d1",
+                "chunk_id": "d1#c000001",
+                "content": "",
+                "meta": self._valid_meta(),
+            })
+
+    def test_chunk_rejects_empty_doc_id(self):
+        with self.assertRaises(ValidationError):
+            Chunk.model_validate({
+                "doc_id": "",
+                "chunk_id": "d1#c000001",
+                "content": "x",
+                "meta": self._valid_meta(),
+            })
+
+    def test_chunk_rejects_negative_chunk_index(self):
+        with self.assertRaises(ValidationError):
+            Chunk.model_validate({
+                "doc_id": "d1",
+                "chunk_id": "d1#c000001",
+                "content": "x",
+                "meta": self._valid_meta(chunk_index=-1),
+            })
+
+    def test_chunk_meta_allows_extras(self):
+        """meta 允许扩展字段(table_id 等),不应被拒绝"""
+        c = Chunk.model_validate({
+            "doc_id": "d1",
+            "chunk_id": "d1#c000001",
+            "content": "x",
+            "meta": {**self._valid_meta(), "table_id": "t1", "row_range": [0, 10]},
+        })
+        self.assertEqual(c.meta.model_dump().get("table_id"), "t1")
+
+
+class TestRetrievedChunk(unittest.TestCase):
+    def test_valid(self):
+        rc = RetrievedChunk.model_validate({
+            "chunk_id": "d1#c1",
+            "doc_id": "d1",
+            "file_name": "f.md",
+            "chunk_index": 0,
+            "score": 0.78,
+        })
+        self.assertEqual(rc.score, 0.78)
+
+    def test_score_out_of_range_rejected(self):
+        for bad in (-0.1, 1.5):
+            with self.assertRaises(ValidationError):
+                RetrievedChunk.model_validate({
+                    "chunk_id": "d1#c1",
+                    "doc_id": "d1",
+                    "score": bad,
+                })
+
+
+class TestCitation(unittest.TestCase):
+    def test_minimal(self):
+        cit = Citation.model_validate({
+            "chunk_id": "d1#c1",
+            "doc_id": "d1",
+        })
+        self.assertIsNone(cit.file_name)
+        self.assertIsNone(cit.score)
+
+    def test_with_locations(self):
+        cit = Citation.model_validate({
+            "chunk_id": "d1#c1",
+            "doc_id": "d1",
+            "file_name": "f.md",
+            "start_char": 100,
+            "end_char": 200,
+            "score": 0.66,
+        })
+        self.assertEqual(cit.start_char, 100)
+
+
+class TestToolStep(unittest.TestCase):
+    def test_valid(self):
+        s = ToolStep.model_validate({
+            "step_id": "s1",
+            "tool_name": "rag_search",
+            "description": "先检索",
+            "input_data": {"query": "abc", "top_k": 3},
+        })
+        self.assertEqual(s.tool_name, "rag_search")
+        self.assertEqual(s.input_data["top_k"], 3)
+
+    def test_default_description_and_input_data(self):
+        s = ToolStep.model_validate({"step_id": "s1", "tool_name": "x"})
+        self.assertEqual(s.description, "")
+        self.assertEqual(s.input_data, {})
 
 
 if __name__ == "__main__":

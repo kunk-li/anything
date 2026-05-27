@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -75,6 +75,88 @@ class ResponseEnvelope(BaseModel):
     retryable: bool = False
     details: Optional[Dict[str, Any]] = None
     cost_time: Optional[float] = None
+
+    model_config = {"extra": "ignore"}
+
+
+# ===========================================================================
+# 内部高频流转的数据 schema
+# ===========================================================================
+
+
+class ChunkMeta(BaseModel):
+    """单个 chunk 的元信息(文档第 11.1 节强制字段)。"""
+
+    file_name: str
+    source: str = "local"
+    chunk_index: int = Field(ge=0)
+    start_char: int = Field(ge=0)
+    end_char: int = Field(ge=0)
+    token_count_est: int = Field(ge=0)
+
+    model_config = {"extra": "allow"}  # 允许扩展字段(table_id/row_range 等)
+
+
+class Chunk(BaseModel):
+    """chunker.chunk_document 输出的标准 chunk 结构(文档第 11.1 节)。
+
+    强制契约:
+        chunk_id 推荐格式 "{doc_id}#c000001" (6 位零填充)
+        meta 必须包含 file_name/source/chunk_index/start_char/end_char/token_count_est
+    """
+
+    doc_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    meta: ChunkMeta
+
+    model_config = {"extra": "ignore"}
+
+
+class RetrievedChunk(BaseModel):
+    """RAG.retrieve 返回的 chunk 级检索结果。
+
+    跟 Chunk 不同之处:
+        - 包含相似度 score (0~1)
+        - content 可选(由 doc_store 回查时可能未填)
+        - file_name / chunk_index 提到顶层,便于上游不解开 meta 也能用
+    """
+
+    chunk_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    file_name: Optional[str] = None
+    chunk_index: Optional[int] = Field(default=None, ge=0)
+    score: float = Field(ge=0.0, le=1.0)
+    content: Optional[str] = None
+    start_char: Optional[int] = Field(default=None, ge=0)
+    end_char: Optional[int] = Field(default=None, ge=0)
+
+    model_config = {"extra": "ignore"}
+
+
+class Citation(BaseModel):
+    """RAG 答案引用项。
+
+    用于把答案中的关键结论绑定到具体 chunk,支持调用方做"点击跳转到原文"。
+    """
+
+    chunk_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    file_name: Optional[str] = None
+    start_char: Optional[int] = Field(default=None, ge=0)
+    end_char: Optional[int] = Field(default=None, ge=0)
+    score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+    model_config = {"extra": "ignore"}
+
+
+class ToolStep(BaseModel):
+    """Agent 执行计划中的单个步骤。"""
+
+    step_id: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    description: str = ""
+    input_data: Dict[str, Any] = Field(default_factory=dict)
 
     model_config = {"extra": "ignore"}
 
