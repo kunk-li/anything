@@ -15,7 +15,7 @@ rag_module.extensions: 检索链路可选增强组件
 """
 
 from .rewriter import BaseQueryRewriter, LLMQueryRewriter, RewriteResult
-from .reranker import BaseReranker, LLMReranker
+from .reranker import BaseReranker, LLMReranker, CrossEncoderReranker
 
 __all__ = [
     "BaseQueryRewriter",
@@ -23,4 +23,5 @@ __all__ = [
     "RewriteResult",
     "BaseReranker",
     "LLMReranker",
+    "CrossEncoderReranker",
 ]

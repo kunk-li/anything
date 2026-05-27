@@ -12,13 +12,16 @@
 
 设计:
     - BaseReranker: 抽象接口
-    - LLMReranker: 默认实现,用 LLM 给每个候选打 0~1 相关性分,选 top_k
-      (生产推荐替换为 cross-encoder 等专用模型,但当前用 LLM 演示完整链路)
+    - LLMReranker: 用 LLM 给每个候选打 0~1 相关性分,选 top_k
+      (功能完整, 但每次 rerank 都要 LLM 调用, 慢且贵)
+    - CrossEncoderReranker: 用 sentence-transformers cross-encoder 模型本地推理
+      (生产推荐, 比 LLM rerank 快 10x+, 无 LLM 调用费用, 质量稳定)
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional
@@ -170,3 +173,96 @@ def _parse_rerank_response(raw: str) -> Optional[Dict[str, float]]:
             except (TypeError, ValueError):
                 continue
     return score_map or None
+
+
+# ===========================================================================
+# 默认实现: Cross-encoder 本地推理
+# ===========================================================================
+
+
+class CrossEncoderReranker(BaseReranker):
+    """基于 sentence-transformers CrossEncoder 的本地 rerank 实现。
+
+    相比 LLMReranker:
+        - 速度: ~10ms / batch(本地推理) vs LLM rerank 1-3 秒
+        - 成本: 无 LLM 调用费用
+        - 质量: 专为相关性打分训练, 比 prompt LLM 稳定
+        - 缺点: 首次加载需下载模型 (~80MB for MiniLM)
+
+    生产推荐用本类替代 LLMReranker。通过 config rag.reranker_type=
+    "cross_encoder" 切换 (默认 "llm" 保持向后兼容)。
+    """
+
+    DEFAULT_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    DEFAULT_CONTENT_TRUNCATE = 512  # 单个 candidate 内容最大字符数, 避免超长 token
+
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        model: Any = None,
+        content_truncate_chars: int = DEFAULT_CONTENT_TRUNCATE,
+    ):
+        """
+        Args:
+            model_name: HuggingFace 模型名, 默认 cross-encoder/ms-marco-MiniLM-L-6-v2
+                (轻量, 80MB, 中英文混合数据集训练)
+            model: 显式注入 CrossEncoder 实例 (测试时可传 mock, 避免真实下载)
+            content_truncate_chars: 单个候选 content 截断长度
+        """
+        self.model_name = model_name or self.DEFAULT_MODEL_NAME
+        self._model = model  # 可被测试 mock 注入; 否则 lazy load
+        self.content_truncate_chars = content_truncate_chars
+
+    def _get_model(self) -> Any:
+        """Lazy load CrossEncoder, 失败时返回 None 让 rerank 走降级路径"""
+        if self._model is not None:
+            return self._model
+        try:
+            from sentence_transformers import CrossEncoder
+            self._model = CrossEncoder(self.model_name)
+        except Exception:
+            self._model = None
+        return self._model
+
+    def rerank(
+        self,
+        query: str,
+        candidates: List[Dict[str, Any]],
+        top_k: int = 8,
+    ) -> List[Dict[str, Any]]:
+        if not candidates:
+            return []
+        if not query:
+            return candidates[:top_k]
+
+        model = self._get_model()
+        if model is None:
+            # 模型加载失败 -> 退化为原顺序截断 (BaseReranker 契约要求)
+            return candidates[:top_k]
+
+        # 构造 (query, content) 对; predict 一次性 batch 推理
+        try:
+            pairs = [
+                (query, (c.get("content") or "")[: self.content_truncate_chars])
+                for c in candidates
+            ]
+            raw_scores = model.predict(pairs)
+        except Exception:
+            return candidates[:top_k]
+
+        # CrossEncoder.predict 返回 logits (可能负数), 用 sigmoid 归一化到 [0,1]
+        # 跟 LLMReranker 的 score 范围一致, 上游一视同仁
+        try:
+            normalized = [1.0 / (1.0 + math.exp(-float(s))) for s in raw_scores]
+        except Exception:
+            return candidates[:top_k]
+
+        reranked: List[Dict[str, Any]] = []
+        for cand, score in zip(candidates, normalized):
+            new_cand = dict(cand)
+            new_cand["score"] = float(score)
+            new_cand["rerank_source"] = "cross_encoder"
+            reranked.append(new_cand)
+
+        reranked.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        return reranked[:top_k]

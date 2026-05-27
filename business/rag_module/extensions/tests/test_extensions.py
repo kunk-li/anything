@@ -7,11 +7,13 @@ rag_module.extensions 单元测试
     - LLMReranker: rerank 排序 + 漏分保留原 score + 降级
 """
 
+import math
 import unittest
 
 from rag_module.extensions import (
     LLMQueryRewriter,
     LLMReranker,
+    CrossEncoderReranker,
     RewriteResult,
 )
 
@@ -156,6 +158,99 @@ class TestLLMReranker(unittest.TestCase):
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0]["chunk_id"], "c1")
         self.assertNotIn("rerank_source", result[1])  # 没被 LLM rerank 的没有 rerank_source 字段
+
+
+class _MockCrossEncoderModel:
+    """模拟 sentence_transformers CrossEncoder 接口的最小实现 (不下载真实模型)。
+
+    predict(pairs) 返回每对的 logits (raw, 可负数). 测试中用预定义脚本.
+    """
+
+    def __init__(self, scripted_logits=None):
+        self.scripted_logits = scripted_logits or []
+        self.last_pairs = None
+
+    def predict(self, pairs):
+        self.last_pairs = pairs
+        if self.scripted_logits:
+            return self.scripted_logits[: len(pairs)]
+        # 默认按 candidate 顺序递减打分
+        return [float(len(pairs) - i) for i in range(len(pairs))]
+
+
+class TestCrossEncoderReranker(unittest.TestCase):
+
+    def _candidates(self):
+        return [
+            {"chunk_id": "c1", "content": "RAG 是检索增强生成", "score": 0.5},
+            {"chunk_id": "c2", "content": "无关内容,关于天气", "score": 0.5},
+            {"chunk_id": "c3", "content": "RAG 的核心是 retrieve + generate", "score": 0.5},
+        ]
+
+    def test_rerank_with_mock_scores(self):
+        # 给 c1 logits=2.0 (sigmoid ~0.88), c2=-2.0 (~0.12), c3=3.0 (~0.95)
+        mock_model = _MockCrossEncoderModel(scripted_logits=[2.0, -2.0, 3.0])
+        r = CrossEncoderReranker(model=mock_model)
+        result = r.rerank("RAG 是什么", self._candidates(), top_k=3)
+
+        # 排序应为 c3 > c1 > c2 (按 sigmoid 归一化后 0.95 > 0.88 > 0.12)
+        self.assertEqual([c["chunk_id"] for c in result], ["c3", "c1", "c2"])
+        # 全部应有 rerank_source 标记
+        for c in result:
+            self.assertEqual(c["rerank_source"], "cross_encoder")
+        # 分数应在 [0, 1] 区间
+        for c in result:
+            self.assertGreaterEqual(c["score"], 0.0)
+            self.assertLessEqual(c["score"], 1.0)
+        # sigmoid(3.0) ≈ 0.953
+        self.assertAlmostEqual(result[0]["score"], 1.0 / (1.0 + math.exp(-3.0)), places=5)
+
+    def test_rerank_top_k_truncates(self):
+        mock_model = _MockCrossEncoderModel(scripted_logits=[1.0, 2.0, 3.0])
+        r = CrossEncoderReranker(model=mock_model)
+        result = r.rerank("q", self._candidates(), top_k=2)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["chunk_id"], "c3")  # 最高分
+
+    def test_rerank_empty_candidates(self):
+        mock_model = _MockCrossEncoderModel()
+        r = CrossEncoderReranker(model=mock_model)
+        self.assertEqual(r.rerank("q", [], top_k=3), [])
+
+    def test_rerank_empty_query_falls_back(self):
+        """空 query -> 退化为原顺序截断"""
+        mock_model = _MockCrossEncoderModel()
+        r = CrossEncoderReranker(model=mock_model)
+        result = r.rerank("", self._candidates(), top_k=2)
+        # 应该按原顺序截断, 而非调 model
+        self.assertEqual([c["chunk_id"] for c in result], ["c1", "c2"])
+
+    def test_rerank_model_load_failure_falls_back(self):
+        """模型 None (load 失败) -> 退化为原顺序"""
+        r = CrossEncoderReranker(model=None)
+        # 不传 _model, 也不会触发真实加载(因为我们用 monkeypatch _get_model)
+        r._get_model = lambda: None  # 模拟加载失败
+        result = r.rerank("q", self._candidates(), top_k=3)
+        self.assertEqual([c["chunk_id"] for c in result], ["c1", "c2", "c3"])
+
+    def test_rerank_predict_exception_falls_back(self):
+        class _BrokenModel:
+            def predict(self, pairs):
+                raise RuntimeError("model crashed")
+        r = CrossEncoderReranker(model=_BrokenModel())
+        result = r.rerank("q", self._candidates(), top_k=3)
+        self.assertEqual([c["chunk_id"] for c in result], ["c1", "c2", "c3"])
+
+    def test_content_truncate_applied(self):
+        """超长 content 应被截断到 content_truncate_chars"""
+        mock_model = _MockCrossEncoderModel()
+        r = CrossEncoderReranker(model=mock_model, content_truncate_chars=10)
+        long_content = "x" * 100
+        candidates = [{"chunk_id": "c1", "content": long_content, "score": 0.5}]
+        r.rerank("q", candidates, top_k=1)
+        # 检查实际传给 predict 的 pair 中 content 已被截断
+        pair = mock_model.last_pairs[0]
+        self.assertEqual(len(pair[1]), 10)
 
 
 if __name__ == "__main__":

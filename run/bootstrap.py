@@ -23,7 +23,7 @@ from embedding_module import STEmbedding
 
 # 业务层
 from rag_module import SimpleRAG
-from rag_module.extensions import LLMQueryRewriter, LLMReranker
+from rag_module.extensions import LLMQueryRewriter, LLMReranker, CrossEncoderReranker
 from agent_module import SimpleAgent
 from orchestrator_module import SimpleOrchestrator
 
@@ -165,7 +165,21 @@ def build_business_layer(
         return call_llm_compat(llm_client=llm_client, prompt=prompt)
 
     query_rewriter = LLMQueryRewriter(llm_call=_llm_call) if llm_client is not None else None
-    reranker = LLMReranker(llm_call=_llm_call) if llm_client is not None else None
+
+    # Reranker 类型可通过 config 切换:
+    #   rag.reranker_type = "cross_encoder" (默认,本地推理,快且稳定)
+    #                       "llm"            (LLM 调用 rerank, 慢且需 API key)
+    reranker_type = deps.config.get_effective_value(
+        "rag.reranker_type",
+        env_var="ANYTHING_RAG_RERANKER_TYPE",
+        default="cross_encoder",
+    )
+    if reranker_type == "cross_encoder":
+        reranker = CrossEncoderReranker()
+    elif reranker_type == "llm" and llm_client is not None:
+        reranker = LLMReranker(llm_call=_llm_call)
+    else:
+        reranker = None
 
     rag = SimpleRAG(
         llm_client=llm_client,
