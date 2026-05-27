@@ -1,12 +1,79 @@
 # RAG与Agent系统架构设计说明书
 
-| 文档版本  | v1.1       |
+| 文档版本  | v2.0       |
 |:------|:-----------|
-| 最后更新  | 2026-03-19 |
+| 最后更新  | 2026-05-27 |
 | 维护责任人 | 架构负责人      |
-| 状态    | 修订版        |
+| 状态    | 修订版(实现对齐) |
 
-> 本修订版以当前代码仓目录结构与已实现模块为准，统一修正命名、索引链路、引用规范、接口边界与交付要求。
+> v2.0 修订:跟随两轮架构优化(共 22 个 Task,详见下方"修订日志"与"实现状态一览"),
+> 把"文档说的"与"代码做的"重新对齐。新增的 schema_module / deps_module / chunker_module /
+> rag_module.extensions 子目录与 BasicDeps / StartupError / RequestEnvelope /
+> handle_exception_to_envelope / ReAct 等概念已在本文档相应章节补充。
+
+## 修订日志
+
+| 版本 | 日期 | 主要变更 |
+|---|---|---|
+| v2.0 | 2026-05-27 | 实现对齐第二轮:数据层 DI 统一 + StartupError fail-fast + 内部 schema 化 + ReAct + Rerank/Rewrite 接通 + 业务质量评测集 + 配置优先级文档化 |
+| v1.1 | 2026-03-19 | 第一轮修订:命名/索引链路/接口边界 |
+| v1.0 | 初版    | 系统整体架构、ABC 抽象接口、5 层分层模型 |
+
+## 实现状态一览(v2.0)
+
+> 章节后括号标注实现状态:✅ 已实现 | 🔧 部分实现 | 📋 规划中
+
+### 基础设施(已实现)
+- ✅ **schema_module** — Pydantic v2 数据契约(RequestEnvelope / ResponseEnvelope /
+  Chunk / RetrievedChunk / Citation / ToolStep)
+- ✅ **deps_module** — BasicDeps DI 容器 + StartupError + is_dev_mode +
+  handle_exception_to_envelope(共用异常包装)
+- ✅ **chunker_module** — 实现文档第 11 章 Chunking 规范
+- ✅ **ABC 契约严格对齐** — 10 个 (Base, Impl) 配对全部 aligned,有
+  `scripts/check_abc_alignment.py` 守护
+- ✅ **DI 注入贯通全链路** — bootstrap → data layer → business layer → interface → application,
+  全程只构造一份 BasicDeps
+- ✅ **启动 fail-fast** — 默认严格模式,任一关键依赖初始化失败抛 StartupError;
+  `ANYTHING_DEV_MODE=1` 显式启用 dev 降级
+
+### 业务能力
+- ✅ **统一请求/响应信封** — RequestHandler 边界走 Pydantic 强校验
+- ✅ **Query Rewrite**(文档 12.2 节) — LLMQueryRewriter 接通,LLM 不可用时退化为原 query
+- ✅ **Reranker**(文档 12.4 节) — LLMReranker 接通,LLM 不可用时退化为原顺序
+- ✅ **Agent LLM 驱动规划**(parse_task) — JSON 解析失败/未注册工具/异常时 fallback 规则式
+- ✅ **Agent ReAct 多轮规划** — `agent.execution_strategy=react` 启用,observe→reflect→next
+  循环,7 类降级路径
+- ✅ **Citation 引用回溯** — chunk_id ↔ vector_id ↔ doc 三层映射稳定
+
+### 工程化
+- ✅ **122 个单测 / 9 模块** — `scripts/run_tests.sh` 本地回归,`.github/workflows/ci.yml`
+  矩阵(Python 3.10 / 3.12)
+- ✅ **业务质量评测集** — `evaluation/` 目录,RAG + Agent 数据集 + 评测脚本 + CI 阈值守护
+- ✅ **配置优先级文档化** — `docs/configuration-priority.md` 5 个配置源 +
+  推荐入口 `ConfigManager.get_effective_value`
+- 🔧 **GitHub Actions CI** — yml 已就绪,首次推送跑红,正在调试(详见 Task #13)
+
+### 规划中(尚未做)
+- 📋 **Cross-encoder Reranker** — `BaseReranker` 抽象已就位,可直接换实现
+- 📋 **真实生产 LLM 接入** — 需要 API key 配置 + secrets 管理
+- 📋 **业务质量指标进 CI** — 需要 nightly workflow 配 secrets
+- 📋 **ReAct 失败时强制重新规划** — 当前依赖 LLM 感知,未做硬约束
+- 📋 **ConfigManager 启动期打印生效配置摘要** — 便于排查"为什么 X 值不对"
+- 📋 **多语言/英文 query 评测覆盖** — 当前评测集只有中文
+
+## 设计偏离声明(v2.0 新增)
+
+以下模块**有意偏离** §3 "统一项目结构规范"中的 `core/base.py + impl.py` 二分结构,
+理由是它们是**声明式数据/容器/无状态算法**而非行为类:
+
+| 模块 | 位置 | 偏离理由 |
+|---|---|---|
+| `schema_module` | `basic_support/` | Pydantic schema 是数据契约,无抽象/实现二分需求 |
+| `deps_module` | `basic_support/` | 依赖容器 + 工厂函数,无行为对象 |
+| `chunker_module` | `data_layer/` | 无状态算法函数集 |
+| `rag_module/extensions/` | `business/rag_module/` | 子目录用单文件(rewriter.py + reranker.py)直接包含 Base + 默认实现,小组件二分冗余 |
+
+每个偏离模块的 README.md 中也都明确写了偏离声明。
 
 # 1. 文档概述
 
@@ -406,6 +473,15 @@ for p in parsed_list:
 - trace_id：由应用层入口生成并透传
 - extra_params：用于扩展参数透传，不允许各层自定义改名
 
+### 8.x 配套实现(v2.0)
+
+| 概念 | 实现位置 |
+|---|---|
+| 请求/响应信封 Pydantic schema | `basic_support/schema_module/schema.py` — `RequestEnvelope` / `ResponseEnvelope` |
+| 边界强校验 | `interface/request_response_module` 调用 `validate_request_dict()` |
+| session_id 单层补齐 | `RequestHandler._standardize_request`,SimpleAgent 收到时若仍缺失会记 `[contract violation]` ERROR 而非静默兜底 |
+| trace_id 单层生成 | `ApiService` middleware / `ConsoleApp.run_once`,下游一律只透传不再生成 |
+
 # 9. 安全性设计
 
 ## 9.1 认证与授权
@@ -718,6 +794,16 @@ chunk_id/chunk_index，否则后续无法做到稳定引用与精确召回定位
 
 - 不推荐：vector_id = doc_id（一个 doc 多 chunk 会冲突或覆盖）
 
+## 11.x 配套实现(v2.0)
+
+- 实现位置:`data_layer/chunker_module/chunker.py`(从 `run/chunking_utils.py` 抽出)
+- 公开入口:`chunk_document(doc_id, content, file_name, source, chunk_size_tokens, ...)`
+- 守护测试:`data_layer/chunker_module/tests/test_chunker.py:test_all_chunks_validate_against_schema`
+  把每个产出 chunk 用 `schema_module.Chunk.model_validate` 严格校验,防止字段漂移
+- chunk_id 格式严格 `{doc_id}#c{6 位零填充}`,由 `chunker.py` 中
+  `f"{doc_id}#c{chunk_index:06d}"` 直接构造
+- 设计偏离声明见 `data_layer/chunker_module/README.md`
+
 # 12. 检索链路规范（rewrite / retrieve / rerank / 引用格式）
 
 本章节定义 RAG 检索链路的标准流水线，适用于：
@@ -856,6 +942,23 @@ Rewrite 必须输出结构：
 - answer 可以保留引用标记（前端可渲染为脚注）
 
 - citations 用于机器可读与 UI 展示
+
+## 12.x 配套实现(v2.0)
+
+| 检索链路步骤 | 实现位置 | 启用方式 |
+|---|---|---|
+| Query Normalize | `SimpleRAG._normalize_query` | 默认启用 |
+| Query Rewrite (§12.2) | `business/rag_module/extensions/rewriter.py` — `LLMQueryRewriter` | `rag.enable_rewrite: true` |
+| Retrieve (§12.3) | `SimpleRAG._embed_query` + `vector_db.query(query_vector, top_k, filters)` | 默认启用 |
+| Rerank (§12.4) | `business/rag_module/extensions/reranker.py` — `LLMReranker` | `rag.enable_rerank: true` |
+| Context Assemble | `SimpleRAG._assemble_context` (token 上限 `rag.max_context_tokens`) | 默认启用 |
+| Generate | `SimpleRAG._call_llm_generate` 经 `llm_compat.call_llm_compat` | 默认启用 |
+| Citation (§12.5) | `SimpleRAG._build_citations` + `_ensure_citation_marker` | 默认启用 |
+
+**降级策略**(LLM 不可用时):
+- `LLMQueryRewriter.rewrite` 失败 → 退化为原 query
+- `LLMReranker.rerank` 失败 → 退化为原顺序截断
+- 这些降级有专门单测守护(`business/rag_module/extensions/tests/test_extensions.py`)
 
 # 13. API 规范（对外接口与内部管理接口）
 
