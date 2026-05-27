@@ -28,6 +28,7 @@ modules=(
   "business/agent_module"
   "interface/request_response_module"
   "application/api_service_module"
+  "benchmarks"
 )
 
 verbose="${1:-}"
