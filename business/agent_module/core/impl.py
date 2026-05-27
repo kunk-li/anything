@@ -81,8 +81,22 @@ class SimpleAgent(BaseAgent):
         trace_id = request.get("trace_id")
         extra_params = request.get("extra_params") or {}
 
-        # session_id 主路径由上游传入；这里只做一次兼容兜底
-        session_id = request.get("session_id") or self._fallback_session_id()
+        # 契约: session_id 应由 RequestHandler._standardize_request 统一补齐
+        #       trace_id  应由 ApiService middleware / ConsoleApp 应用层入口生成
+        # 这里只做"漏洞兜底": 如果发现上游没补齐,记录 ERROR 让漏洞冒头,而非静默修复
+        session_id = request.get("session_id")
+        if not session_id:
+            self.logger.error(
+                f"[contract violation] SimpleAgent.execute 收到的 request 未含 session_id, "
+                f"trace_id={trace_id}, task={task!r:.50s} -- "
+                f"请检查 RequestHandler._standardize_request 是否在调用链上"
+            )
+            session_id = self._fallback_session_id()
+        if not trace_id:
+            self.logger.warning(
+                f"[contract violation] SimpleAgent.execute 收到的 request 未含 trace_id, "
+                f"session_id={session_id} -- 请检查应用层入口(ApiService/ConsoleApp)是否生成"
+            )
 
         timeout = int(request.get("timeout") or self.timeout)
         max_retries = int(request.get("max_retries") or self.max_retries)
