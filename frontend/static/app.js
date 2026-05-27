@@ -43,7 +43,11 @@
         buildIndexBtn: $('build-index-btn'),
         jobResult: $('job-result'),
         toastContainer: $('toast-container'),
+        langBtn: $('lang-btn'),
     };
+
+    // i18n shortcut
+    const t = (key, params) => (window.I18n ? window.I18n.t(key, params) : key);
 
     // ---------- 状态 ----------
     const state = {
@@ -61,10 +65,27 @@
     // ---------- 初始化 ----------
     function init() {
         loadSettings();
+        // i18n: 先 apply 一次 DOM 标记的 data-i18n
+        if (window.I18n) {
+            window.I18n.applyToDom();
+            // 语言变化时重渲染已有消息 (role 等动态字符串)
+            window.I18n.onChange(() => {
+                renderHistory();
+                updateComposerPlaceholder();
+                updateLangButton();
+            });
+            updateLangButton();
+        }
         renderHistory();
         bindEvents();
         pollHealth();
         setInterval(pollHealth, 30000);
+    }
+
+    function updateLangButton() {
+        if (!els.langBtn || !window.I18n) return;
+        const cur = window.I18n.getLocale();
+        els.langBtn.textContent = cur === 'zh' ? 'EN' : '中';
     }
 
     // ---------- 设置存取 ----------
@@ -99,7 +120,7 @@
             localStorage.setItem('anything_settings', JSON.stringify(state.settings));
         } catch (_) {}
         ApiClient.configure(state.settings);
-        toast('success', '设置已保存', '同时已应用到下次请求');
+        toast('success', t('toast.settings.saved'), t('toast.settings.saved.body'));
         closeDrawer('settings');
     }
 
@@ -158,6 +179,30 @@
         // 健康检查点击重检
         els.healthBadge.addEventListener('click', pollHealth);
 
+        // 语言切换 (header 按钮)
+        if (els.langBtn && window.I18n) {
+            els.langBtn.addEventListener('click', () => {
+                const next = window.I18n.getLocale() === 'zh' ? 'en' : 'zh';
+                window.I18n.setLocale(next);
+            });
+        }
+        // 设置抽屉里的语言切换
+        $$('.lang-opt').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                if (window.I18n) window.I18n.setLocale(btn.dataset.locale);
+                $$('.lang-opt').forEach((b) =>
+                    b.classList.toggle('active', b === btn)
+                );
+            });
+        });
+        // 初始 active 标记
+        if (window.I18n) {
+            const curLoc = window.I18n.getLocale();
+            $$('.lang-opt').forEach((b) =>
+                b.classList.toggle('active', b.dataset.locale === curLoc)
+            );
+        }
+
         // 设置抽屉
         els.settingsBtn.addEventListener('click', () => openDrawer('settings'));
         $$('[data-close="settings"]').forEach(el =>
@@ -193,12 +238,8 @@
     }
 
     function updateComposerPlaceholder() {
-        const map = {
-            rag: '输入问题, 在已索引文档里检索答案... (Ctrl+Enter 发送)',
-            agent: '描述一个任务, Agent 会拆解为工具调用步骤... (Ctrl+Enter 发送)',
-            hybrid: '同时使用检索与推理 (任务描述)... (Ctrl+Enter 发送)',
-        };
-        els.inputText.placeholder = map[state.mode] || map.rag;
+        const key = `composer.placeholder.${state.mode || 'rag'}`;
+        els.inputText.placeholder = t(key);
     }
 
     // ---------- 发送 ----------
@@ -206,7 +247,7 @@
         if (state.sending) return;
         const text = els.inputText.value.trim();
         if (!text) {
-            toast('error', '输入为空', '请输入内容后再发送');
+            toast('error', t('toast.input.empty'), t('toast.input.empty.body'));
             return;
         }
         const topK = Math.max(1, Math.min(50, Number(els.topkInput.value) || 5));
@@ -253,11 +294,11 @@
         } catch (err) {
             updateMessage(placeholderId, {
                 loading: false,
-                content: `网络异常: ${err.message}`,
+                content: `${t('toast.network.error')}: ${err.message}`,
                 meta: { code: 'NETWORK_ERROR', tenant, mode },
                 error: { code: 'NETWORK_ERROR', message: err.message },
             });
-            toast('error', '网络异常', String(err.message || err));
+            toast('error', t('toast.network.error'), String(err.message || err));
         } finally {
             state.sending = false;
             els.sendBtn.disabled = false;
@@ -265,9 +306,9 @@
     }
 
     function extractAnswer(payload) {
-        if (!payload) return '(无响应)';
+        if (!payload) return t('msg.empty');
         if (payload.code !== 'SUCCESS') {
-            return `[${payload.code}] ${payload.message || '请求失败'}`;
+            return `[${payload.code}] ${payload.message || ''}`;
         }
         const d = payload.data || {};
         return d.answer || JSON.stringify(d, null, 2);
@@ -301,11 +342,17 @@
     function renderHistory() {
         els.messages.innerHTML = '';
         if (!state.history.length) {
-            // 重新插入欢迎
+            // 重新插入欢迎块 (复用 data-i18n 让 setLocale 也能刷新)
             els.messages.innerHTML = `<div class="welcome">
-                <h2>欢迎使用 Anything</h2>
-                <p>RAG 检索 / Agent 任务执行 / Hybrid 混合,选择模式后输入开始对话。</p>
+                <h2 data-i18n="welcome.title"></h2>
+                <p data-i18n="welcome.desc"></p>
+                <ul class="hint-list">
+                    <li data-i18n="welcome.hint.rag"></li>
+                    <li data-i18n="welcome.hint.agent"></li>
+                    <li data-i18n="welcome.hint.hybrid"></li>
+                </ul>
             </div>`;
+            if (window.I18n) window.I18n.applyToDom(els.messages);
             return;
         }
         state.history.forEach(renderMessage);
@@ -333,7 +380,7 @@
         header.className = 'message-header';
         const role = document.createElement('span');
         role.className = 'message-role';
-        role.textContent = msg.role === 'user' ? '你' : 'Anything';
+        role.textContent = msg.role === 'user' ? t('role.user') : t('role.assistant');
         header.appendChild(role);
 
         const modeBadge = document.createElement('span');
@@ -372,7 +419,7 @@
                 tr.style.cursor = 'pointer';
                 tr.addEventListener('click', () => {
                     navigator.clipboard?.writeText(msg.meta.traceId);
-                    toast('info', '已复制 trace_id', msg.meta.traceId);
+                    toast('info', t('toast.copied.trace'), msg.meta.traceId);
                 });
                 meta.appendChild(tr);
             }
@@ -389,8 +436,8 @@
         if (msg.loading) {
             body.innerHTML =
                 '<span class="message-loading">' +
-                '<span class="dot"></span><span class="dot"></span><span class="dot"></span>' +
-                ' 正在处理...</span>';
+                '<span class="dot"></span><span class="dot"></span><span class="dot"></span> ' +
+                Markdown.escapeHtml(t('msg.processing')) + '</span>';
         } else if (msg.role === 'assistant' && !msg.error && window.Markdown) {
             // 助手成功响应走 markdown 渲染 (用户消息保持 plain text 防 XSS)
             body.innerHTML = window.Markdown.render(msg.content || '');
@@ -423,7 +470,7 @@
             actions.className = 'message-actions';
             if (msg.error.retryable) {
                 const retry = document.createElement('button');
-                retry.textContent = '↻ 重试';
+                retry.textContent = t('action.retry');
                 retry.addEventListener('click', () => {
                     // 取上一条 user 消息内容重发
                     const idx = state.history.findIndex(m => m.id === msg.id);
@@ -436,10 +483,10 @@
                 actions.appendChild(retry);
             }
             const copyMsg = document.createElement('button');
-            copyMsg.textContent = '复制响应';
+            copyMsg.textContent = t('action.copyResp');
             copyMsg.addEventListener('click', () => {
                 navigator.clipboard?.writeText(JSON.stringify(msg.error, null, 2));
-                toast('info', '已复制错误详情', '');
+                toast('info', t('toast.copied.error'), '');
             });
             actions.appendChild(copyMsg);
             content.appendChild(actions);
@@ -457,13 +504,13 @@
     }
 
     function clearHistory() {
-        if (!confirm('确定清空所有对话历史?')) return;
+        if (!confirm(t('confirm.clearHistory'))) return;
         state.history = [];
         persistHistory();
         renderHistory();
         renderRetrievedChunks([]);
         renderAgentSteps([]);
-        toast('info', '对话已清空', '');
+        toast('info', t('toast.history.cleared'), '');
         closeDrawer('settings');
     }
 
@@ -592,17 +639,17 @@
             const { payload, status } = await ApiClient.uploadDocument(file);
             if (status === 200 && payload?.code === 'SUCCESS') {
                 els.uploadResult.className = 'upload-result success';
-                els.uploadResult.textContent = `✓ 上传成功: ${payload.data.stored_path}`;
-                toast('success', '文件已上传', payload.data.file_name);
+                els.uploadResult.textContent = `✓ ${payload.data.stored_path}`;
+                toast('success', t('toast.upload.success'), payload.data.file_name);
             } else {
                 els.uploadResult.className = 'upload-result error';
-                els.uploadResult.textContent = `× 失败: ${payload?.code || status} ${payload?.message || ''}`;
-                toast('error', '上传失败', payload?.message || `HTTP ${status}`);
+                els.uploadResult.textContent = `× ${payload?.code || status} ${payload?.message || ''}`;
+                toast('error', t('toast.upload.fail'), payload?.message || `HTTP ${status}`);
             }
         } catch (e) {
             els.uploadResult.className = 'upload-result error';
-            els.uploadResult.textContent = `× 网络异常: ${e.message}`;
-            toast('error', '上传异常', e.message);
+            els.uploadResult.textContent = `× ${e.message}`;
+            toast('error', t('toast.upload.exception'), e.message);
         }
     }
 
@@ -614,8 +661,8 @@
             if (status === 200 && payload?.code === 'SUCCESS') {
                 const jobId = payload.data?.job_id;
                 els.jobResult.className = 'job-result success';
-                els.jobResult.textContent = `✓ 任务已提交: ${jobId}`;
-                toast('success', '索引构建已触发', `job_id=${jobId}`);
+                els.jobResult.textContent = `✓ ${jobId}`;
+                toast('success', t('toast.index.triggered'), `job_id=${jobId}`);
             } else {
                 els.jobResult.className = 'job-result error';
                 els.jobResult.textContent = `× ${payload?.code || status} ${payload?.message || ''}`;
@@ -629,19 +676,19 @@
     // ---------- 健康检查 ----------
     async function pollHealth() {
         els.healthDot.className = 'health-dot';
-        els.healthText.textContent = '检测中';
+        els.healthText.textContent = t('header.health.checking');
         try {
             const { status, payload } = await ApiClient.healthz();
             if (status === 200 && payload?.code === 'SUCCESS') {
                 els.healthDot.classList.add('up');
-                els.healthText.textContent = 'UP';
+                els.healthText.textContent = t('header.health.up');
             } else {
                 els.healthDot.classList.add('down');
                 els.healthText.textContent = `HTTP ${status}`;
             }
         } catch (e) {
             els.healthDot.classList.add('down');
-            els.healthText.textContent = 'DOWN';
+            els.healthText.textContent = t('header.health.down');
         }
     }
 

@@ -11,19 +11,25 @@
     <header class="app-header">
         <div class="brand">
             <span class="logo">🤖</span>
-            <span class="title">Anything</span>
-            <span class="subtitle">RAG & Agent</span>
+            <span class="title" data-i18n="app.title">Anything</span>
+            <span class="subtitle" data-i18n="app.subtitle">RAG & Agent</span>
         </div>
         <div class="header-controls">
             <span class="tenant-chip">
-                <label for="tenant-input">tenant</label>
+                <label for="tenant-input" data-i18n="header.tenant">tenant</label>
                 <input id="tenant-input" type="text" placeholder="default" maxlength="32" />
             </span>
-            <span class="health-badge" id="health-badge" title="点击重新检测">
+            <span class="health-badge" id="health-badge"
+                  data-i18n-attr="title:health.checkAgain.title">
                 <span class="health-dot" id="health-dot"></span>
-                <span id="health-text">检测中</span>
+                <span id="health-text" data-i18n="header.health.checking">检测中</span>
             </span>
-            <button class="icon-btn" id="settings-btn" title="设置" aria-label="settings">⚙</button>
+            <button class="icon-btn lang-btn" id="lang-btn"
+                    data-i18n-attr="title:header.lang"
+                    aria-label="language">中/EN</button>
+            <button class="icon-btn" id="settings-btn"
+                    data-i18n-attr="title:header.settings"
+                    aria-label="settings">⚙</button>
         </div>
     </header>
 
@@ -33,12 +39,12 @@
         <section class="chat-pane">
             <div class="messages" id="messages" aria-live="polite">
                 <div class="welcome">
-                    <h2>欢迎使用 Anything</h2>
-                    <p>RAG 检索 / Agent 任务执行 / Hybrid 混合,选择模式后输入开始对话。</p>
+                    <h2 data-i18n="welcome.title">欢迎使用 Anything</h2>
+                    <p data-i18n="welcome.desc">RAG 检索 / Agent 任务执行 / Hybrid 混合,选择模式后输入开始对话。</p>
                     <ul class="hint-list">
-                        <li><b>RAG</b> 模式适合"在文档里找答案" — 输入问题,返回引用的 chunks</li>
-                        <li><b>Agent</b> 模式适合"调工具完成任务" — 输入任务,返回执行步骤 + 答案</li>
-                        <li><b>Hybrid</b> 模式综合两者 — 检索 + 推理</li>
+                        <li data-i18n="welcome.hint.rag"></li>
+                        <li data-i18n="welcome.hint.agent"></li>
+                        <li data-i18n="welcome.hint.hybrid"></li>
                     </ul>
                 </div>
             </div>
@@ -53,7 +59,7 @@
                     </div>
                     <div class="composer-extras">
                         <label class="topk-input">
-                            top_k
+                            <span data-i18n="composer.topk">top_k</span>
                             <input type="number" id="topk-input" min="1" max="50" value="5" />
                         </label>
                     </div>
@@ -62,11 +68,10 @@
                     <textarea
                         id="input-text"
                         rows="2"
-                        placeholder="输入问题或任务,Ctrl+Enter 发送..."
-                        aria-label="对话输入框"
+                        data-i18n-attr="placeholder:composer.placeholder.rag,aria-label:composer.placeholder.rag"
                     ></textarea>
                     <button id="send-btn" class="send-btn">
-                        <span class="send-label">发送</span>
+                        <span class="send-label" data-i18n="composer.send">发送</span>
                         <span class="send-icon">↵</span>
                     </button>
                 </div>
@@ -77,18 +82,18 @@
         <aside class="sidebar">
             <nav class="side-tabs" role="tablist">
                 <button class="side-tab active" data-tab="retrieved" role="tab" aria-selected="true">
-                    检索结果<span class="badge" id="retrieved-count">0</span>
+                    <span data-i18n="sidebar.retrieved">检索结果</span><span class="badge" id="retrieved-count">0</span>
                 </button>
                 <button class="side-tab" data-tab="steps" role="tab" aria-selected="false">
-                    工具调用<span class="badge" id="steps-count">0</span>
+                    <span data-i18n="sidebar.steps">工具调用</span><span class="badge" id="steps-count">0</span>
                 </button>
-                <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false">系统指标</button>
-                <button class="side-tab" data-tab="upload" role="tab" aria-selected="false">文档</button>
+                <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false" data-i18n="sidebar.metrics">系统指标</button>
+                <button class="side-tab" data-tab="upload" role="tab" aria-selected="false" data-i18n="sidebar.upload">文档</button>
             </nav>
             <div class="side-panels">
                 <!-- 检索结果 -->
                 <div class="side-panel active" data-panel="retrieved">
-                    <div class="empty-state" id="retrieved-empty">
+                    <div class="empty-state" id="retrieved-empty" data-i18n="sidebar.retrieved.empty">
                         最近一次 RAG 检索的 chunks 会显示在这里
                     </div>
                     <ul class="chunk-list" id="chunk-list"></ul>
@@ -96,7 +101,7 @@
 
                 <!-- 工具调用 -->
                 <div class="side-panel" data-panel="steps">
-                    <div class="empty-state" id="steps-empty">
+                    <div class="empty-state" id="steps-empty" data-i18n="sidebar.steps.empty">
                         最近一次 Agent 任务的工具调用步骤会显示在这里
                     </div>
                     <ol class="step-list" id="step-list"></ol>
@@ -105,10 +110,10 @@
                 <!-- 系统指标 -->
                 <div class="side-panel" data-panel="metrics">
                     <div class="metrics-controls">
-                        <button id="metrics-refresh" class="small-btn">刷新</button>
-                        <span class="hint">来自 /metrics (Prometheus 文本)</span>
+                        <button id="metrics-refresh" class="small-btn" data-i18n="sidebar.metrics.refresh">刷新</button>
+                        <span class="hint" data-i18n="sidebar.metrics.hint">来自 /metrics (Prometheus 文本)</span>
                     </div>
-                    <pre class="metrics-text" id="metrics-text">点击刷新查看实时指标</pre>
+                    <pre class="metrics-text" id="metrics-text" data-i18n="sidebar.metrics.placeholder">点击刷新查看实时指标</pre>
                 </div>
 
                 <!-- 文档上传 -->
@@ -117,12 +122,12 @@
                         <input type="file" id="file-input" hidden />
                         <label for="file-input" class="upload-label">
                             <span class="upload-icon">📂</span>
-                            <span>点击或拖拽文件到此上传</span>
-                            <span class="upload-hint">支持 md / txt / pdf / docx</span>
+                            <span data-i18n="sidebar.upload.label">点击或拖拽文件到此上传</span>
+                            <span class="upload-hint" data-i18n="sidebar.upload.hint">支持 md / txt / pdf / docx</span>
                         </label>
                     </div>
                     <div class="upload-result" id="upload-result"></div>
-                    <button id="build-index-btn" class="small-btn block">触发索引构建</button>
+                    <button id="build-index-btn" class="small-btn block" data-i18n="sidebar.upload.build">触发索引构建</button>
                     <div class="job-result" id="job-result"></div>
                 </div>
             </div>
@@ -134,28 +139,38 @@
         <div class="drawer-backdrop" data-close="settings"></div>
         <div class="drawer-panel">
             <div class="drawer-header">
-                <h3>设置</h3>
+                <h3 data-i18n="settings.title">设置</h3>
                 <button class="icon-btn" data-close="settings" aria-label="close">✕</button>
             </div>
             <div class="drawer-body">
                 <div class="form-row">
-                    <label for="api-base-input">API Base URL</label>
-                    <input type="text" id="api-base-input" placeholder="同域(留空)" />
-                    <p class="hint">留空 = 使用当前页面所在域名,生产部署时配置网关地址</p>
+                    <label for="api-base-input" data-i18n="settings.apiBase">API Base URL</label>
+                    <input type="text" id="api-base-input"
+                           data-i18n-attr="placeholder:settings.apiBase.placeholder" />
+                    <p class="hint" data-i18n="settings.apiBase.hint">留空 = 使用当前页面所在域名,生产部署时配置网关地址</p>
                 </div>
                 <div class="form-row">
-                    <label for="apikey-input">X-API-Key</label>
-                    <input type="password" id="apikey-input" placeholder="可选,认证时需要" />
-                    <p class="hint">配置 security.auth_enabled=true 时必填</p>
+                    <label for="apikey-input" data-i18n="settings.apiKey">X-API-Key</label>
+                    <input type="password" id="apikey-input"
+                           data-i18n-attr="placeholder:settings.apiKey.placeholder" />
+                    <p class="hint" data-i18n="settings.apiKey.hint">配置 security.auth_enabled=true 时必填</p>
                 </div>
                 <div class="form-row">
-                    <label for="session-input">Session ID</label>
-                    <input type="text" id="session-input" placeholder="自动生成" />
-                    <p class="hint">用于跨请求关联,留空自动生成</p>
+                    <label for="session-input" data-i18n="settings.session">Session ID</label>
+                    <input type="text" id="session-input"
+                           data-i18n-attr="placeholder:settings.session.placeholder" />
+                    <p class="hint" data-i18n="settings.session.hint">用于跨请求关联,留空自动生成</p>
                 </div>
                 <div class="form-row">
-                    <button id="save-settings" class="primary-btn">保存</button>
-                    <button id="clear-history" class="secondary-btn">清空对话历史</button>
+                    <label data-i18n="settings.locale">界面语言</label>
+                    <div class="lang-switch">
+                        <button type="button" class="lang-opt" data-locale="zh">中文</button>
+                        <button type="button" class="lang-opt" data-locale="en">English</button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <button id="save-settings" class="primary-btn" data-i18n="settings.save">保存</button>
+                    <button id="clear-history" class="secondary-btn" data-i18n="settings.clear">清空对话历史</button>
                 </div>
             </div>
         </div>
@@ -165,6 +180,7 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <script src="/static/api.js"></script>
+    <script src="/static/i18n.js"></script>
     <script src="/static/markdown.js"></script>
     <script src="/static/app.js"></script>
 </body>

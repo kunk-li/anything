@@ -198,6 +198,39 @@ body {
     font-size: 16px;
     transition: all var(--transition);
 }
+
+.lang-btn {
+    width: auto;
+    min-width: 38px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-family: var(--mono);
+    font-weight: 600;
+}
+
+.lang-switch {
+    display: inline-flex;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+.lang-opt {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    transition: all var(--transition);
+}
+.lang-opt:hover {
+    color: var(--text);
+}
+.lang-opt.active {
+    background: var(--accent);
+    color: white;
+}
 .icon-btn:hover {
     color: var(--text);
     border-color: var(--border-strong);
