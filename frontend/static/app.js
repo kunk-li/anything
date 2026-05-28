@@ -54,6 +54,8 @@
         streamToggle: $('stream-toggle'),
         composerInputRow: $('composer-input-row'),
         composerAttachments: $('composer-attachments'),
+        imageBtn: $('image-btn'),
+        imagePicker: $('image-picker'),
         modelsRefresh: $('models-refresh'),
         modelsAdd: $('models-add'),
         modelsTbody: $('models-tbody'),
@@ -209,7 +211,41 @@
             }
         });
 
+        // ========== 📷 文件选择按钮 (拖拽永远 fallback) ==========
+        if (els.imageBtn && els.imagePicker) {
+            els.imageBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                els.imagePicker.value = ''; // 允许重选同一文件
+                els.imagePicker.click();
+            });
+            els.imagePicker.addEventListener('change', (e) => {
+                const files = e.target.files;
+                if (!files || !files.length) return;
+                let added = 0;
+                let firstName = '';
+                for (const f of files) {
+                    if (f.type && f.type.startsWith('image/')) {
+                        if (!firstName) firstName = f.name;
+                        addAttachment(f);
+                        added++;
+                    }
+                }
+                if (added > 0) {
+                    toast('success', t('toast.attach.added'),
+                        added === 1 ? firstName : `${added} files`);
+                }
+            });
+        }
+
         // ========== 拖拽图片到输入框 ==========
+        // 调试: localStorage.setItem('anything_drag_debug','1') 开启 console.log
+        const DRAG_DEBUG = (() => {
+            try { return localStorage.getItem('anything_drag_debug') === '1'; }
+            catch { return false; }
+        })();
+        const dlog = (...args) => { if (DRAG_DEBUG) console.log('[drag]', ...args); };
+        dlog('init, composerInputRow=', els.composerInputRow, 'chatPane=', els.chatPane);
+
         // 关键陷阱:
         // 1) 必须在 window 级别 preventDefault 兜底, 否则用户拖偏一点
         //    浏览器会把图片当 URL 打开 (navigate 到 file:// 把整个页面替换)
@@ -241,7 +277,9 @@
             // 检测 dataTransfer 含 Files 时显示 overlay
             let windowDragCounter = 0;
             window.addEventListener('dragenter', (e) => {
-                if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+                const types = e.dataTransfer ? Array.from(e.dataTransfer.types || []) : [];
+                dlog('window dragenter, types=', types, 'counter=', windowDragCounter);
+                if (types.includes('Files')) {
                     windowDragCounter++;
                     document.body.classList.add('has-drag');
                 }
@@ -282,6 +320,7 @@
                     e.preventDefault();
                     dropZone.classList.remove('dragover');
                     const files = e.dataTransfer && e.dataTransfer.files;
+                    dlog('chatPane drop, files.length=', files ? files.length : 0);
                     if (!files || !files.length) return;
                     let added = 0, invalid = 0;
                     for (const f of files) {
@@ -328,6 +367,7 @@
                 dropZone.classList.remove('dragover');
 
                 const files = e.dataTransfer && e.dataTransfer.files;
+                dlog('dropZone drop, files.length=', files ? files.length : 0);
                 if (!files || !files.length) {
                     return;
                 }
