@@ -334,6 +334,19 @@ def build_business_layer(
         deps=deps,
     )
 
+    # Task EE (#65): spawn_subagent — 需要拿到 parent agent 引用, 所以在 new
+    # SimpleAgent 之后再注册到同一个 tool_registry. 子 agent 跑 ReAct 时复用
+    # 这个 registry 但用 _RestrictedRegistry 限制可见工具子集.
+    try:
+        from agent_module.tools import make_spawn_subagent_tool
+        tool_registry.register(
+            "spawn_subagent",
+            make_spawn_subagent_tool(agent),
+            description=TOOL_DESCRIPTIONS["spawn_subagent"],
+        )
+    except Exception as e:
+        deps.logger.warning(f"[bootstrap] spawn_subagent 注册失败 (忽略): {e}")
+
     orchestrator = SimpleOrchestrator(
         rag_runner=rag,
         agent_runner=agent,

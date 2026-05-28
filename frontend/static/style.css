@@ -1205,6 +1205,27 @@ body.has-drag .chat-pane::before {
     font-weight: 600;
 }
 
+/* ============== Task GG (#67): Stop 按钮 + 导出 ============== */
+/* 发送中 send 按钮变红停止按钮 */
+.send-btn.sending {
+    background: var(--danger) !important;
+    color: #fff;
+    animation: pulse-stop 1.2s ease-in-out infinite;
+}
+@keyframes pulse-stop {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5); }
+    50%      { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0); }
+}
+
+/* 导出按钮排成一行 */
+.export-row {
+    display: flex;
+    gap: 10px;
+}
+.export-row .small-btn {
+    flex: 1;
+}
+
 /* ============== Buttons ============== */
 
 .small-btn {

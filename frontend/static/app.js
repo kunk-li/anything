@@ -64,6 +64,9 @@
         planFinalAnswer: $('plan-final-answer'),
         planApproveBtn: $('plan-approve-btn'),
         planCancelBtn: $('plan-cancel-btn'),
+        // Task GG (#67)
+        exportMdBtn: $('export-md-btn'),
+        exportJsonBtn: $('export-json-btn'),
         streamToggle: $('stream-toggle'),
         planToggle: $('plan-toggle'),               // Task X (#58): Plan mode
         composerInputRow: $('composer-input-row'),
@@ -215,8 +218,14 @@
             });
         });
 
-        // 发送
-        els.sendBtn.addEventListener('click', send);
+        // 发送 / 停止 (Task GG #67)
+        els.sendBtn.addEventListener('click', () => {
+            if (state.sending) {
+                stopSending();
+            } else {
+                send();
+            }
+        });
         els.inputText.addEventListener('keydown', (e) => {
             // 中文/日韩输入法 composition 阶段, keyCode 229 + isComposing=true, 不发送
             if (e.isComposing || e.keyCode === 229) return;
@@ -541,6 +550,14 @@
         els.saveSettingsBtn.addEventListener('click', saveSettings);
         els.clearHistoryBtn.addEventListener('click', clearHistory);
 
+        // Task GG (#67): 对话导出
+        if (els.exportMdBtn) {
+            els.exportMdBtn.addEventListener('click', () => exportConversation('md'));
+        }
+        if (els.exportJsonBtn) {
+            els.exportJsonBtn.addEventListener('click', () => exportConversation('json'));
+        }
+
         // 指标刷新
         els.metricsRefresh.addEventListener('click', loadMetrics);
 
@@ -750,17 +767,29 @@
         });
 
         state.sending = true;
-        els.sendBtn.disabled = true;
+        // Task GG (#67): 发送中 send 按钮变 Stop, 点击中止流式
+        state.activePlaceholderId = placeholderId;
+        els.sendBtn.classList.add('sending');
+        const sendLabel = els.sendBtn.querySelector('.send-label');
+        const sendIcon = els.sendBtn.querySelector('.send-icon');
+        if (sendLabel) sendLabel.textContent = t('composer.stop');
+        if (sendIcon) sendIcon.textContent = '⏹';
         els.inputText.value = '';
         els.inputText.focus();
 
-        if (useStream) {
-            await sendStream(body, placeholderId, { tenant, mode });
-        } else {
-            await sendOnce(body, placeholderId, { tenant, mode });
+        try {
+            if (useStream) {
+                await sendStream(body, placeholderId, { tenant, mode });
+            } else {
+                await sendOnce(body, placeholderId, { tenant, mode });
+            }
+        } finally {
+            state.sending = false;
+            state.activePlaceholderId = null;
+            els.sendBtn.classList.remove('sending');
+            if (sendLabel) sendLabel.textContent = t('composer.send');
+            if (sendIcon) sendIcon.textContent = '↵';
         }
-        state.sending = false;
-        els.sendBtn.disabled = false;
 
         // 发送完成后清空附件 (无论成功失败都清, 失败的已经在 UI 上标红)
         if (state.pendingAttachments.length) {
@@ -1472,6 +1501,95 @@
         } catch (e) {
             els.metricsText.textContent = '加载失败: ' + e.message;
         }
+    }
+
+    // ---------- Task GG (#67): Stop 中止 + 对话导出 ----------
+    function stopSending() {
+        // 关闭活跃的流, 把占位消息 mark 为 stopped
+        try {
+            if (activeStream && typeof activeStream.close === 'function') {
+                activeStream.close();
+            }
+        } catch (_) {}
+        activeStream = null;
+        if (state.activePlaceholderId) {
+            updateMessage(state.activePlaceholderId, {
+                loading: false,
+                meta: { code: 'STOPPED' },
+                streaming: false,
+            });
+        }
+        toast('info', t('composer.stop.toast'), '');
+        // UI 复原由 send() 的 finally 处理 (await 解开后)
+    }
+
+    /**
+     * Task GG (#67): 把当前 chat (state.messages) 导出成 Markdown 或 JSON.
+     * fmt: 'md' | 'json'.
+     */
+    function exportConversation(fmt) {
+        const messages = (state.messages || []).filter(m => m && m.content);
+        if (!messages.length) {
+            toast('warn', t('export.empty'), '');
+            return;
+        }
+        let content, mime, ext;
+        if (fmt === 'json') {
+            content = JSON.stringify({
+                exported_at: new Date().toISOString(),
+                tenant: (els.tenantInput && els.tenantInput.value) || 'default',
+                messages: messages.map(m => ({
+                    role: m.role,
+                    mode: m.mode,
+                    content: m.content,
+                    ts: m.ts,
+                    meta: m.meta || null,
+                })),
+            }, null, 2);
+            mime = 'application/json';
+            ext = 'json';
+        } else {
+            // markdown
+            const lines = [
+                `# Anything 对话导出`,
+                ``,
+                `**导出时间**: ${new Date().toISOString()}`,
+                `**Tenant**: ${(els.tenantInput && els.tenantInput.value) || 'default'}`,
+                `**消息数**: ${messages.length}`,
+                ``,
+                `---`,
+                ``,
+            ];
+            for (const m of messages) {
+                const role = m.role === 'user' ? '👤 用户' : '🤖 助手';
+                const modeBadge = m.mode ? ` \`[${m.mode}]\`` : '';
+                const tsStr = m.ts ? new Date(m.ts).toLocaleString() : '';
+                lines.push(`### ${role}${modeBadge} _${tsStr}_`);
+                lines.push('');
+                lines.push(m.content);
+                if (m.meta && m.meta.traceId) {
+                    lines.push('');
+                    lines.push(`> trace_id: \`${m.meta.traceId}\``);
+                }
+                lines.push('');
+                lines.push('---');
+                lines.push('');
+            }
+            content = lines.join('\n');
+            mime = 'text/markdown';
+            ext = 'md';
+        }
+        const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        a.href = url;
+        a.download = `anything-chat-${stamp}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast('success', t('export.done'), `${messages.length} ${t('export.messages')}`);
     }
 
     // ---------- 侧栏:Admin (Task S) ----------

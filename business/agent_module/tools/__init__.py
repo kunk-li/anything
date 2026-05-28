@@ -19,6 +19,7 @@ from .builtin_tools import (
     weather,
     currency_convert,
     python_sandbox,
+    make_spawn_subagent_tool,  # Task EE (#65)
     TOOL_DESCRIPTIONS,
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "weather",
     "currency_convert",
     "python_sandbox",
+    "make_spawn_subagent_tool",
     "TOOL_DESCRIPTIONS",
 ]
