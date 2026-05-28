@@ -624,79 +624,131 @@ class ApiService:
                     "request_type": body.get("type", "unknown"),
                 })
 
-                # 4. 同步跑 handler (V1: 不是真实 token 流, 跑完再切片)
+                # 4. 决定走"真实流式"还是"simulated 切片"
+                #
+                # 真实路径 (Task #44): RAG 模式 + handler 暴露 handle_stream
+                #   -> 直接拉 generator, LLM TTFT 显著缩短
+                #   -> 用户在 LLM 推理过程中就看到字, 不需要等整段
+                #
+                # simulated 路径: agent / hybrid / 老 adapter / handler 没 stream
+                #   -> 先同步跑 handler.handle 拿完整结果, 再客户端体感切片
                 start_t = time.time()
-                # FastAPI 的 ws handler 是 async; handler.handle 是 sync.
-                # 把它跑到 thread pool 避免阻塞 event loop。
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, lambda: self.handler.handle(body, trace_id=trace_id)
+                req_type = (body.get("type") or "rag").lower()
+                can_stream = (
+                    req_type == "rag"
+                    and hasattr(self.handler, "handle_stream")
                 )
-                duration = time.time() - start_t
 
-                code = str(result.get("code", "UNKNOWN_ERROR"))
-                if code != "SUCCESS":
-                    await ws.send_json({
-                        "type": "error",
-                        "code": code,
-                        "message": result.get("message", ""),
-                        "trace_id": trace_id,
-                        "retryable": bool(result.get("retryable")),
-                        "details": result.get("details"),
-                    })
+                # 仅 simulated 路径才需要先跑完 handler.handle
+                result = None
+                duration = 0.0
+                if not can_stream:
+                    result = await loop.run_in_executor(
+                        None, lambda: self.handler.handle(body, trace_id=trace_id)
+                    )
+                    duration = time.time() - start_t
+                    code = str(result.get("code", "UNKNOWN_ERROR"))
+                    if code != "SUCCESS":
+                        await ws.send_json({
+                            "type": "error",
+                            "code": code,
+                            "message": result.get("message", ""),
+                            "trace_id": trace_id,
+                            "retryable": bool(result.get("retryable")),
+                            "details": result.get("details"),
+                        })
+                        self._record_metrics(
+                            req_type=req_type, code=code,
+                            duration=duration, tenant_id=effective_tid,
+                        )
+                        return
+
+                if can_stream:
+                    # 真实流式: 直接从 handler.handle_stream 拉 event 转发
+                    loop = asyncio.get_event_loop()
+                    # handler.handle_stream 是 sync generator, 在 thread pool 跑
+                    gen = self.handler.handle_stream(body, trace_id=trace_id)
+
+                    def _next_or_stop(g):
+                        try:
+                            return ("event", next(g))
+                        except StopIteration:
+                            return ("end", None)
+                        except Exception as e:
+                            return ("err", e)
+
+                    while True:
+                        kind, val = await loop.run_in_executor(None, _next_or_stop, gen)
+                        if kind == "end":
+                            break
+                        if kind == "err":
+                            raise val  # 让外层 except 兜
+                        evt = val
+                        etype = evt.get("type")
+                        if etype == "meta":
+                            await ws.send_json({
+                                "type": "metadata",
+                                "citations": evt.get("citations") or [],
+                                "retrieved_chunks": evt.get("retrieved_chunks") or [],
+                                "steps": [],
+                            })
+                        elif etype == "chunk":
+                            await ws.send_json({"type": "chunk", "text": evt.get("text", "")})
+                        elif etype == "done":
+                            await ws.send_json({
+                                "type": "done",
+                                "code": "SUCCESS",
+                                "cost_time": evt.get("cost_time", round(duration, 3)),
+                                "trace_id": trace_id,
+                            })
+                        elif etype == "error":
+                            await ws.send_json({
+                                "type": "error",
+                                "code": evt.get("code", "RAG_RUN_FAILED"),
+                                "message": evt.get("message", ""),
+                                "trace_id": trace_id,
+                            })
+                            return  # 错误后中止流
                     self._record_metrics(
-                        req_type=str(body.get("type", "unknown")),
-                        code=code,
-                        duration=duration,
+                        req_type=req_type, code="SUCCESS", duration=duration,
                         tenant_id=effective_tid,
                     )
-                    return
-
-                # 5. 切片发送 answer (打字感 simulated streaming)
-                # 让流式视觉真实可感: chunk_size 小 + interval 长。
-                # 默认目标 ~6-8s 流完 (跟用户阅读速度匹配, 不被甩开)。
-                # 真实 LLM token streaming 升级后, 这里直接跟 LLM stream generator。
-                data = result.get("data") or {}
-                answer = str(data.get("answer") or "")
-                if answer:
-                    # 自适应 chunk: 总文本越长, 单片越大 (避免短文本看太慢, 长文本看太久)
-                    target_total_ms = 6000  # 流完总时长
-                    base_interval_ms = 30   # 单片最小间隔
-                    total_len = len(answer)
-                    # 估算需要多少 chunk = target_total_ms / base_interval_ms = 200
-                    target_chunks = max(20, min(200, total_len // 3))
-                    chunk_size = max(1, total_len // target_chunks)
-                    interval = base_interval_ms / 1000.0
                 else:
-                    chunk_size = 1
-                    interval = 0.03
-                for i in range(0, len(answer), chunk_size):
-                    await ws.send_json({"type": "chunk", "text": answer[i:i + chunk_size]})
-                    await asyncio.sleep(interval)
+                    # ----- simulated 路径 (agent / hybrid / 老 adapter / mock LLM) -----
+                    data = result.get("data") or {}
+                    answer = str(data.get("answer") or "")
+                    if answer:
+                        target_total_ms = 6000
+                        base_interval_ms = 30
+                        total_len = len(answer)
+                        target_chunks = max(20, min(200, total_len // 3))
+                        chunk_size = max(1, total_len // target_chunks)
+                        interval = base_interval_ms / 1000.0
+                    else:
+                        chunk_size = 1
+                        interval = 0.03
+                    for i in range(0, len(answer), chunk_size):
+                        await ws.send_json({"type": "chunk", "text": answer[i:i + chunk_size]})
+                        await asyncio.sleep(interval)
 
-                # 6. 发 metadata (citations / chunks / steps)
-                meta_payload = {
-                    "type": "metadata",
-                    "citations": data.get("citations") or [],
-                    "retrieved_chunks": data.get("retrieved_chunks") or [],
-                    "steps": data.get("steps") or [],
-                }
-                await ws.send_json(meta_payload)
+                    await ws.send_json({
+                        "type": "metadata",
+                        "citations": data.get("citations") or [],
+                        "retrieved_chunks": data.get("retrieved_chunks") or [],
+                        "steps": data.get("steps") or [],
+                    })
 
-                # 7. 完成
-                await ws.send_json({
-                    "type": "done",
-                    "code": "SUCCESS",
-                    "cost_time": round(duration, 3),
-                    "trace_id": trace_id,
-                })
+                    await ws.send_json({
+                        "type": "done", "code": "SUCCESS",
+                        "cost_time": round(duration, 3),
+                        "trace_id": trace_id,
+                    })
 
-                self._record_metrics(
-                    req_type=str(body.get("type", "unknown")),
-                    code="SUCCESS",
-                    duration=duration,
-                    tenant_id=effective_tid,
-                )
+                    self._record_metrics(
+                        req_type=req_type, code="SUCCESS", duration=duration,
+                        tenant_id=effective_tid,
+                    )
             except WebSocketDisconnect:
                 # 客户端主动断开, 静默
                 pass

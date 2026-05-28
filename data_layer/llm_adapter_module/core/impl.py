@@ -32,12 +32,45 @@ from deps_module import BasicDeps
 
 
 class _BaseHTTPAdapterMixin:
-    """给需要HTTP调用的适配器提供通用requests能力（超时、重试）"""
+    """给需要HTTP调用的适配器提供通用requests能力（超时、重试 + SSE 流式）"""
 
     def _post_json(self, url: str, headers: Dict[str, str], payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
+
+    def _post_stream_openai(
+        self, url: str, headers: Dict[str, str],
+        payload: Dict[str, Any], timeout: int,
+    ):
+        """OpenAI 兼容 SSE 流式 generator. yield 每个 delta.content (str).
+
+        SSE 协议每行 'data: {json}' 或 'data: [DONE]', 解析 choices[0].delta.content。
+        DashScope / DeepSeek / Moonshot / 其他 OpenAI 兼容 endpoint 都走此格式。
+        """
+        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
+        resp.raise_for_status()
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                obj = __import__("json").loads(data_str)
+            except Exception:
+                continue
+            choices = obj.get("choices") or []
+            if not choices:
+                continue
+            # 优先 delta.content (流式 chunk), 兜底 message.content (有时也会出现)
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if content:
+                yield content
 
 
 class OpenAIVectorAdapter(BaseVectorAdapter, _BaseHTTPAdapterMixin):
@@ -196,6 +229,56 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
             return LLMResponse(code="SUCCESS", message="ok", chat_result=out, cost_time=now_ts()-start, trace_id=trace_id)
         except Exception as e:
             return LLMResponse(code="RAG_RUN_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
+
+    def chat_stream(self, messages: List[Dict[str, Any]], request: LLMRequest):
+        """真正的 token-level 流式. yield 每个 delta.content (str).
+
+        实现细节:
+        - payload 加 stream=True
+        - 用 requests stream=True + iter_lines 解析 OpenAI 兼容 SSE
+        - 未配 api_key 时降级为 chat_with_context 的输出切片 (10 字符/段)
+          以保证 generator 协议永远生效
+        - 异常时 retry max_retry 次, 仍失败 raise
+        """
+        if not self.check_config():
+            # mock 降级: 拿完整回复后切片 yield
+            full = self.chat_with_context(messages, request)
+            chunk_size = 10
+            for i in range(0, len(full), chunk_size):
+                yield full[i:i + chunk_size]
+            return
+
+        url = f"{self.api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        p: LLMParam = request.model_param
+        payload: Dict[str, Any] = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": p.temperature,
+            "max_tokens": p.max_tokens,
+            "stream": True,
+        }
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                yield from self._post_stream_openai(url, headers, payload, timeout=self.timeout)
+                return
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"[llm_adapter] OpenAI chat_stream attempt {attempt+1} failed: {e}",
+                    logger_name="llm_adapter",
+                )
+                time.sleep(min(2 ** attempt, 8))
+        if last_err:
+            raise last_err
 
 
 class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
@@ -773,6 +856,42 @@ class LLMService(BaseLLMService):
             model_param=model_param if isinstance(model_param, LLMParam) else (LLMParam() if model_param is None else LLMParam(**model_param)),
         )
         return self.call_llm(req)
+
+    def chat_stream(
+        self,
+        prompt: str,
+        model_name: str = "default",
+        trace_id: Optional[str] = None,
+    ):
+        """真正 token-level 流式. yield 每个 delta token / chunk (str).
+
+        - 自动按 model_name 路由到对应 adapter; "default" 走 yaml 默认 chat 模型
+        - 仅当 adapter 暴露了 chat_stream 方法 (OpenAI 系列) 走真实 SSE 流;
+          其他 adapter (Anthropic/Ollama 等本期未实现) 自动降级为 generate +
+          单 chunk yield, 调用方仍是 generator 接口不破坏。
+        - 失败抛 RuntimeError (不像 generate 那样会兜底返回错误字符串)
+        """
+        request = LLMRequest(
+            request_type="CHAT",
+            input_text=prompt,
+            model_name=model_name,
+            model_param=LLMParam(),
+        )
+        resolved_name = self._resolve_model_name(request)
+        adapter = self._get_adapter(resolved_name)
+        if adapter is None:
+            raise RuntimeError(f"MODEL_NOT_FOUND: {resolved_name}")
+        request.model_name = resolved_name
+
+        if hasattr(adapter, "chat_stream"):
+            messages = [{"role": "user", "content": prompt}]
+            yield from adapter.chat_stream(messages, request)
+        else:
+            # 降级: adapter 不支持 stream, 一次性拿完整文本作为一个 chunk yield
+            resp = adapter.call(request)
+            text = getattr(resp, "chat_result", "") or ""
+            if text:
+                yield text
 
     def generate(self, prompt: str, trace_id: Optional[str] = None) -> str:
         """统一文本生成入口（实现 BaseLLMService.generate 契约）。

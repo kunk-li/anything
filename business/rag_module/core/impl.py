@@ -193,6 +193,119 @@ class SimpleRAG(BaseRAG):
             "citations": citations,
         }
 
+    def run_stream(self, request: Dict[str, Any]):
+        """RAG 真实流式 generator (Task #44). yield event dict 序列:
+
+        Event 类型:
+          {type: 'meta',     retrieved_chunks: [...], citations: [...]}     检索完成
+          {type: 'chunk',    text: str}                                      LLM token 增量 (多次)
+          {type: 'done',     cost_time: float, answer_length: int}           完成
+          {type: 'error',    code: str, message: str}                        异常
+
+        实现:
+          1. 检索 + rerank 同步 (跟 run() 一样)
+          2. yield 一次 meta event (含 chunks + citations, 不含 answer)
+          3. 调 llm_client.chat_stream(prompt), 边收 token 边 yield chunk
+          4. yield done event
+
+        WS endpoint 把 generator 的 event 序列转发即可,
+        无需后端再做 simulated 切片,首字符延迟 = LLM TTFT (time to first token)。
+        """
+        start_time = time.time()
+        trace_id = request.get("trace_id")
+
+        try:
+            # 1. 检索
+            with trace_span(
+                "rag.retrieve",
+                attributes={
+                    "anything.trace_id": trace_id or "-",
+                    "rag.top_k": int(request.get("top_k") or 0),
+                },
+            ) as span:
+                retrieved_chunks = self.retrieve(request)
+                span.set_attribute("rag.retrieved_count", len(retrieved_chunks))
+
+            # 2. 拼上下文 + prompt + citations (跟 generate() 同样)
+            query = self._normalize_query(request.get("query", ""))
+            context_chunks = self._assemble_context(retrieved_chunks)
+            prompt = self._build_prompt(query=query, context_chunks=context_chunks)
+            citations = self._build_citations(context_chunks)
+
+            self.logger.info(
+                f"RAG run_stream: trace_id={trace_id}, "
+                f"context_chunks={len(context_chunks)}, "
+                f"prompt_length={len(prompt)}"
+            )
+
+            # 3. yield meta event — 检索结果先到前端, 用户立刻看到 citations
+            yield {
+                "type": "meta",
+                "retrieved_chunks": [
+                    {
+                        "chunk_id": item.get("chunk_id"),
+                        "doc_id": item.get("doc_id"),
+                        "file_name": item.get("file_name"),
+                        "chunk_index": item.get("chunk_index"),
+                        "score": item.get("score"),
+                        "rerank_source": item.get("rerank_source"),
+                    }
+                    for item in retrieved_chunks
+                ],
+                "citations": citations,
+            }
+
+            # 4. LLM 真实流式
+            with trace_span(
+                "rag.generate_stream",
+                attributes={"anything.trace_id": trace_id or "-"},
+            ):
+                answer_buffer = []
+                # 若 llm_client 暴露了 chat_stream, 走真实 SSE;
+                # 否则降级为 _call_llm_generate 一次拿完整文本作为单 chunk yield
+                if hasattr(self.llm_client, "chat_stream"):
+                    try:
+                        for token in self.llm_client.chat_stream(
+                            prompt=prompt, trace_id=trace_id
+                        ):
+                            if token:
+                                answer_buffer.append(token)
+                                yield {"type": "chunk", "text": token}
+                    except Exception as e:
+                        # 流式失败 -> 降级一次性
+                        self.logger.warning(
+                            f"chat_stream 失败, 降级 sync: trace_id={trace_id}, err={e}"
+                        )
+                        full = self._call_llm_generate(prompt=prompt, trace_id=trace_id)
+                        if full:
+                            answer_buffer.append(full)
+                            yield {"type": "chunk", "text": full}
+                else:
+                    # adapter 完全没 stream 能力 -> 同步生成 + 一次 yield
+                    full = self._call_llm_generate(prompt=prompt, trace_id=trace_id)
+                    if full:
+                        answer_buffer.append(full)
+                        yield {"type": "chunk", "text": full}
+
+            full_answer = "".join(answer_buffer)
+            full_answer = self._ensure_citation_marker(full_answer, citations)
+
+            # 5. 完成事件
+            yield {
+                "type": "done",
+                "cost_time": round(time.time() - start_time, 3),
+                "answer_length": len(full_answer),
+                "code": "SUCCESS",
+            }
+
+        except Exception as e:
+            self.logger.error(f"RAG run_stream 异常: {e}, trace_id={trace_id}")
+            yield {
+                "type": "error",
+                "code": "RAG_RUN_FAILED",
+                "message": str(e),
+            }
+
     def run(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """执行完整 RAG 流程"""
         start_time = time.time()

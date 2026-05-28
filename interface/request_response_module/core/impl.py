@@ -71,6 +71,53 @@ class RequestHandler(BaseRequestHandler):
             self.logger.error(f"请求校验异常：{str(e)}")
             return False, f"请求校验失败：{str(e)}", "UNKNOWN_ERROR"
 
+    def handle_stream(self, request: Dict[str, Any], trace_id: Optional[str] = None):
+        """流式处理 generator (Task #44). yield event dict 序列.
+
+        校验 + 标准化 跟 handle() 一样, 路由到 orchestrator.route_stream。
+        仅 type=rag 真实 token 流, 其他类型 yield error event 让调用方降级。
+
+        Event:
+          {type: 'meta', citations, retrieved_chunks}
+          {type: 'chunk', text}
+          {type: 'done', cost_time, code}
+          {type: 'error', code, message}
+        """
+        import time as _time
+        start_time = _time.time()
+        trace_id = trace_id or request.get("trace_id") or self._generate_trace_id()
+
+        try:
+            is_valid, error_msg, error_code = self.validate_request(request)
+            if not is_valid:
+                self.logger.warning(f"[stream] 请求校验失败: {error_msg}, trace_id={trace_id}")
+                yield {"type": "error", "code": error_code, "message": error_msg}
+                return
+
+            standardized_request = self._standardize_request(request, trace_id=trace_id)
+            self.logger.info(
+                f"[stream] 处理: type={standardized_request.get('type')}, "
+                f"trace_id={trace_id}, session_id={standardized_request.get('session_id')}"
+            )
+
+            if not hasattr(self.orchestrator, "route_stream"):
+                yield {"type": "error", "code": "UNKNOWN_ERROR",
+                       "message": "orchestrator 未实现 route_stream"}
+                return
+
+            with trace_span(
+                "handler.route_stream",
+                attributes={
+                    "anything.request_type": standardized_request.get("type"),
+                    "anything.trace_id": trace_id,
+                },
+            ):
+                yield from self.orchestrator.route_stream(standardized_request)
+
+        except Exception as e:
+            self.logger.error(f"[stream] 处理异常: {e}, trace_id={trace_id}")
+            yield {"type": "error", "code": "UNKNOWN_ERROR", "message": str(e)}
+
     def handle(self, request: Dict[str, Any], trace_id: Optional[str] = None) -> Dict[str, Any]:
         """处理请求全流程"""
         start_time = time.time()

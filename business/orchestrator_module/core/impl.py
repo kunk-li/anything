@@ -91,6 +91,27 @@ class SimpleOrchestrator(BaseOrchestrator):
             self.logger.error(f"协同调度异常：{str(e)}, trace_id={trace_id}")
             return self._handle_exception(e, trace_id=trace_id, request=request)
 
+    def route_stream(self, request: Dict[str, Any]):
+        """流式路由 generator (Task #44).
+
+        仅当 type=rag 且 rag_runner 支持 run_stream 时, yield 真实 token 流;
+        其他类型 (agent/hybrid) yield NotImplemented 让 handler 降级到 route()。
+
+        Event 形态:
+          {type: 'meta'|'chunk'|'done'|'error', ...}
+        """
+        request_type = (request.get("type") or "rag").lower()
+        if request_type == "rag":
+            if self.rag_runner is None or not hasattr(self.rag_runner, "run_stream"):
+                yield {"type": "error", "code": "RAG_RUN_FAILED",
+                       "message": "rag_runner 未支持流式"}
+                return
+            yield from self.rag_runner.run_stream(dict(request))
+            return
+        # 其他类型不支持流式
+        yield {"type": "error", "code": "BAD_REQUEST",
+               "message": f"流式当前仅支持 type=rag, 收到: {request_type}"}
+
     def _execute_rag(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """执行 RAG 请求"""
         if self.rag_runner is None:
