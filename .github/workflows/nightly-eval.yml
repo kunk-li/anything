@@ -113,12 +113,28 @@ jobs:
           echo "eval_exit=$eval_exit" >> $GITHUB_OUTPUT
           exit $eval_exit
 
-      - name: Upload eval report
+      # =====================================================================
+      # Task R: Hybrid vs Vector-only A/B 对比
+      # 守护 hybrid 不能让 recall_keyword / file_hit 比纯向量回退超过 5 个点
+      # 不挂主 job (continue-on-error), 但报告会上传 + 失败时也开 issue
+      # =====================================================================
+      - name: Hybrid vs Vector-only comparison
+        id: compare
+        if: always()
+        continue-on-error: true
+        run: |
+          python evaluation/run_eval.py --compare --ci \
+              --hybrid-regression-tolerance 0.05 \
+              --verbose | tee compare_report.txt
+
+      - name: Upload eval reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nightly-eval-report
-          path: eval_report.txt
+          path: |
+            eval_report.txt
+            compare_report.txt
           retention-days: 30
 
       # =====================================================================
