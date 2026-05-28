@@ -132,7 +132,7 @@ class TestWikipediaTool(unittest.TestCase):
 
     def test_offline_returns_failure(self):
         """模拟 urlopen 抛网络异常"""
-        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen",
+        with patch("agent_module.tools.tools_impl.wikipedia.urllib.request.urlopen",
                    side_effect=ConnectionError("offline")):
             r = wikipedia_tool({"query": "Anthropic"})
         self.assertEqual(r["code"], "TOOL_CALL_FAILED")
@@ -145,7 +145,7 @@ class TestWikipediaTool(unittest.TestCase):
         fake_resp.__enter__ = lambda s: fake_resp
         fake_resp.__exit__ = lambda *a: None
         fake_resp.read.return_value = b'["xyz", [], [], []]'
-        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen",
+        with patch("agent_module.tools.tools_impl.wikipedia.urllib.request.urlopen",
                    return_value=fake_resp):
             r = wikipedia_tool({"query": "xyzzzz-no-match"})
         self.assertEqual(r["code"], "SUCCESS")
@@ -496,7 +496,7 @@ class TestWeather(unittest.TestCase):
     def test_offline(self):
         """无网时应返回 TOOL_CALL_FAILED"""
         from unittest.mock import patch
-        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen",
+        with patch("agent_module.tools.tools_impl.weather.urllib.request.urlopen",
                    side_effect=ConnectionError("offline")):
             r = weather({"location": "Beijing"})
         self.assertEqual(r["code"], "TOOL_CALL_FAILED")
@@ -512,7 +512,7 @@ class TestWeather(unittest.TestCase):
             b'{"current_weather": {"temperature": 22.5, "weathercode": 1, '
             b'"windspeed": 5.0, "winddirection": 90, "is_day": 1, "time": "2026-05-27T10:00"}}'
         )
-        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen", return_value=fake_resp):
+        with patch("agent_module.tools.tools_impl.weather.urllib.request.urlopen", return_value=fake_resp):
             r = weather({"latitude": 39.9, "longitude": 116.4})
         self.assertEqual(r["code"], "SUCCESS")
         self.assertEqual(r["data"]["current"]["temperature_celsius"], 22.5)
@@ -541,7 +541,7 @@ class TestCurrencyConvert(unittest.TestCase):
         fake_resp.__enter__ = lambda s: fake_resp
         fake_resp.__exit__ = lambda *a: None
         fake_resp.read.return_value = b'{"date": "2026-05-27", "rates": {"CNY": 720.5}}'
-        with patch("agent_module.tools.builtin_tools.urllib.request.urlopen", return_value=fake_resp):
+        with patch("agent_module.tools.tools_impl.currency_convert.urllib.request.urlopen", return_value=fake_resp):
             r = currency_convert({"from_currency": "USD", "to_currency": "CNY", "amount": 100})
         self.assertEqual(r["code"], "SUCCESS")
         self.assertEqual(r["data"]["converted"], 720.5)
