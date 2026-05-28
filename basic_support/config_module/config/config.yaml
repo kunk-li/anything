@@ -46,7 +46,7 @@ llm:
 
   default_vector_model: "text-embedding-3-small"
   default_chat_model: "qwen-turbo"
-  default_multimodal_model: "gpt-4o-mini"
+  default_multimodal_model: "qwen-vl-plus"
 
   openai:
     text-embedding-3-small:
@@ -58,6 +58,12 @@ llm:
     qwen-turbo:
       request_type: "CHAT"
       adapter_class: "OpenAIChatAdapter"
+      api_key: "${DASHSCOPE_API_KEY}"
+      api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    qwen-vl-plus:
+      request_type: "MULTIMODAL"
+      adapter_class: "OpenAIMultimodalAdapter"
       api_key: "${DASHSCOPE_API_KEY}"
       api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
