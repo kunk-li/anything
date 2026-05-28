@@ -184,6 +184,73 @@ class ToolStep(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+# ---------------------------------------------------------------------------
+# Task QQ (#77): extra_params 强类型 schema
+# ---------------------------------------------------------------------------
+# 历史上 RequestEnvelope.extra_params 是 Dict[str, Any] 一团黑盒, 调用方靠
+# 字符串 key 摸索 (`extra_params.get("plan_only")` 等), 拼写错误 / 字段漂移
+# 没有任何防护. 把已知的 6 个 key 显式声明成 ExtraParams 字段, 让 IDE 知道:
+#
+#   plan_only:         Task X (#58) plan mode  -- Agent 先规划后执行
+#   approve_plan:      Task DD (#64) plan 审批 -- 前端 modal 通过后回传 True
+#   approve_tools:     Task W (#57) approval gates -- 危险工具白名单
+#   execution_mode:    rag / agent / hybrid    -- Orchestrator 路由依据
+#   execution_strategy: parallel / serial      -- 单步并发策略
+#   source:            console_app / web ...   -- 调用方溯源
+#
+# 设计取舍 (Option B — 加性, 不破坏老用法):
+#   - ExtraParams 用 extra="allow", 老 key 还可继续塞
+#   - RequestEnvelope.extra_params 仍是 Dict[str, Any] (不强制 schema-validate),
+#     调用方 want 类型时调 ExtraParams.model_validate(d) 拿强类型, 否则继续走 dict
+#   - 现有 `extra_params.get("plan_only", False)` 这种 dict 用法 0 改动
+#
+# 加新 key:
+#   1. 在 ExtraParams 加一个 Optional[X] = None 字段
+#   2. 加业务用法
+#   3. 单测过 ExtraParams.model_validate 验证
+# ---------------------------------------------------------------------------
+
+
+ExecutionMode = Literal["rag", "agent", "hybrid"]
+ExecutionStrategy = Literal["parallel", "serial"]
+
+
+class ExtraParams(BaseModel):
+    """RequestEnvelope.extra_params 的强类型镜像.
+
+    已知 6 个 key 显式声明; 未知 key 通过 extra="allow" 透传不报错,
+    渐进迁移过程中调用方愿意走类型就 model_validate(d), 不想走就 d.get(...)
+    都可以.
+    """
+
+    # Task X (#58) plan mode
+    plan_only: bool = False
+    # Task DD (#64) plan 审批 (前端 modal 通过后带 approve_plan=True 重提)
+    approve_plan: bool = False
+    # Task W (#57) approval gates -- 危险工具白名单
+    approve_tools: List[str] = Field(default_factory=list)
+    # Orchestrator 路由依据 -- rag/agent/hybrid
+    execution_mode: Optional[ExecutionMode] = None
+    # Agent 单步执行并发策略 -- parallel/serial
+    execution_strategy: Optional[ExecutionStrategy] = None
+    # 调用方溯源 (console_app / web / api)
+    source: Optional[str] = None
+
+    # 渐进迁移期允许未知 key 透传 (避免 BAD_REQUEST 阻断老调用方)
+    model_config = {"extra": "allow"}
+
+    @classmethod
+    def from_dict(cls, d: Optional[Dict[str, Any]]) -> "ExtraParams":
+        """从 dict 构造, None / 空 dict 都返回空 ExtraParams (default 字段全空)."""
+        if not d:
+            return cls()
+        return cls.model_validate(d)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转回 dict (含 extra 字段), 让走 dict 接口的下游不感知 schema."""
+        return self.model_dump(exclude_none=False)
+
+
 def validate_request_dict(request: Dict[str, Any]) -> Tuple[bool, str, str]:
     """将 dict 请求按 RequestEnvelope 校验，返回 (is_valid, message, error_code)。
 

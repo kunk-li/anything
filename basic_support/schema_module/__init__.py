@@ -22,6 +22,10 @@ from .schema import (
     RetrievedChunk,
     Citation,
     ToolStep,
+    # Task QQ (#77): extra_params 强类型
+    ExtraParams,
+    ExecutionMode,
+    ExecutionStrategy,
 )
 
 __all__ = [
@@ -34,4 +38,7 @@ __all__ = [
     "RetrievedChunk",
     "Citation",
     "ToolStep",
+    "ExtraParams",
+    "ExecutionMode",
+    "ExecutionStrategy",
 ]
