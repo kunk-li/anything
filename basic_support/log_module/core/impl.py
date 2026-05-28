@@ -7,7 +7,10 @@ from typing import Dict, Optional
 
 from .base import BaseLogger
 from log_module.config import LogConfig
-from log_module.utils import get_log_file_name, get_process_info, ensure_dir
+from log_module.utils import (
+    get_log_file_name, get_process_info, ensure_dir,
+    JsonFormatter, use_json_format,  # Task UU (#81)
+)
 
 
 # 全局进程锁：用于多进程并发写文件时保证行级别有序输出
@@ -79,7 +82,13 @@ class SystemLogger(BaseLogger):
         if logger.handlers:
             return logger
 
-        formatter = logging.Formatter(LOG_FORMAT)
+        # Task UU (#81): env var driven JSON vs plain formatter
+        # ANYTHING_LOG_FORMAT=json  → 单行 JSON, 适合 ELK / Datadog / Loki ingest
+        # 缺省 / =plain               → 老的 "asctime - pid - name - level - msg" 格式
+        if use_json_format():
+            formatter: logging.Formatter = JsonFormatter()
+        else:
+            formatter = logging.Formatter(LOG_FORMAT)
 
         # 控制台 handler
         ch = logging.StreamHandler()
