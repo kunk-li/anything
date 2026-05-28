@@ -1,30 +1,10 @@
-"""console_app 批处理模式测试.
-
-⚠️ 跳过原因 (Task Q #51):
-    这些测试针对一份"未来 spec" — 期望 ConsoleApp 暴露:
-    - run_batch([dict, ...]) 接受 list-of-dicts (现在只接受 file_path)
-    - run_batch_file(path) 单独方法
-    - export_history(path, fmt) 不存在
-    - session.mode / session.top_k / session.attachments 状态机不存在
-    - parse_input("/mode agent") + handle_command() 命令模式不存在
-    - execute_request() / build_request() / history_store 不存在
-
-    要让这些测试通过 = 实现一整套增强控制台 UX, 是个独立 feature,
-    不在 "修单测" 范畴. 跳过等真正实现该 feature 时再启用.
-"""
+"""console_app 批处理模式测试 (Task T #54: 启用增强 UX 后回归)."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
-
 from console_app_module.core.impl import ConsoleApp
-
-pytestmark = pytest.mark.skip(
-    reason="ConsoleApp 增强 UX (session/run_batch_file/export_history) 未实现, "
-           "见模块 docstring; Task Q 不在此范围"
-)
 
 
 class DummyHandler:

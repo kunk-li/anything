@@ -1,13 +1,7 @@
-"""console_app 命令模式测试 (/mode, /topk, /attach...). 见 test_batch_mode.py 跳过说明."""
+"""console_app 命令模式测试 (Task T #54: /mode, /topk, /attach...)."""
 from __future__ import annotations
 
-import pytest
-
 from console_app_module.core.impl import ConsoleApp
-
-pytestmark = pytest.mark.skip(
-    reason="ConsoleApp 命令模式 (session 状态机 + parse_input + handle_command) 未实现"
-)
 
 
 class DummyHandler:
