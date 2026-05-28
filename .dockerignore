@@ -1,0 +1,35 @@
+# Docker 构建忽略 — 加速 + 防泄漏
+.git
+.github
+.gitignore
+.idea
+.vscode
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# 持久化数据 (容器内由 volume 挂载, 不打镜像)
+run/documents/
+run/vector_store/
+run/state_store/
+run/uploads/
+run/source_docs/
+run/last_*.txt
+run/test_*.png
+
+# 本地敏感配置 (永远别打进镜像)
+.env
+.env.local
+*.pem
+*.key
+
+# 文档/构建产物
+docs/
+*.md
+benchmarks/baseline.json

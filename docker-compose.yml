@@ -1,0 +1,60 @@
+# ============================================================
+# Anything — RAG & Agent — docker-compose
+#
+# 快速启动:
+#   1. 复制 .env.example -> .env, 填 API key (可选)
+#   2. docker-compose up --build
+#   3. 浏览器打开 http://localhost:8000/
+#
+# 数据持久化: ./run/{documents,vector_store,state_store,uploads}
+# 这些目录会挂到容器内, 重启容器数据不丢。
+#
+# 可选: ollama 本地大模型 (默认不启用, 想用就 docker-compose --profile ollama up)
+# ============================================================
+
+services:
+
+  anything:
+    build: .
+    image: anything:latest
+    container_name: anything
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据 (相对路径基于 docker-compose.yml 所在目录)
+      - ./run/documents:/app/run/documents
+      - ./run/vector_store:/app/run/vector_store
+      - ./run/state_store:/app/run/state_store
+      - ./run/uploads:/app/run/uploads
+      - ./run/source_docs:/app/run/source_docs  # 给 index_build 用
+    environment:
+      # 从 .env 读 (或这里直接设)
+      ANYTHING_DEV_MODE: "1"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      API_KEY_1: "${API_KEY_1:-devkey}"
+    # 健康检查跟 Dockerfile 一致
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # 可选: 本地 Ollama LLM 服务 (用 OllamaChatAdapter 时启用)
+  # 启动: docker-compose --profile ollama up
+  ollama:
+    image: ollama/ollama:latest
+    container_name: anything-ollama
+    profiles: ["ollama"]
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  ollama_models:
+    driver: local
