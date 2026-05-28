@@ -652,14 +652,27 @@ class ApiService:
                     )
                     return
 
-                # 5. 切片发送 answer (按 ~20 char 一片, 模拟流式)
+                # 5. 切片发送 answer (打字感 simulated streaming)
+                # 让流式视觉真实可感: chunk_size 小 + interval 长。
+                # 默认目标 ~6-8s 流完 (跟用户阅读速度匹配, 不被甩开)。
+                # 真实 LLM token streaming 升级后, 这里直接跟 LLM stream generator。
                 data = result.get("data") or {}
                 answer = str(data.get("answer") or "")
-                chunk_size = 20
+                if answer:
+                    # 自适应 chunk: 总文本越长, 单片越大 (避免短文本看太慢, 长文本看太久)
+                    target_total_ms = 6000  # 流完总时长
+                    base_interval_ms = 30   # 单片最小间隔
+                    total_len = len(answer)
+                    # 估算需要多少 chunk = target_total_ms / base_interval_ms = 200
+                    target_chunks = max(20, min(200, total_len // 3))
+                    chunk_size = max(1, total_len // target_chunks)
+                    interval = base_interval_ms / 1000.0
+                else:
+                    chunk_size = 1
+                    interval = 0.03
                 for i in range(0, len(answer), chunk_size):
                     await ws.send_json({"type": "chunk", "text": answer[i:i + chunk_size]})
-                    # 5ms 间隔, 让 UI 有"打字感";真实 LLM 流式后这里直接跟 generator
-                    await asyncio.sleep(0.005)
+                    await asyncio.sleep(interval)
 
                 # 6. 发 metadata (citations / chunks / steps)
                 meta_payload = {
