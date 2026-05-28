@@ -1083,24 +1083,42 @@ class SimpleAgent(BaseAgent):
         return f"{self.session_prefix}_{uuid.uuid4().hex[:12]}"
 
     def _summarize_tool_output(self, output: Any) -> str:
-        """将工具输出压缩为简短摘要"""
+        """将工具输出压缩为简短摘要 (给 LLM 看 + 给前端展示).
+
+        长度上限 2000 — 给前端足够空间展示完整 description / answer,
+        同时不让 LLM 上下文爆掉 (2000 char ~ 600 token, 远低于上下文窗口)。
+        优先级: data.description > data.answer > data.text > data.content > 顶层 answer/text/content > 原 dict 序列化
+        """
+        _LIMIT = 2000
+
         if isinstance(output, dict):
             if "data" in output and isinstance(output["data"], dict):
                 data = output["data"]
+                # image_describe / wikipedia 等工具用 description
+                if "description" in data:
+                    return str(data["description"])[:_LIMIT]
                 if "answer" in data:
-                    return str(data["answer"])[:80]
+                    return str(data["answer"])[:_LIMIT]
                 if "text" in data:
-                    return str(data["text"])[:80]
+                    return str(data["text"])[:_LIMIT]
                 if "content" in data:
-                    return str(data["content"])[:80]
+                    return str(data["content"])[:_LIMIT]
+                if "summary" in data:
+                    return str(data["summary"])[:_LIMIT]
+                # 没有上面任何字段时, 把整个 data 序列化 (保留结构信息给 LLM)
+                try:
+                    import json as _json
+                    return _json.dumps(data, ensure_ascii=False)[:_LIMIT]
+                except Exception:
+                    return str(data)[:_LIMIT]
             if "answer" in output:
-                return str(output["answer"])[:80]
+                return str(output["answer"])[:_LIMIT]
             if "text" in output:
-                return str(output["text"])[:80]
+                return str(output["text"])[:_LIMIT]
             if "content" in output:
-                return str(output["content"])[:80]
-            return str(output)[:80]
-        return str(output)[:80]
+                return str(output["content"])[:_LIMIT]
+            return str(output)[:_LIMIT]
+        return str(output)[:_LIMIT]
 
     def _handle_exception(
             self,
