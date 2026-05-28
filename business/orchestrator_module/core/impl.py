@@ -92,13 +92,13 @@ class SimpleOrchestrator(BaseOrchestrator):
             return self._handle_exception(e, trace_id=trace_id, request=request)
 
     def route_stream(self, request: Dict[str, Any]):
-        """流式路由 generator (Task #44).
+        """流式路由 generator (Task #44 + #48).
 
-        仅当 type=rag 且 rag_runner 支持 run_stream 时, yield 真实 token 流;
-        其他类型 (agent/hybrid) yield NotImplemented 让 handler 降级到 route()。
+        type=rag   -> yield from rag_runner.run_stream (LLM SSE 真实流)
+        type=agent -> yield from agent_runner.run_stream (ReAct 每步即时 yield)
+        type=hybrid -> 暂时降级为 rag (本期不实现 hybrid stream)
 
-        Event 形态:
-          {type: 'meta'|'chunk'|'done'|'error', ...}
+        Event 形态: {type: 'meta'|'thought'|'action'|'observation'|'chunk'|'done'|'error', ...}
         """
         request_type = (request.get("type") or "rag").lower()
         if request_type == "rag":
@@ -108,9 +108,16 @@ class SimpleOrchestrator(BaseOrchestrator):
                 return
             yield from self.rag_runner.run_stream(dict(request))
             return
-        # 其他类型不支持流式
+        if request_type == "agent":
+            if self.agent_runner is None or not hasattr(self.agent_runner, "run_stream"):
+                yield {"type": "error", "code": "AGENT_RUN_FAILED",
+                       "message": "agent_runner 未支持流式"}
+                return
+            yield from self.agent_runner.run_stream(dict(request))
+            return
+        # hybrid / 未知 — 暂未支持
         yield {"type": "error", "code": "BAD_REQUEST",
-               "message": f"流式当前仅支持 type=rag, 收到: {request_type}"}
+               "message": f"流式当前未支持 type={request_type}"}
 
     def _execute_rag(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """执行 RAG 请求"""

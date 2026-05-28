@@ -192,11 +192,15 @@ const ApiClient = (() => {
             let msg;
             try { msg = JSON.parse(ev.data); } catch { return; }
             switch (msg.type) {
-                case 'start':    handlers.onStart && handlers.onStart(msg); break;
-                case 'chunk':    handlers.onChunk && handlers.onChunk(msg.text || ''); break;
-                case 'metadata': handlers.onMetadata && handlers.onMetadata(msg); break;
-                case 'done':     handlers.onDone && handlers.onDone(msg); break;
-                case 'error':    handlers.onError && handlers.onError(msg); break;
+                case 'start':       handlers.onStart && handlers.onStart(msg); break;
+                case 'chunk':       handlers.onChunk && handlers.onChunk(msg.text || ''); break;
+                case 'metadata':    handlers.onMetadata && handlers.onMetadata(msg); break;
+                // Task #48: Agent ReAct 思维链
+                case 'thought':     handlers.onThought && handlers.onThought(msg); break;
+                case 'action':      handlers.onAction && handlers.onAction(msg); break;
+                case 'observation': handlers.onObservation && handlers.onObservation(msg); break;
+                case 'done':        handlers.onDone && handlers.onDone(msg); break;
+                case 'error':       handlers.onError && handlers.onError(msg); break;
             }
         });
         ws.addEventListener('close', (ev) => {

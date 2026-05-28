@@ -941,6 +941,48 @@ body.has-drag .chat-pane::before {
     color: var(--accent);
     font-weight: 600;
 }
+
+/* ============== ReAct trace 思维链 (Task #48) ============== */
+.react-step { animation: slideIn 0.25s ease; }
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(-4px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+.react-thought {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: rgba(108, 139, 245, 0.08);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+.react-action {
+    margin-top: 4px;
+    padding: 5px 10px;
+    background: rgba(250, 204, 21, 0.08);
+    border-left: 3px solid var(--warning);
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    word-break: break-all;
+}
+.react-observation {
+    margin-top: 4px;
+    padding: 5px 10px;
+    border-left: 3px solid var(--success);
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: rgba(74, 222, 128, 0.06);
+    font-family: var(--mono);
+}
+.react-observation.fail {
+    border-left-color: var(--danger);
+    background: rgba(248, 113, 113, 0.06);
+}
 .step-input {
     background: var(--code-bg);
     padding: 8px;

@@ -635,8 +635,9 @@ class ApiService:
                 start_t = time.time()
                 loop = asyncio.get_event_loop()
                 req_type = (body.get("type") or "rag").lower()
+                # rag + agent 都支持真实流式 (Task #44 + #48); hybrid 留给后续
                 can_stream = (
-                    req_type == "rag"
+                    req_type in ("rag", "agent")
                     and hasattr(self.handler, "handle_stream")
                 )
 
@@ -691,10 +692,15 @@ class ApiService:
                                 "type": "metadata",
                                 "citations": evt.get("citations") or [],
                                 "retrieved_chunks": evt.get("retrieved_chunks") or [],
-                                "steps": [],
+                                # Task #48: Agent stream 的 meta 含 steps + tool_results_summary
+                                "steps": evt.get("steps") or [],
+                                "tool_results_summary": evt.get("tool_results_summary") or [],
                             })
                         elif etype == "chunk":
                             await ws.send_json({"type": "chunk", "text": evt.get("text", "")})
+                        elif etype in ("thought", "action", "observation"):
+                            # Task #48: Agent ReAct 思维链事件直接透传给前端
+                            await ws.send_json(evt)
                         elif etype == "done":
                             await ws.send_json({
                                 "type": "done",

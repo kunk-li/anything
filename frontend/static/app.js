@@ -789,6 +789,9 @@
             let metaCitations = [];
             let metaRetrieved = [];
             let metaSteps = [];
+            // Task #48: Agent ReAct 思维链, 实时累积每步 trace
+            const reactTrace = [];  // [{iteration, thought, action, observation}]
+            let lastIter = null;
 
             // 1. 先把占位消息切到"流式渲染"态: 显示文本节点 + 光标
             updateMessage(placeholderId, {
@@ -797,6 +800,10 @@
                 meta: { tenant, mode, code: 'STREAMING' },
                 streaming: true,
             });
+            // 清空侧栏 ReAct trace, 准备实时填充
+            if (mode === 'agent') {
+                renderReactTrace([]);
+            }
 
             activeStream = ApiClient.openStream({
                 onStart: (m) => {
@@ -804,7 +811,6 @@
                 },
                 onChunk: (text) => {
                     accumulated += text;
-                    // 流式增量更新, 不重渲染整个消息 (省 DOM 开销)
                     appendStreamChunk(placeholderId, accumulated);
                 },
                 onMetadata: (m) => {
@@ -813,6 +819,33 @@
                     metaSteps = m.steps || [];
                     renderRetrievedChunks(metaRetrieved);
                     renderAgentSteps(metaSteps);
+                },
+                // Task #48 — ReAct 流式 trace
+                onThought: (m) => {
+                    const iter = m.iteration;
+                    let row = reactTrace.find(r => r.iteration === iter);
+                    if (!row) { row = { iteration: iter }; reactTrace.push(row); }
+                    row.thought = m.text || '';
+                    lastIter = iter;
+                    renderReactTrace(reactTrace);
+                },
+                onAction: (m) => {
+                    const iter = m.iteration;
+                    let row = reactTrace.find(r => r.iteration === iter);
+                    if (!row) { row = { iteration: iter }; reactTrace.push(row); }
+                    row.action = { tool_name: m.tool_name, input: m.input };
+                    renderReactTrace(reactTrace);
+                },
+                onObservation: (m) => {
+                    const iter = m.iteration;
+                    let row = reactTrace.find(r => r.iteration === iter);
+                    if (!row) { row = { iteration: iter }; reactTrace.push(row); }
+                    row.observation = {
+                        tool_name: m.tool_name,
+                        success: m.success,
+                        output_summary: m.output_summary,
+                    };
+                    renderReactTrace(reactTrace);
                 },
                 onDone: (m) => {
                     // 完成 -> 重新渲染 (走 markdown 完整路径)
@@ -1232,6 +1265,67 @@
     }
 
     // ---------- 侧栏:Agent 步骤 ----------
+    /** Task #48: 实时 ReAct 思维链 trace 渲染. 流式过程中每收到一个 thought/action/observation
+     * 都重渲染一次, 让用户看到 LLM "思考过程".
+     * trace: [{iteration, thought?, action?, observation?}, ...]
+     */
+    function renderReactTrace(trace) {
+        if (!els.stepList) return;
+        els.stepList.innerHTML = '';
+        els.stepsCount.textContent = trace.length;
+        if (!trace.length) {
+            els.stepsEmpty.style.display = 'block';
+            return;
+        }
+        els.stepsEmpty.style.display = 'none';
+        trace.forEach(row => {
+            const li = document.createElement('li');
+            li.className = 'step-item react-step';
+
+            const header = document.createElement('div');
+            header.className = 'step-header';
+            const left = document.createElement('span');
+            left.innerHTML = `🧠 Iter ${row.iteration}`;
+            header.appendChild(left);
+            li.appendChild(header);
+
+            // thought (蓝色)
+            if (row.thought) {
+                const t = document.createElement('div');
+                t.className = 'react-thought';
+                t.textContent = '💭 ' + row.thought;
+                li.appendChild(t);
+            }
+
+            // action (橙色)
+            if (row.action) {
+                const a = document.createElement('div');
+                a.className = 'react-action';
+                const inputStr = row.action.input
+                    ? ' ' + JSON.stringify(row.action.input, null, 0).slice(0, 120)
+                    : '';
+                a.textContent = `🔧 ${row.action.tool_name || '?'}${inputStr}`;
+                li.appendChild(a);
+            }
+
+            // observation (绿/红)
+            if (row.observation) {
+                const o = document.createElement('div');
+                o.className = 'react-observation ' + (row.observation.success ? 'ok' : 'fail');
+                const icon = row.observation.success ? '✓' : '✗';
+                const summary = (row.observation.output_summary || '').slice(0, 200);
+                o.textContent = `${icon} ${summary}`;
+                li.appendChild(o);
+            }
+
+            els.stepList.appendChild(li);
+        });
+        // 自动滚动到最新一步
+        requestAnimationFrame(() => {
+            els.stepList.scrollTop = els.stepList.scrollHeight;
+        });
+    }
+
     function renderAgentSteps(steps) {
         els.stepList.innerHTML = '';
         els.stepsCount.textContent = steps.length;
