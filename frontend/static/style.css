@@ -631,7 +631,83 @@ body {
 
 .composer-input-row {
     align-items: stretch;
+    position: relative;
 }
+
+/* 拖拽时整个 composer-input-row 高亮 */
+.composer-input-row.dragover {
+    outline: 2px dashed var(--accent);
+    outline-offset: -4px;
+    background: var(--accent-soft);
+    border-radius: var(--radius);
+}
+.composer-input-row.dragover::after {
+    content: attr(data-drop-hint);
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
+    background: rgba(108, 139, 245, 0.08);
+    pointer-events: none;
+    border-radius: var(--radius);
+}
+
+/* 附件预览区 */
+.composer-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 0 4px;
+}
+.attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px 4px 4px;
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 200px;
+    transition: border-color var(--transition);
+}
+.attachment-chip:hover { border-color: var(--accent); }
+.attachment-chip img {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+}
+.attachment-chip .att-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100px;
+    font-family: var(--mono);
+}
+.attachment-chip .att-status {
+    color: var(--text-faint);
+    font-size: 10px;
+}
+.attachment-chip .att-status.uploading { color: var(--warning); }
+.attachment-chip .att-status.ready    { color: var(--success); }
+.attachment-chip .att-status.failed   { color: var(--danger); }
+.attachment-chip .att-remove {
+    background: transparent;
+    border: none;
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+    line-height: 1;
+}
+.attachment-chip .att-remove:hover { color: var(--danger); }
 #input-text {
     flex: 1;
     min-height: 44px;

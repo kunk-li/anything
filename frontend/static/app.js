@@ -51,6 +51,8 @@
         previewMeta: $('preview-meta'),
         previewText: $('preview-text'),
         streamToggle: $('stream-toggle'),
+        composerInputRow: $('composer-input-row'),
+        composerAttachments: $('composer-attachments'),
         modelsRefresh: $('models-refresh'),
         modelsAdd: $('models-add'),
         modelsTbody: $('models-tbody'),
@@ -76,6 +78,8 @@
         mode: 'rag',              // rag / agent / hybrid
         history: [],
         sending: false,
+        // 待发送的图片附件 [{id, file, previewUrl, status: 'pending'|'uploading'|'ready'|'failed', storedPath?}]
+        pendingAttachments: [],
         settings: {
             baseUrl: '',
             apiKey: '',
@@ -189,11 +193,84 @@
         // 发送
         els.sendBtn.addEventListener('click', send);
         els.inputText.addEventListener('keydown', (e) => {
+            // 中文/日韩输入法 composition 阶段, keyCode 229 + isComposing=true, 不发送
+            if (e.isComposing || e.keyCode === 229) return;
+            // Enter (无 shift) -> 发送; Shift+Enter -> 让 textarea 自然换行
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send();
+                return;
+            }
+            // 保留 Ctrl+Enter (向后兼容老用户习惯)
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
                 send();
             }
         });
+
+        // ========== 拖拽图片到输入框 ==========
+        if (els.composerInputRow) {
+            // 设 data-drop-hint 给 ::after 用
+            const dropHint = () => t('composer.drop.hint');
+            els.composerInputRow.setAttribute('data-drop-hint', dropHint());
+            if (window.I18n) {
+                window.I18n.onChange(() => {
+                    els.composerInputRow.setAttribute('data-drop-hint', dropHint());
+                });
+            }
+
+            ['dragenter', 'dragover'].forEach((evt) => {
+                els.composerInputRow.addEventListener(evt, (e) => {
+                    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
+                        e.preventDefault();
+                        els.composerInputRow.classList.add('dragover');
+                    }
+                });
+            });
+            ['dragleave', 'drop'].forEach((evt) => {
+                els.composerInputRow.addEventListener(evt, (e) => {
+                    if (evt === 'drop') {
+                        e.preventDefault();
+                    } else if (e.target === els.composerInputRow) {
+                        // 仅当离开 composer-input-row 边界才清状态
+                        els.composerInputRow.classList.remove('dragover');
+                    }
+                });
+            });
+            els.composerInputRow.addEventListener('drop', (e) => {
+                els.composerInputRow.classList.remove('dragover');
+                const files = e.dataTransfer && e.dataTransfer.files;
+                if (!files || !files.length) return;
+                let added = 0;
+                for (const f of files) {
+                    if (f.type && f.type.startsWith('image/')) {
+                        addAttachment(f);
+                        added++;
+                    }
+                }
+                if (added === 0) {
+                    toast('error', t('toast.attach.invalid'), '');
+                } else {
+                    toast('success', t('toast.attach.added'), `${added} files`);
+                }
+            });
+
+            // 粘贴板里的图片也接 (Ctrl+V)
+            els.inputText.addEventListener('paste', (e) => {
+                const items = e.clipboardData && e.clipboardData.items;
+                if (!items) return;
+                for (const item of items) {
+                    if (item.type && item.type.startsWith('image/')) {
+                        const f = item.getAsFile();
+                        if (f) {
+                            e.preventDefault();
+                            addAttachment(f);
+                            toast('success', t('toast.attach.added'), f.name || 'pasted-image');
+                        }
+                    }
+                }
+            });
+        }
 
         // tenant_id 失焦时同步到 settings (但不持久化, 持久化在 save 时)
         els.tenantInput.addEventListener('change', () => {
@@ -326,24 +403,165 @@
     }
 
     // ---------- 发送 ----------
+    // ========== 附件管理 ==========
+    function addAttachment(file) {
+        const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const att = {
+                id,
+                file,
+                previewUrl: e.target.result,
+                status: 'pending',
+                storedPath: null,
+            };
+            state.pendingAttachments.push(att);
+            renderAttachments();
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function removeAttachment(id) {
+        state.pendingAttachments = state.pendingAttachments.filter(a => a.id !== id);
+        renderAttachments();
+    }
+
+    function renderAttachments() {
+        if (!els.composerAttachments) return;
+        if (!state.pendingAttachments.length) {
+            els.composerAttachments.hidden = true;
+            els.composerAttachments.innerHTML = '';
+            return;
+        }
+        els.composerAttachments.hidden = false;
+        els.composerAttachments.innerHTML = '';
+        state.pendingAttachments.forEach(a => {
+            const chip = document.createElement('div');
+            chip.className = 'attachment-chip';
+            chip.dataset.id = a.id;
+
+            const img = document.createElement('img');
+            img.src = a.previewUrl;
+            img.alt = a.file.name;
+            chip.appendChild(img);
+
+            const name = document.createElement('span');
+            name.className = 'att-name';
+            name.textContent = a.file.name;
+            name.title = `${a.file.name} (${(a.file.size / 1024).toFixed(1)} KB)`;
+            chip.appendChild(name);
+
+            const statusSpan = document.createElement('span');
+            statusSpan.className = `att-status ${a.status}`;
+            const statusMap = {
+                pending: '⏳',
+                uploading: t('composer.attach.uploading'),
+                ready: '✓',
+                failed: '×',
+            };
+            statusSpan.textContent = statusMap[a.status] || a.status;
+            chip.appendChild(statusSpan);
+
+            const rmBtn = document.createElement('button');
+            rmBtn.className = 'att-remove';
+            rmBtn.title = t('composer.attach.remove');
+            rmBtn.textContent = '×';
+            rmBtn.addEventListener('click', () => removeAttachment(a.id));
+            chip.appendChild(rmBtn);
+
+            els.composerAttachments.appendChild(chip);
+        });
+    }
+
+    /** 把所有 pending 附件上传到后端, 拿到 stored_path 列表 */
+    async function uploadAllAttachments() {
+        const paths = [];
+        for (const att of state.pendingAttachments) {
+            if (att.status === 'ready' && att.storedPath) {
+                paths.push(att.storedPath);
+                continue;
+            }
+            att.status = 'uploading';
+            renderAttachments();
+            try {
+                const { payload, status } = await ApiClient.uploadDocument(att.file);
+                if (status === 200 && payload?.code === 'SUCCESS') {
+                    att.storedPath = payload.data?.stored_path || '';
+                    att.status = 'ready';
+                    paths.push(att.storedPath);
+                } else {
+                    att.status = 'failed';
+                    throw new Error(payload?.message || `HTTP ${status}`);
+                }
+            } catch (e) {
+                att.status = 'failed';
+                renderAttachments();
+                throw new Error(`${att.file.name}: ${e.message}`);
+            }
+        }
+        renderAttachments();
+        return paths;
+    }
+
     async function send() {
         if (state.sending) return;
         const text = els.inputText.value.trim();
-        if (!text) {
+        const hasAttachments = state.pendingAttachments.length > 0;
+        if (!text && !hasAttachments) {
             toast('error', t('toast.input.empty'), t('toast.input.empty.body'));
             return;
         }
         const topK = Math.max(1, Math.min(50, Number(els.topkInput.value) || 5));
-        const mode = state.mode;
+        let mode = state.mode;
         const tenant = (els.tenantInput.value || '').trim() || 'default';
         const useStream = !!(els.streamToggle && els.streamToggle.checked);
 
-        const body = { type: mode, top_k: topK, tenant_id: tenant };
-        if (mode === 'rag') body.query = text;
-        else body.task = text;
+        // 有图片附件 -> 强制 agent 模式 (调 image_describe 工具)
+        if (hasAttachments) {
+            mode = 'agent';
+        }
 
+        const body = { type: mode, top_k: topK, tenant_id: tenant };
+
+        // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
+        let finalText = text;
+        if (hasAttachments) {
+            state.sending = true;
+            els.sendBtn.disabled = true;
+            try {
+                const paths = await uploadAllAttachments();
+                const defaultPrompt = paths.length > 1
+                    ? t('composer.attach.images_default_prompt')
+                    : t('composer.attach.image_default_prompt');
+                const userPart = text || defaultPrompt;
+                const pathList = paths.map(p => `"${p}"`).join(', ');
+                finalText = (
+                    `请使用 image_describe 工具识别以下图片 (按顺序逐张处理), 然后回答用户的问题。\n` +
+                    `图片路径: [${pathList}]\n` +
+                    `用户问题: ${userPart}`
+                );
+            } catch (e) {
+                state.sending = false;
+                els.sendBtn.disabled = false;
+                toast('error', t('toast.attach.upload_fail'), e.message);
+                return;
+            }
+        }
+
+        if (mode === 'rag') body.query = finalText;
+        else body.task = finalText;
+
+        // 用户消息显示原始文本 + 附件个数 (不暴露内部 prompt 拼接)
+        let displayContent = text;
+        if (hasAttachments) {
+            const n = state.pendingAttachments.length;
+            const defaultPrompt = n > 1
+                ? t('composer.attach.images_default_prompt')
+                : t('composer.attach.image_default_prompt');
+            displayContent = (text || defaultPrompt) + `\n📎 ${n} 张图片`;
+        }
         // 加用户消息
-        addMessage({ role: 'user', mode, content: text, ts: Date.now() });
+        addMessage({ role: 'user', mode, content: displayContent, ts: Date.now() });
         // 占位 assistant 消息
         const placeholderId = addMessage({
             role: 'assistant', mode, content: '', loading: true, ts: Date.now(),
@@ -361,6 +579,12 @@
         }
         state.sending = false;
         els.sendBtn.disabled = false;
+
+        // 发送完成后清空附件 (无论成功失败都清, 失败的已经在 UI 上标红)
+        if (state.pendingAttachments.length) {
+            state.pendingAttachments = [];
+            renderAttachments();
+        }
     }
 
     async function sendOnce(body, placeholderId, { tenant, mode }) {

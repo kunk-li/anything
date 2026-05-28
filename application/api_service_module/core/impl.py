@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -341,7 +342,9 @@ class ApiService:
         @self.app.exception_handler(Exception)
         async def global_exception_handler(request: Request, exc: Exception):
             trace_id = getattr(request.state, "trace_id", None) or self._generate_trace_id()
-            self.logger.error(f"全局异常：trace_id={trace_id}, error={str(exc)}", exc_info=True)
+            self.logger.error(
+                f"全局异常: trace_id={trace_id}, error={exc}\n{traceback.format_exc()}"
+            )
             return JSONResponse(
                 status_code=500,
                 content={
@@ -685,7 +688,7 @@ class ApiService:
                 # 客户端主动断开, 静默
                 pass
             except Exception as e:
-                self.logger.error(f"[ws] /invoke/stream 异常: {e}", exc_info=True)
+                self.logger.error(f"[ws] /invoke/stream 异常: {e}\n{traceback.format_exc()}")
                 try:
                     await ws.send_json({
                         "type": "error", "code": "UNKNOWN_ERROR",
@@ -797,8 +800,8 @@ class ApiService:
                 except Exception as e:
                     # 索引失败不阻塞上传成功 (文件已落盘), 仅 ERROR 日志
                     self.logger.error(
-                        f"[upload+index] indexing failed for {file.filename}: {e}",
-                        exc_info=True,
+                        f"[upload+index] indexing failed for {file.filename}: {e}\n"
+                        f"{traceback.format_exc()}"
                     )
                     response_data["index_error"] = str(e)
 
@@ -1029,7 +1032,7 @@ class ApiService:
             try:
                 models = self.llm_service.list_models(mask_keys=True)
             except Exception as e:
-                self.logger.error(f"list_models failed: {e}", exc_info=True)
+                self.logger.error(f"list_models failed: {e}\n{traceback.format_exc()}")
                 return JSONResponse(
                     status_code=500,
                     content={
@@ -1124,7 +1127,7 @@ class ApiService:
                     headers={"X-Request-Id": trace_id},
                 )
             except Exception as e:
-                self.logger.error(f"register_model failed: {e}", exc_info=True)
+                self.logger.error(f"register_model failed: {e}\n{traceback.format_exc()}")
                 return JSONResponse(
                     status_code=500,
                     content={
