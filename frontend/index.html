@@ -363,6 +363,16 @@
     <script src="/static/api.js"></script>
     <script src="/static/i18n.js"></script>
     <script src="/static/markdown.js"></script>
+
+    <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
+         加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
+    <script src="/static/modules/ui-helpers.js"></script>
+    <script src="/static/modules/export.js"></script>
+    <script src="/static/modules/health.js"></script>
+    <script src="/static/modules/upload-manager.js"></script>
+    <script src="/static/modules/admin-panel.js"></script>
+    <script src="/static/modules/models-admin.js"></script>
+
     <script src="/static/app.js"></script>
 </body>
 </html>
