@@ -969,6 +969,61 @@ class LLMService(BaseLLMService):
             return self.cfg.get_default_model(rt)
         return name
 
+    def _record_usage_safe(
+        self, request: "LLMRequest", resp: "LLMResponse", model_name: str
+    ) -> None:
+        """Task Y (#59): 把这次调用喂给 UsageTracker. adapter 没填 tokens 就估算.
+
+        估算规则: 4 字符 ≈ 1 token (业内常用近似). 输入用 input_text,
+        输出用 chat_result / vector_result (count*dim) / multimodal_result.text.
+        """
+        try:
+            from observability_module import get_usage_tracker, get_current_tenant
+        except Exception:
+            return
+        # adapter 已经填了就尊重它
+        prompt_t = resp.prompt_tokens
+        completion_t = resp.completion_tokens
+        if prompt_t is None:
+            input_chars = 0
+            if request.input_text:
+                input_chars += len(request.input_text)
+            if request.batch_input:
+                input_chars += sum(len(s or "") for s in request.batch_input)
+            prompt_t = max(0, input_chars // 4)
+        if completion_t is None:
+            output_chars = 0
+            if resp.chat_result:
+                output_chars += len(resp.chat_result)
+            elif resp.vector_result:
+                # 向量调用没"输出文本", 用 vector 维度 * batch 当作近似 token
+                output_chars = sum(len(v or []) for v in resp.vector_result)
+            elif resp.multimodal_result and resp.multimodal_result.text_result:
+                output_chars += len(resp.multimodal_result.text_result)
+            completion_t = max(0, output_chars // 4)
+        # 回填到 response, 方便上层观察
+        if resp.prompt_tokens is None:
+            resp.prompt_tokens = prompt_t
+        if resp.completion_tokens is None:
+            resp.completion_tokens = completion_t
+        if resp.total_tokens is None:
+            resp.total_tokens = prompt_t + completion_t
+
+        tracker = get_usage_tracker()
+        try:
+            tenant = get_current_tenant()
+        except Exception:
+            tenant = None
+        record = tracker.record(
+            model_name=model_name,
+            prompt_tokens=prompt_t,
+            completion_tokens=completion_t,
+            tenant_id=tenant,
+            trace_id=resp.trace_id,
+        )
+        if resp.cost_usd is None:
+            resp.cost_usd = record.get("cost_usd")
+
     def _get_adapter(self, model_name: str):
         adapter = self.adapters.get(model_name)
         if adapter:
@@ -1009,6 +1064,13 @@ class LLMService(BaseLLMService):
             # 强制带上 trace_id 与 request_info
             resp.trace_id = resp.trace_id or trace_id
             resp.request_info = resp.request_info or request_info
+            # Task Y (#59): token / cost 跟踪
+            # adapter 没填 tokens 就用 4 字符 ≈ 1 token 简易估算 (中文 2 字符 ≈ 1 token,
+            # 平均 3 字符更稳, 但 4 是行业默认; chat_stream 路径目前不进 call_llm 不影响).
+            try:
+                self._record_usage_safe(request, resp, model_name)
+            except Exception as _track_err:
+                self.logger.warning(f"[usage-tracker] 记录失败 (忽略): {_track_err}")
             return resp
         except SystemBaseException as se:
             # 按系统异常码封装

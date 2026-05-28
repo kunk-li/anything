@@ -37,6 +37,12 @@ from .tracing import (
     reset_current_tenant,
     get_current_tenant,
 )
+# Task Y (#59): token / cost 跟踪
+from .usage_tracker import (
+    UsageTracker,
+    get_usage_tracker,
+    reset_usage_tracker,
+)
 
 __all__ = [
     "is_otel_available",
@@ -46,4 +52,7 @@ __all__ = [
     "set_current_tenant",
     "reset_current_tenant",
     "get_current_tenant",
+    "UsageTracker",
+    "get_usage_tracker",
+    "reset_usage_tracker",
 ]

@@ -68,3 +68,9 @@ class LLMResponse:
     request_info: Optional[Dict[str, Any]] = None
     cost_time: Optional[float] = None
     trace_id: Optional[str] = None
+    # Task Y (#59): token 用量 + USD 估值 (adapter 从 API 响应抠出来填进)
+    # 没有则为 None — 兼容旧 adapter, 不强制
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None

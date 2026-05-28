@@ -15,7 +15,10 @@ from .base import BaseAgent
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 from observability_module import trace_span
-from common_utils_module import get_project_memory
+from common_utils_module import (
+    get_project_memory, get_hook_registry, BlockedError,
+    get_skill_registry, inject_skills_into_prompt,
+)
 
 
 class SimpleAgent(BaseAgent):
@@ -750,12 +753,66 @@ class SimpleAgent(BaseAgent):
                 session_id=session_id, event_type="react_action", trace_id=trace_id,
                 payload={"iteration": iteration, "tool_name": tool_name},
             )
+
+            # Task Z (#60): pre_tool_call hook — 可拦截 / 改 input / 抛 BlockedError
+            hook_ctx = {
+                "trace_id": trace_id, "session_id": session_id,
+                "iteration": iteration, "phase": "react",
+            }
+            try:
+                new_input = get_hook_registry().fire(
+                    "pre_tool_call", tool_name, tool_input, hook_ctx,
+                )
+                if isinstance(new_input, dict):
+                    tool_input = new_input
+            except BlockedError as be:
+                self.logger.warning(
+                    f"[react] hook 拒绝 tool '{tool_name}': code={be.code} msg={be.message}"
+                )
+                return {
+                    "code": be.code,
+                    "message": be.message,
+                    "data": {
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "blocked_by_hook": True,
+                        "answer": "", "citations": [], "retrieved_chunks": [],
+                        "steps": [], "tool_results_summary": [],
+                    },
+                    "trace_id": trace_id, "retryable": False,
+                    "details": be.details,
+                    "cost_time": round(time.time() - start_time, 3),
+                }
+
             tool_result = self._call_tool_with_retry(
                 step={"step_id": f"react_{iteration}", "tool_name": tool_name, "input_data": tool_input},
                 session_id=session_id,
                 trace_id=trace_id,
                 max_retries=self.max_retries,
             )
+
+            # Task Z (#60): post_tool_call hook — 可看 / 改 result, 不能拦截
+            try:
+                new_result = get_hook_registry().fire(
+                    "post_tool_call", tool_name, tool_input, tool_result, hook_ctx,
+                )
+                if isinstance(new_result, dict):
+                    tool_result = new_result
+            except BlockedError as be:
+                # post hook 抛 BlockedError 也尊重 (主要给审计用)
+                return {
+                    "code": be.code,
+                    "message": be.message,
+                    "data": {"tool_name": tool_name, "blocked_by_hook": True, "answer": "",
+                             "citations": [], "retrieved_chunks": [], "steps": [],
+                             "tool_results_summary": []},
+                    "trace_id": trace_id, "retryable": False,
+                    "details": be.details,
+                    "cost_time": round(time.time() - start_time, 3),
+                }
+            except Exception:
+                pass  # post hook 其他异常吞掉, 继续
+
             tool_results.append(tool_result)
             observation = self._summarize_tool_output(tool_result.get("output"))
             last_observation = tool_result
@@ -868,8 +925,23 @@ class SimpleAgent(BaseAgent):
         except Exception:
             memory_block = ""
 
+        # Task AA (#61): 命中的 skill body 拼到 prompt 顶部
+        skills_block = ""
+        try:
+            matched = get_skill_registry().match(task or "")
+            if matched:
+                # 借用 inject_skills_into_prompt 拼好的格式, 但只截 <Skills>...</Skills> 段
+                wrapped = inject_skills_into_prompt("__TASK_PH__", matched, max_skills=3)
+                # 从 wrapped 抽出 <Skills>...</Skills> 块
+                end = wrapped.find("</Skills>")
+                if end != -1:
+                    skills_block = wrapped[: end + len("</Skills>")] + "\n\n"
+        except Exception:
+            skills_block = ""
+
         return (
             f"{memory_block}"
+            f"{skills_block}"
             f"你是一个 ReAct 模式智能代理。当前任务: {task}\n"
             f"\n"
             f"可用工具:\n" + "\n".join(tool_lines) + "\n"
@@ -880,9 +952,9 @@ class SimpleAgent(BaseAgent):
             f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
             f"\n"
             f"请只输出严格 JSON(不要解释/markdown 围栏),二选一格式:\n"
-            f'{{"thought": "<推理>", "action": {{"tool": "<工具名>", "input": {{...}}}}}}\n'
-            f'或\n'
             f'{{"thought": "<推理>", "final_answer": "<最终回答>"}}\n'
+            f'或\n'
+            f'{{"thought": "<推理>", "action": {{"tool": "<工具名>", "input": {{...}}}}}}\n'
         )
 
     @staticmethod

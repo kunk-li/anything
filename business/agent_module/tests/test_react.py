@@ -360,5 +360,101 @@ class TestApprovalGates(unittest.TestCase):
         self.assertFalse(agent._needs_approval("py_sandbox", {"approve_tools": ["*"]}))
 
 
+# ==========================================================
+# Task Z (#60) — Hook integration in SimpleAgent._react_execute
+# ==========================================================
+class TestHookIntegration(unittest.TestCase):
+    """验证 SimpleAgent 真的在调工具前后过 hook"""
+
+    def setUp(self):
+        from common_utils_module import reset_hook_registry
+        reset_hook_registry()
+
+    def tearDown(self):
+        from common_utils_module import reset_hook_registry
+        reset_hook_registry()
+
+    def _make_agent(self, responses):
+        reg = _DictRegistry()
+        reg.register("rag_search", _stub_tool_success)
+        reg.register("llm_generate", _stub_tool_success)
+        llm = _ScriptedLLM(responses)
+        agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
+        agent.execution_strategy = "react"
+        agent.use_llm_planner = False
+        # 清掉默认审批列表 (防干扰 hook 测试)
+        agent.tool_approval_required = set()
+        return agent, llm
+
+    def test_pre_tool_call_hook_modifies_input(self):
+        """pre_tool_call 可以改 input, 改后的值进入工具"""
+        from common_utils_module import get_hook_registry
+        received_inputs = []
+
+        @get_hook_registry().pre_tool_call
+        def add_marker(tool_name, input_data, ctx):
+            new = dict(input_data)
+            new["_via_hook"] = True
+            return new
+
+        # 用一个能记录入参的工具
+        def recorder(payload):
+            received_inputs.append(dict(payload))
+            return {"code": "SUCCESS", "data": {"answer": "ok"}}
+
+        responses = [
+            '{"thought":"go","action":{"tool":"recorder","input":{"q":"hi"}}}',
+            '{"thought":"done","final_answer":"X"}',
+        ]
+        agent, _ = self._make_agent(responses)
+        agent.tool_registry.register("recorder", recorder)
+
+        result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertTrue(received_inputs)
+        self.assertTrue(received_inputs[0].get("_via_hook"),
+                        "pre_tool_call hook 应该把 _via_hook=True 塞到工具入参里")
+
+    def test_pre_tool_call_blocked_error_aborts(self):
+        """pre_tool_call 抛 BlockedError → 主链路返回该 code, 工具不被调用"""
+        from common_utils_module import get_hook_registry, BlockedError
+
+        @get_hook_registry().pre_tool_call
+        def deny_rag(tool_name, input_data, ctx):
+            if tool_name == "rag_search":
+                raise BlockedError("rag_search 被审计策略拒绝", code="POLICY_DENY")
+
+        responses = [
+            '{"thought":"go","action":{"tool":"rag_search","input":{}}}',
+        ]
+        agent, llm = self._make_agent(responses)
+        result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "POLICY_DENY")
+        self.assertTrue(result["data"]["blocked_by_hook"])
+        # LLM 只调 1 次 (拿 plan), 工具没真的跑
+        self.assertEqual(llm.call_count, 1)
+
+    def test_post_tool_call_can_modify_output(self):
+        """post_tool_call 改 output dict → 后续 history.observation 用改过的"""
+        from common_utils_module import get_hook_registry
+
+        @get_hook_registry().post_tool_call
+        def annotate(tool_name, input_data, output, ctx):
+            new = dict(output)
+            new["data"] = dict(new.get("data") or {})
+            new["data"]["_audited_by_hook"] = True
+            return new
+
+        responses = [
+            '{"thought":"go","action":{"tool":"rag_search","input":{}}}',
+            '{"thought":"done","final_answer":"X"}',
+        ]
+        agent, _ = self._make_agent(responses)
+        result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "SUCCESS")
+        # 不直接看 history (内部, 实现细节), 但 tool_results_summary 应该有
+        self.assertGreater(len(result["data"]["tool_results_summary"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

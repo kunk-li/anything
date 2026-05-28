@@ -1177,6 +1177,17 @@ class ApiService:
                 "registered_tenants": sorted(set(self._key_to_tenant.values())) if self._key_to_tenant else [],
             }
 
+            # 6. Task Y (#59): Token / cost 滚动汇总
+            try:
+                from observability_module import get_usage_tracker
+                snap = get_usage_tracker().snapshot()
+                # 截断 recent 列表节省体积 (admin 面板默认显示 top 10)
+                snap["recent"] = (snap.get("recent") or [])[:10]
+                data["usage"] = snap
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 usage tracker 失败: {e}")
+                data["usage"] = None
+
             return JSONResponse(
                 status_code=200,
                 content={
