@@ -48,6 +48,7 @@ class _BaseHTTPAdapterMixin:
         SSE 协议每行 'data: {json}' 或 'data: [DONE]', 解析 choices[0].delta.content。
         DashScope / DeepSeek / Moonshot / 其他 OpenAI 兼容 endpoint 都走此格式。
         """
+        import json as _json
         resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
         resp.raise_for_status()
         for raw_line in resp.iter_lines(decode_unicode=True):
@@ -60,17 +61,84 @@ class _BaseHTTPAdapterMixin:
             if not data_str or data_str == "[DONE]":
                 continue
             try:
-                obj = __import__("json").loads(data_str)
+                obj = _json.loads(data_str)
             except Exception:
                 continue
             choices = obj.get("choices") or []
             if not choices:
                 continue
-            # 优先 delta.content (流式 chunk), 兜底 message.content (有时也会出现)
+            # 优先 delta.content (流式 chunk), 兜底 message.content
             delta = choices[0].get("delta") or {}
             content = delta.get("content")
             if content:
                 yield content
+
+    def _post_stream_anthropic(
+        self, url: str, headers: Dict[str, str],
+        payload: Dict[str, Any], timeout: int,
+    ):
+        """Anthropic Messages API SSE 流式 generator.
+
+        Anthropic event format 跟 OpenAI 不一样, 每个事件块多行:
+            event: content_block_delta
+            data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}
+
+        我们只关心 content_block_delta 事件里 delta.text_delta, 其他 (message_start /
+        content_block_stop / message_stop) 忽略。
+        """
+        import json as _json
+        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
+        resp.raise_for_status()
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data_str = line[5:].strip()
+            if not data_str:
+                continue
+            try:
+                obj = _json.loads(data_str)
+            except Exception:
+                continue
+            if obj.get("type") != "content_block_delta":
+                continue
+            delta = obj.get("delta") or {}
+            if delta.get("type") in ("text_delta", "text"):
+                text = delta.get("text")
+                if text:
+                    yield text
+
+    def _post_stream_ollama(
+        self, url: str, headers: Dict[str, str],
+        payload: Dict[str, Any], timeout: int,
+    ):
+        """Ollama /api/chat 流式 generator. Ollama 用 NDJSON 而非 SSE.
+
+        每行一个完整 JSON:
+            {"model":"llama3","message":{"content":"Hi"},"done":false}
+            {"model":"llama3","message":{"content":""},"done":true,"total_duration":...}
+
+        yield 每个 message.content, 直到 done=true。
+        """
+        import json as _json
+        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
+        resp.raise_for_status()
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line.strip()
+            try:
+                obj = _json.loads(line)
+            except Exception:
+                continue
+            msg = obj.get("message") or {}
+            content = msg.get("content")
+            if content:
+                yield content
+            if obj.get("done"):
+                return
 
 
 class OpenAIVectorAdapter(BaseVectorAdapter, _BaseHTTPAdapterMixin):
@@ -485,6 +553,65 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
             return LLMResponse(code="RAG_RUN_FAILED", message=str(e),
                               cost_time=now_ts() - start, trace_id=trace_id)
 
+    def chat_stream(self, messages: List[Dict[str, Any]], request: LLMRequest):
+        """Anthropic 真实 token 流式 (Task #45).
+
+        Anthropic Messages API stream=true 后:
+          - Header 同 chat_with_context (x-api-key + anthropic-version)
+          - payload 加 "stream": true
+          - SSE 事件 content_block_delta 含 delta.text 增量
+        """
+        if not self.check_config():
+            # mock 降级: chat_with_context + 切片
+            full = self.chat_with_context(messages, request)
+            for i in range(0, len(full), 10):
+                yield full[i:i + 10]
+            return
+
+        # Anthropic 把 system 拆出来
+        system_text = ""
+        api_messages: List[Dict[str, Any]] = []
+        for m in messages:
+            if m.get("role") == "system":
+                system_text = (system_text + "\n" + str(m.get("content", ""))).strip()
+            else:
+                api_messages.append({"role": m["role"], "content": m.get("content", "")})
+
+        url = f"{self.api_base}/v1/messages"
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": self.anthropic_version,
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        p: LLMParam = request.model_param
+        payload: Dict[str, Any] = {
+            "model": self.model_name,
+            "messages": api_messages,
+            "max_tokens": p.max_tokens or 1024,
+            "temperature": p.temperature,
+            "stream": True,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                yield from self._post_stream_anthropic(url, headers, payload, timeout=self.timeout)
+                return
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"[llm_adapter] Anthropic chat_stream attempt {attempt+1} failed: {e}",
+                    logger_name="llm_adapter",
+                )
+                time.sleep(min(2 ** attempt, 8))
+        if last_err:
+            raise last_err
+
 
 class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
     """Ollama 本地大模型适配器 (无需 API key)
@@ -571,6 +698,50 @@ class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         except Exception as e:
             return LLMResponse(code="RAG_RUN_FAILED", message=str(e),
                               cost_time=now_ts() - start, trace_id=trace_id)
+
+    def chat_stream(self, messages: List[Dict[str, Any]], request: LLMRequest):
+        """Ollama 真实 token 流式 (Task #45).
+
+        Ollama /api/chat 用 NDJSON 而非 SSE, payload stream=true (默认行为)。
+        """
+        if not self.check_config():
+            full = self.chat_with_context(messages, request)
+            for i in range(0, len(full), 10):
+                yield full[i:i + 10]
+            return
+
+        url = f"{self.api_base}/api/chat"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        p: LLMParam = request.model_param
+        payload: Dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [{"role": m.get("role"), "content": m.get("content", "")} for m in messages],
+            "stream": True,
+            "options": {
+                "temperature": p.temperature,
+                "num_predict": p.max_tokens if p.max_tokens else -1,
+            },
+        }
+        if p.extra_params:
+            payload.update(p.extra_params)
+
+        last_err: Optional[Exception] = None
+        for attempt in range(self.max_retry):
+            try:
+                yield from self._post_stream_ollama(url, headers, payload, timeout=self.timeout)
+                return
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"[llm_adapter] Ollama chat_stream attempt {attempt+1} failed: {e}",
+                    logger_name="llm_adapter",
+                )
+                time.sleep(min(2 ** attempt, 4))
+        if last_err:
+            raise last_err
 
 
 class LLMService(BaseLLMService):

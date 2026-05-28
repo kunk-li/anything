@@ -128,6 +128,172 @@ class TestOllamaChatAdapter(unittest.TestCase):
         self.assertEqual(captured["h"]["Authorization"], "Bearer proxy-token")
 
 
+class TestStreamingAdapters(unittest.TestCase):
+    """Task #45: 三家 chat_stream 真实 token 流"""
+
+    def test_openai_chat_stream_mock_when_no_key(self):
+        """OpenAI 没 key 时降级 chat_with_context 切片 (仍是 generator)"""
+        from llm_adapter_module.core.impl import OpenAIChatAdapter
+        adapter = OpenAIChatAdapter(
+            model_name="gpt-4o", model_cfg={},
+            common_cfg=_common_cfg(), logger=MagicMock(),
+        )
+        chunks = list(adapter.chat_stream(
+            [{"role": "user", "content": "hi"}],
+            LLMRequest(request_type="CHAT", model_param=LLMParam()),
+        ))
+        self.assertTrue(chunks)
+        joined = "".join(chunks)
+        self.assertIn("mock-chat", joined)
+
+    def test_openai_chat_stream_sse_parsing(self):
+        """OpenAI 有 key 时, 走 SSE 解析"""
+        from llm_adapter_module.core.impl import OpenAIChatAdapter
+        adapter = OpenAIChatAdapter(
+            model_name="gpt-4o",
+            model_cfg={"api_key": "sk-x", "api_base": "https://api.x"},
+            common_cfg=_common_cfg(), logger=MagicMock(),
+        )
+
+        def _fake_stream(url, headers, payload, timeout):
+            assert payload.get("stream") is True
+            assert payload["model"] == "gpt-4o"
+            for tok in ["Hello", ", ", "world", "!"]:
+                yield tok
+
+        with patch.object(adapter, "_post_stream_openai", side_effect=_fake_stream):
+            tokens = list(adapter.chat_stream(
+                [{"role": "user", "content": "hi"}],
+                LLMRequest(request_type="CHAT", model_param=LLMParam(max_tokens=100)),
+            ))
+        self.assertEqual("".join(tokens), "Hello, world!")
+
+    def test_anthropic_chat_stream_payload(self):
+        """Anthropic chat_stream payload 包含 stream + system 拆分"""
+        from llm_adapter_module.core.impl import AnthropicChatAdapter
+        adapter = AnthropicChatAdapter(
+            model_name="claude-3-haiku",
+            model_cfg={"api_key": "sk-ant", "api_base": "https://api.anthropic.com"},
+            common_cfg=_common_cfg(), logger=MagicMock(),
+        )
+        captured = {}
+
+        def _fake_stream(url, headers, payload, timeout):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["payload"] = payload
+            for tok in ["A", "n", "thropic"]:
+                yield tok
+
+        with patch.object(adapter, "_post_stream_anthropic", side_effect=_fake_stream):
+            tokens = list(adapter.chat_stream(
+                [
+                    {"role": "system", "content": "You are X"},
+                    {"role": "user", "content": "Hi"},
+                ],
+                LLMRequest(request_type="CHAT", model_param=LLMParam(max_tokens=256)),
+            ))
+        self.assertEqual("".join(tokens), "Anthropic")
+        self.assertEqual(captured["payload"]["stream"], True)
+        self.assertEqual(captured["payload"]["system"], "You are X")
+        self.assertEqual(captured["headers"]["x-api-key"], "sk-ant")
+        self.assertEqual(captured["headers"]["Accept"], "text/event-stream")
+
+    def test_ollama_chat_stream_payload(self):
+        """Ollama chat_stream payload stream=True, NDJSON"""
+        from llm_adapter_module.core.impl import OllamaChatAdapter
+        adapter = OllamaChatAdapter(
+            model_name="qwen2.5",
+            model_cfg={"api_base": "http://localhost:11434"},
+            common_cfg=_common_cfg(), logger=MagicMock(),
+        )
+        captured = {}
+
+        def _fake_stream(url, headers, payload, timeout):
+            captured["payload"] = payload
+            for tok in ["Q", "wen", " local"]:
+                yield tok
+
+        with patch.object(adapter, "_post_stream_ollama", side_effect=_fake_stream):
+            tokens = list(adapter.chat_stream(
+                [{"role": "user", "content": "hi"}],
+                LLMRequest(request_type="CHAT", model_param=LLMParam(temperature=0.5)),
+            ))
+        self.assertEqual("".join(tokens), "Qwen local")
+        self.assertEqual(captured["payload"]["stream"], True)
+        self.assertEqual(captured["payload"]["options"]["temperature"], 0.5)
+
+
+class TestSSEParsers(unittest.TestCase):
+    """直接测 _post_stream_openai / _post_stream_anthropic / _post_stream_ollama
+    的 SSE / NDJSON 解析逻辑"""
+
+    def _mock_iter_lines(self, lines):
+        """mock requests.post 返回响应, iter_lines 吐出指定行"""
+        from unittest.mock import MagicMock
+        resp = MagicMock()
+        resp.iter_lines = lambda decode_unicode=True: iter(lines)
+        resp.raise_for_status = lambda: None
+        return resp
+
+    def test_openai_sse_parser(self):
+        from llm_adapter_module.core.impl import _BaseHTTPAdapterMixin
+        adapter = _BaseHTTPAdapterMixin()
+        lines = [
+            'data: {"choices":[{"delta":{"content":"He"}}]}',
+            'data: {"choices":[{"delta":{"content":"llo"}}]}',
+            '',  # 空行应跳过
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}',  # 无 content 跳过
+            'data: {"choices":[{"delta":{"content":"!"}}]}',
+            'data: [DONE]',
+        ]
+        with patch("llm_adapter_module.core.impl.requests.post",
+                   return_value=self._mock_iter_lines(lines)):
+            tokens = list(adapter._post_stream_openai(
+                "http://x", {}, {}, timeout=10,
+            ))
+        self.assertEqual("".join(tokens), "Hello!")
+
+    def test_anthropic_sse_parser(self):
+        from llm_adapter_module.core.impl import _BaseHTTPAdapterMixin
+        adapter = _BaseHTTPAdapterMixin()
+        # Anthropic 多事件结构, 我们只挑 content_block_delta
+        lines = [
+            'event: message_start',
+            'data: {"type":"message_start","message":{}}',
+            'event: content_block_delta',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"He"}}',
+            'event: content_block_delta',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"llo"}}',
+            'event: message_stop',
+            'data: {"type":"message_stop"}',
+        ]
+        with patch("llm_adapter_module.core.impl.requests.post",
+                   return_value=self._mock_iter_lines(lines)):
+            tokens = list(adapter._post_stream_anthropic(
+                "http://x", {}, {}, timeout=10,
+            ))
+        self.assertEqual("".join(tokens), "Hello")
+
+    def test_ollama_ndjson_parser(self):
+        from llm_adapter_module.core.impl import _BaseHTTPAdapterMixin
+        adapter = _BaseHTTPAdapterMixin()
+        lines = [
+            '{"message":{"content":"He"},"done":false}',
+            '{"message":{"content":"llo"},"done":false}',
+            '',  # 空行跳过
+            'not-json',  # 非 JSON 跳过
+            '{"message":{"content":"!"},"done":false}',
+            '{"message":{"content":""},"done":true}',
+        ]
+        with patch("llm_adapter_module.core.impl.requests.post",
+                   return_value=self._mock_iter_lines(lines)):
+            tokens = list(adapter._post_stream_ollama(
+                "http://x", {}, {}, timeout=10,
+            ))
+        self.assertEqual("".join(tokens), "Hello!")
+
+
 class TestLLMServiceRegistersNewAdapters(unittest.TestCase):
     """LLMService._build_adapter mapping 必须能识别新 adapter_class 字符串"""
 
