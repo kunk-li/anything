@@ -46,6 +46,7 @@
         langBtn: $('lang-btn'),
         sidebarToggle: $('sidebar-toggle'),
         sidebar: document.querySelector('.sidebar'),
+        chatPane: document.querySelector('.chat-pane'),
         previewDrawer: $('preview-drawer'),
         previewTitle: $('preview-title'),
         previewMeta: $('preview-meta'),
@@ -209,49 +210,156 @@
         });
 
         // ========== 拖拽图片到输入框 ==========
+        // 关键陷阱:
+        // 1) 必须在 window 级别 preventDefault 兜底, 否则用户拖偏一点
+        //    浏览器会把图片当 URL 打开 (navigate 到 file:// 把整个页面替换)
+        // 2) dragover 必须每次 preventDefault, 否则 drop 事件根本不会触发
+        // 3) textarea 元素自己接受 drop (默认把文件名插进去), 需要我们覆盖
+        // 4) Chrome / Firefox 对 dataTransfer.types 表现不同,
+        //    用 files.length > 0 判断比看 types.includes('Files') 更稳
         if (els.composerInputRow) {
-            // 设 data-drop-hint 给 ::after 用
+            const dropZone = els.composerInputRow;
             const dropHint = () => t('composer.drop.hint');
-            els.composerInputRow.setAttribute('data-drop-hint', dropHint());
+            dropZone.setAttribute('data-drop-hint', dropHint());
             if (window.I18n) {
                 window.I18n.onChange(() => {
-                    els.composerInputRow.setAttribute('data-drop-hint', dropHint());
+                    dropZone.setAttribute('data-drop-hint', dropHint());
                 });
             }
 
-            ['dragenter', 'dragover'].forEach((evt) => {
-                els.composerInputRow.addEventListener(evt, (e) => {
-                    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
-                        e.preventDefault();
-                        els.composerInputRow.classList.add('dragover');
+            // 用 body 上的 data-drop-hint + has-drag class 渲染全屏拖拽 overlay
+            const setBodyHint = () => {
+                document.body.setAttribute('data-drop-hint', dropHint());
+                if (els.chatPane) els.chatPane.setAttribute('data-drop-hint', dropHint());
+            };
+            setBodyHint();
+            if (window.I18n) {
+                window.I18n.onChange(setBodyHint);
+            }
+
+            // window 级兜底: 防止用户拖偏导致浏览器导航
+            // 检测 dataTransfer 含 Files 时显示 overlay
+            let windowDragCounter = 0;
+            window.addEventListener('dragenter', (e) => {
+                if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+                    windowDragCounter++;
+                    document.body.classList.add('has-drag');
+                }
+            });
+            window.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+            });
+            window.addEventListener('dragleave', (e) => {
+                windowDragCounter--;
+                if (windowDragCounter <= 0) {
+                    windowDragCounter = 0;
+                    document.body.classList.remove('has-drag');
+                }
+            });
+            window.addEventListener('drop', (e) => {
+                e.preventDefault();
+                windowDragCounter = 0;
+                document.body.classList.remove('has-drag');
+            });
+
+            // 整个 chat-pane 都接拖拽 (用户拖到消息区也能 work) — 转发到 dropZone 处理
+            if (els.chatPane && els.chatPane !== dropZone) {
+                els.chatPane.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+                    dropZone.classList.add('dragover');
+                });
+                els.chatPane.addEventListener('dragleave', (e) => {
+                    // 只有真正离开 chat-pane 才清状态 (避免子元素冒泡误清)
+                    if (e.target === els.chatPane) {
+                        dropZone.classList.remove('dragover');
                     }
                 });
-            });
-            ['dragleave', 'drop'].forEach((evt) => {
-                els.composerInputRow.addEventListener(evt, (e) => {
-                    if (evt === 'drop') {
-                        e.preventDefault();
-                    } else if (e.target === els.composerInputRow) {
-                        // 仅当离开 composer-input-row 边界才清状态
-                        els.composerInputRow.classList.remove('dragover');
+                els.chatPane.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('dragover');
+                    const files = e.dataTransfer && e.dataTransfer.files;
+                    if (!files || !files.length) return;
+                    let added = 0, invalid = 0;
+                    for (const f of files) {
+                        if (f.type && f.type.startsWith('image/')) {
+                            addAttachment(f);
+                            added++;
+                        } else {
+                            invalid++;
+                        }
+                    }
+                    if (added === 0 && invalid > 0) {
+                        toast('error', t('toast.attach.invalid'), '');
+                    } else if (added > 0) {
+                        toast('success', t('toast.attach.added'),
+                            added === 1 ? '1 file' : `${added} files`);
                     }
                 });
+            }
+
+            // dropZone 内: 显示视觉反馈 + 接收文件
+            let dragCounter = 0;  // 处理拖拽进入/离开子元素 (textarea) 时的 enter/leave 抖动
+            dropZone.addEventListener('dragenter', (e) => {
+                e.preventDefault();
+                dragCounter++;
+                dropZone.classList.add('dragover');
             });
-            els.composerInputRow.addEventListener('drop', (e) => {
-                els.composerInputRow.classList.remove('dragover');
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer) {
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+            });
+            dropZone.addEventListener('dragleave', (e) => {
+                dragCounter--;
+                if (dragCounter <= 0) {
+                    dragCounter = 0;
+                    dropZone.classList.remove('dragover');
+                }
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragCounter = 0;
+                dropZone.classList.remove('dragover');
+
                 const files = e.dataTransfer && e.dataTransfer.files;
-                if (!files || !files.length) return;
+                if (!files || !files.length) {
+                    return;
+                }
                 let added = 0;
+                let invalid = 0;
                 for (const f of files) {
                     if (f.type && f.type.startsWith('image/')) {
                         addAttachment(f);
                         added++;
+                    } else {
+                        invalid++;
                     }
                 }
-                if (added === 0) {
+                if (added === 0 && invalid > 0) {
                     toast('error', t('toast.attach.invalid'), '');
-                } else {
-                    toast('success', t('toast.attach.added'), `${added} files`);
+                } else if (added > 0) {
+                    toast('success', t('toast.attach.added'),
+                        added === 1 ? '1 file' : `${added} files`);
+                }
+            });
+
+            // textarea 自己也要单独处理 (它会拦 drop)
+            // 在 textarea 上 capture 阶段先 preventDefault, 然后转发给 dropZone
+            els.inputText.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+            });
+            els.inputText.addEventListener('drop', (e) => {
+                // textarea 默认会把 text/uri-list 插到光标位置, 阻止它
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    e.preventDefault();
+                    // 事件会冒泡到 dropZone, 由 dropZone 的 listener 处理实际 file 接收
                 }
             });
 
