@@ -247,7 +247,7 @@ class TestSSEParsers(unittest.TestCase):
             'data: {"choices":[{"delta":{"content":"!"}}]}',
             'data: [DONE]',
         ]
-        with patch("llm_adapter_module.core.impl.requests.post",
+        with patch("llm_adapter_module.core.adapters._http_mixin.requests.post",
                    return_value=self._mock_iter_lines(lines)):
             tokens = list(adapter._post_stream_openai(
                 "http://x", {}, {}, timeout=10,
@@ -268,7 +268,7 @@ class TestSSEParsers(unittest.TestCase):
             'event: message_stop',
             'data: {"type":"message_stop"}',
         ]
-        with patch("llm_adapter_module.core.impl.requests.post",
+        with patch("llm_adapter_module.core.adapters._http_mixin.requests.post",
                    return_value=self._mock_iter_lines(lines)):
             tokens = list(adapter._post_stream_anthropic(
                 "http://x", {}, {}, timeout=10,
@@ -286,7 +286,7 @@ class TestSSEParsers(unittest.TestCase):
             '{"message":{"content":"!"},"done":false}',
             '{"message":{"content":""},"done":true}',
         ]
-        with patch("llm_adapter_module.core.impl.requests.post",
+        with patch("llm_adapter_module.core.adapters._http_mixin.requests.post",
                    return_value=self._mock_iter_lines(lines)):
             tokens = list(adapter._post_stream_ollama(
                 "http://x", {}, {}, timeout=10,
