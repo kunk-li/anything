@@ -1055,6 +1055,93 @@ body.has-drag .chat-pane::before {
 .upload-result.success, .job-result.success { color: var(--success); }
 .upload-result.error, .job-result.error { color: var(--danger); }
 
+/* ============== Task P: 多文件上传队列 ============== */
+.upload-queue {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0 0 0;
+    max-height: 280px;
+    overflow-y: auto;
+}
+.queue-item {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    grid-template-areas: "icon name size" "icon detail detail";
+    gap: 2px 8px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev2);
+    border-left: 3px solid var(--border);
+    font-size: 12px;
+    transition: border-color var(--transition);
+}
+.queue-item[data-state="pending"]    { border-left-color: var(--text-dim); }
+.queue-item[data-state="uploading"]  { border-left-color: var(--accent); }
+.queue-item[data-state="indexing"]   { border-left-color: var(--warning); }
+.queue-item[data-state="done"]       { border-left-color: var(--success); }
+.queue-item[data-state="error"]      { border-left-color: var(--danger); }
+.queue-icon {
+    grid-area: icon;
+    font-size: 14px;
+    align-self: center;
+    text-align: center;
+}
+.queue-item[data-state="uploading"] .queue-icon,
+.queue-item[data-state="indexing"]  .queue-icon { animation: spin 1.2s linear infinite; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.queue-name  { grid-area: name; color: var(--text); font-weight: 500; word-break: break-all; }
+.queue-size  { grid-area: size; color: var(--text-dim); font-size: 10px; align-self: center; }
+.queue-detail {
+    grid-area: detail;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    word-break: break-word;
+}
+
+/* ============== Task S: Admin 面板 ============== */
+.admin-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 10px;
+}
+.admin-card {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+}
+.admin-card h4 {
+    margin: 0 0 6px 0;
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.admin-card dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 12px;
+}
+.admin-card dt { color: var(--text-dim); }
+.admin-card dd { margin: 0; color: var(--text); word-break: break-all; }
+.admin-card dd.path { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+.admin-card .badge-on,
+.admin-card .badge-off {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+.admin-card .badge-on  { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.admin-card .badge-off { background: rgba(108, 117, 125, 0.15); color: var(--text-dim); }
+
 /* ============== Buttons ============== */
 
 .small-btn {

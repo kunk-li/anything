@@ -39,9 +39,12 @@
         metricsRefresh: $('metrics-refresh'),
         uploadArea: $('upload-area'),
         fileInput: $('file-input'),
+        uploadQueue: $('upload-queue'),         // Task P: 多文件队列
         uploadResult: $('upload-result'),
         buildIndexBtn: $('build-index-btn'),
         jobResult: $('job-result'),
+        adminRefresh: $('admin-refresh'),       // Task S
+        adminGrid: $('admin-grid'),
         toastContainer: $('toast-container'),
         langBtn: $('lang-btn'),
         sidebarToggle: $('sidebar-toggle'),
@@ -530,9 +533,9 @@
         // 指标刷新
         els.metricsRefresh.addEventListener('click', loadMetrics);
 
-        // 上传
+        // 上传 (Task P: 多文件 + 队列)
         els.fileInput.addEventListener('change', () => {
-            if (els.fileInput.files.length) uploadFile(els.fileInput.files[0]);
+            if (els.fileInput.files.length) uploadFiles(els.fileInput.files);
         });
         ['dragenter', 'dragover'].forEach(evt =>
             els.uploadArea.addEventListener(evt, (e) => {
@@ -547,10 +550,15 @@
             })
         );
         els.uploadArea.addEventListener('drop', (e) => {
-            if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
         });
 
         els.buildIndexBtn.addEventListener('click', triggerBuildIndex);
+
+        // Task S: admin 面板刷新
+        if (els.adminRefresh) {
+            els.adminRefresh.addEventListener('click', refreshAdminStatus);
+        }
     }
 
     function updateComposerPlaceholder() {
@@ -1381,37 +1389,188 @@
         }
     }
 
-    // ---------- 侧栏:上传 ----------
-    async function uploadFile(file) {
-        els.uploadResult.className = 'upload-result';
-        els.uploadResult.textContent = `上传中: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+    // ---------- 侧栏:Admin (Task S) ----------
+    async function refreshAdminStatus() {
+        if (!els.adminGrid) return;
+        els.adminGrid.innerHTML = `<div class="empty-state">${t('admin.empty')}...</div>`;
         try {
-            const { payload, status } = await ApiClient.uploadDocument(file);
-            if (status === 200 && payload?.code === 'SUCCESS') {
-                const d = payload.data || {};
-                els.uploadResult.className = 'upload-result success';
-                let msg = `✓ ${d.stored_path}`;
-                if (d.indexed && d.index_summary) {
-                    const s = d.index_summary;
-                    msg += `\n  已索引: ${s.total_chunks} chunks, ${s.total_vectors} vectors`;
-                } else if (d.index_error) {
-                    msg += `\n  ⚠ 索引失败: ${d.index_error}`;
-                } else {
-                    msg += `\n  (仅落盘, 未触发索引 - index_runner 未注入)`;
-                }
-                els.uploadResult.textContent = msg;
-                toast('success', t('toast.upload.success'),
-                    d.indexed ? `${d.file_name} + indexed` : d.file_name);
-            } else {
-                els.uploadResult.className = 'upload-result error';
-                els.uploadResult.textContent = `× ${payload?.code || status} ${payload?.message || ''}`;
-                toast('error', t('toast.upload.fail'), payload?.message || `HTTP ${status}`);
+            const { payload, status } = await ApiClient.getAdminStatus();
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                els.adminGrid.innerHTML =
+                    `<div class="empty-state error">× ${payload?.code || status} ${payload?.message || ''}</div>`;
+                return;
             }
+            renderAdminStatus(payload.data || {});
         } catch (e) {
-            els.uploadResult.className = 'upload-result error';
-            els.uploadResult.textContent = `× ${e.message}`;
-            toast('error', t('toast.upload.exception'), e.message);
+            els.adminGrid.innerHTML = `<div class="empty-state error">× ${e.message}</div>`;
         }
+    }
+
+    function renderAdminStatus(d) {
+        const html = [];
+        const onOff = (b) => b ? `<span class="badge-on">${t('on')}</span>` : `<span class="badge-off">${t('off')}</span>`;
+
+        // RAG 配置
+        if (d.rag) {
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.rag')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.hybrid')}</dt><dd>${onOff(d.rag.enable_hybrid_search)}</dd>
+                    <dt>${t('admin.kv.rerank')}</dt><dd>${onOff(d.rag.enable_rerank)}</dd>
+                    <dt>${t('admin.kv.rewrite')}</dt><dd>${onOff(d.rag.enable_rewrite)}</dd>
+                    <dt>${t('admin.kv.topk_retrieve')}</dt><dd>${d.rag.top_k_retrieve}</dd>
+                    <dt>${t('admin.kv.topk_rerank')}</dt><dd>${d.rag.top_k_rerank}</dd>
+                    <dt>${t('admin.kv.history_max_turns')}</dt><dd>${d.rag.history_max_turns}</dd>
+                    <dt>${t('admin.kv.rrf_k')}</dt><dd>${d.rag.hybrid_rrf_k}</dd>
+                </dl>
+            </div>`);
+        }
+        // BM25
+        if (d.bm25) {
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.bm25')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.bm25_size')}</dt><dd><strong>${d.bm25.size}</strong></dd>
+                    <dt>${t('admin.kv.bm25_avg')}</dt><dd>${d.bm25.avg_doc_len}</dd>
+                </dl>
+            </div>`);
+        }
+        // Vector DB
+        if (d.vector_db) {
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.vector')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.vec_ntotal')}</dt><dd><strong>${d.vector_db.ntotal}</strong></dd>
+                </dl>
+            </div>`);
+        }
+        // LLM Models
+        if (d.llm_models) {
+            const byType = d.llm_models.by_type || {};
+            const breakdown = Object.entries(byType)
+                .map(([k, v]) => `${k}: ${v}`).join(', ') || '-';
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.llm')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.llm_count')}</dt><dd><strong>${d.llm_models.count}</strong></dd>
+                    <dt>类型分布</dt><dd>${escapeHtml(breakdown)}</dd>
+                </dl>
+            </div>`);
+        }
+        // Uploads
+        if (d.uploads) {
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.uploads')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.upload_count')}</dt><dd><strong>${d.uploads.count}</strong></dd>
+                    <dt>dir</dt><dd class="path">${escapeHtml(d.uploads.dir || '-')}</dd>
+                </dl>
+            </div>`);
+        }
+        // Security
+        if (d.security) {
+            const tenants = (d.security.registered_tenants || []).join(', ') || '-';
+            html.push(`<div class="admin-card">
+                <h4>${t('admin.section.security')}</h4>
+                <dl>
+                    <dt>${t('admin.kv.auth_enabled')}</dt><dd>${onOff(d.security.auth_enabled)}</dd>
+                    <dt>auth_type</dt><dd>${escapeHtml(d.security.auth_type || '-')}</dd>
+                    <dt>${t('admin.kv.tenants')}</dt><dd>${escapeHtml(tenants)}</dd>
+                </dl>
+            </div>`);
+        }
+        els.adminGrid.innerHTML = html.join('');
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[ch]));
+    }
+
+    // ---------- 侧栏:上传 (Task P: 多文件队列) ----------
+    /**
+     * 多文件按顺序上传 (避免并发触发 embedding GPU/CPU 抢占).
+     * 每个文件状态: pending -> uploading -> indexing -> done / error
+     * 前端把进度逐项渲染到 #upload-queue.
+     */
+    async function uploadFiles(fileList) {
+        const files = Array.from(fileList || []).filter(f => f && f.size != null);
+        if (!files.length) return;
+        // 初始化队列项
+        els.uploadQueue.innerHTML = '';
+        const rows = files.map((f, i) => _renderQueueRow(i, f, 'pending'));
+        let okCount = 0;
+        let failCount = 0;
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            _renderQueueRow(i, file, 'uploading', null, rows[i]);
+            try {
+                const { payload, status } = await ApiClient.uploadDocument(file);
+                if (status === 200 && payload?.code === 'SUCCESS') {
+                    const d = payload.data || {};
+                    if (d.indexed && d.index_summary) {
+                        const s = d.index_summary;
+                        _renderQueueRow(i, file, 'done',
+                            `${s.total_chunks} chunks · ${s.total_vectors} vectors`, rows[i]);
+                    } else if (d.index_error) {
+                        _renderQueueRow(i, file, 'error', `索引失败: ${d.index_error}`, rows[i]);
+                        failCount++;
+                        continue;
+                    } else {
+                        _renderQueueRow(i, file, 'done', '仅落盘, 未索引', rows[i]);
+                    }
+                    okCount++;
+                } else {
+                    _renderQueueRow(i, file, 'error',
+                        `${payload?.code || status} ${payload?.message || ''}`, rows[i]);
+                    failCount++;
+                }
+            } catch (e) {
+                _renderQueueRow(i, file, 'error', e.message, rows[i]);
+                failCount++;
+            }
+        }
+        // 汇总
+        els.uploadResult.className = failCount === 0 ? 'upload-result success' : 'upload-result';
+        els.uploadResult.textContent = `批量上传完成: ${okCount} 成功 / ${failCount} 失败 (共 ${files.length})`;
+        if (failCount === 0) {
+            toast('success', t('toast.upload.success'), `${okCount} files`);
+        } else {
+            toast('error', t('toast.upload.fail'), `${failCount} of ${files.length} failed`);
+        }
+    }
+
+    /**
+     * 单文件队列行渲染 / 更新. state ∈ pending/uploading/indexing/done/error.
+     * existingRow 传入时复用 DOM 节点 (更新 state 类 + 副文本); 否则新建并 append.
+     */
+    function _renderQueueRow(index, file, state, detail, existingRow) {
+        const ICONS = { pending: '⋯', uploading: '⬆', indexing: '⚙', done: '✓', error: '✗' };
+        let row = existingRow;
+        if (!row) {
+            row = document.createElement('li');
+            row.className = 'queue-item';
+            row.innerHTML = `
+                <span class="queue-icon"></span>
+                <span class="queue-name"></span>
+                <span class="queue-size"></span>
+                <span class="queue-detail"></span>
+            `;
+            els.uploadQueue.appendChild(row);
+        }
+        row.dataset.state = state;
+        row.querySelector('.queue-icon').textContent = ICONS[state] || '?';
+        row.querySelector('.queue-name').textContent = file.name;
+        row.querySelector('.queue-size').textContent =
+            `${(file.size / 1024).toFixed(1)} KB`;
+        row.querySelector('.queue-detail').textContent = detail || '';
+        return row;
+    }
+
+    // 老 uploadFile 兼容入口 (从拖拽进消息区那条路径还在用)
+    async function uploadFile(file) {
+        return uploadFiles([file]);
     }
 
     async function triggerBuildIndex() {

@@ -103,6 +103,20 @@ const ApiClient = (() => {
         return _doFetch('GET', `/index/job/${encodeURIComponent(jobId)}`);
     }
 
+    // ==================== Admin / 状态 (Task S) ====================
+    /**
+     * GET /admin/status — 拿当前运行期状态:
+     *   { rag: {enable_hybrid_search, top_k_retrieve, ...},
+     *     bm25: {size, avg_doc_len},
+     *     vector_db: {ntotal},
+     *     llm_models: {count, by_type},
+     *     uploads: {count, dir},
+     *     security: {auth_enabled, registered_tenants} }
+     */
+    async function getAdminStatus() {
+        return _doFetch('GET', '/admin/status');
+    }
+
     // ==================== 模型配置 ====================
     /**
      * GET /config/models — 拿当前注册的所有 LLM 模型 (api_key 已脱敏)
@@ -259,6 +273,7 @@ const ApiClient = (() => {
         registerModel,
         deleteModel,
         setDefaultModel,
+        getAdminStatus,
         openStream,
         configure,
         getSettings,

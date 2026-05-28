@@ -417,12 +417,18 @@ def build_application_layer(
                 )
             index_runner = _index_runner
 
+        # Task S: 透传 rag + vector_db 让 /admin/status 能拿到运行期状态
+        rag_for_admin = business_layer.get("rag") if business_layer else None
+        vec_db_for_admin = data_layer.get("vector_db") if data_layer else None
+
         result["api_service"] = ApiService(
             handler=handler,
             deps=deps,
             document_store_factory=_doc_store_factory,
             llm_service=llm_service,
             index_runner=index_runner,
+            rag_runner=rag_for_admin,
+            vector_db=vec_db_for_admin,
         )
 
     if build_console:

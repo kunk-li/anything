@@ -37,6 +37,8 @@ class ApiService:
         document_store_factory=None,
         llm_service=None,
         index_runner=None,
+        rag_runner=None,           # Task S: 读 hybrid 开关 / bm25_retriever 状态
+        vector_db=None,            # Task S: 读 ntotal
     ):
         """
         Args:
@@ -55,6 +57,9 @@ class ApiService:
         # 给 /documents/upload 用 — 上传后立刻跑 parse + chunk + embed + upsert,
         # 让 RAG 检索能立即查到。不传时上传只落盘不索引 (老行为)。
         self.index_runner = index_runner
+        # Task S: 给 /admin/status 用 — 透出 hybrid 开关 / BM25 size / vector_db ntotal
+        self.rag_runner = rag_runner
+        self.vector_db = vector_db
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils
@@ -1068,6 +1073,116 @@ class ApiService:
                         "job_id": job_id,
                         "status": "PENDING",
                     },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": None,
+                },
+                headers={"X-Request-Id": trace_id},
+            )
+
+        # ============== Task S: 管理面板 — 运行期状态总览 ==============
+        @self.app.get("/admin/status")
+        async def admin_status(request: Request):
+            """汇总当前运行期状态: hybrid 开关 / BM25 size / vector_db ntotal /
+            注册模型数 / 上传文件计数. 给前端 admin 面板可视化用 (只读)。
+
+            ⚠️ 生产部署在网关层屏蔽 /admin/* (除非已加 admin RBAC).
+            """
+            trace_id = request.state.trace_id
+            data: Dict[str, Any] = {}
+
+            # 1. RAG 配置 — hybrid 开关 / rerank / rewrite
+            rag = self.rag_runner
+            if rag is not None:
+                data["rag"] = {
+                    "enable_hybrid_search": bool(getattr(rag, "enable_hybrid_search", False)),
+                    "enable_rerank": bool(getattr(rag, "enable_rerank", False)),
+                    "enable_rewrite": bool(getattr(rag, "enable_rewrite", False)),
+                    "top_k_retrieve": int(getattr(rag, "top_k_retrieve", 0)),
+                    "top_k_rerank": int(getattr(rag, "top_k_rerank", 0)),
+                    "history_max_turns": int(getattr(rag, "history_max_turns", 0)),
+                    "hybrid_rrf_k": int(getattr(rag, "hybrid_rrf_k", 60)),
+                }
+                # BM25 size + avg_doc_len
+                bm25 = getattr(rag, "bm25_retriever", None)
+                if bm25 is not None:
+                    data["bm25"] = {
+                        "size": int(getattr(bm25, "size", 0)),
+                        "avg_doc_len": round(float(getattr(bm25, "avg_doc_len", 0.0)), 1),
+                    }
+                else:
+                    data["bm25"] = {"size": 0, "avg_doc_len": 0}
+            else:
+                data["rag"] = None
+                data["bm25"] = None
+
+            # 2. 向量库 ntotal
+            if self.vector_db is not None:
+                ntotal = None
+                # FaissVectorDB 习惯把 ntotal 放在 .ntotal / .index.ntotal / 内部 index
+                for attr in ("ntotal", "size"):
+                    if hasattr(self.vector_db, attr):
+                        val = getattr(self.vector_db, attr)
+                        if callable(val):
+                            try:
+                                val = val()
+                            except Exception:
+                                val = None
+                        if isinstance(val, int):
+                            ntotal = val
+                            break
+                if ntotal is None and hasattr(self.vector_db, "index"):
+                    idx = getattr(self.vector_db, "index", None)
+                    if idx is not None and hasattr(idx, "ntotal"):
+                        ntotal = int(idx.ntotal)
+                data["vector_db"] = {"ntotal": ntotal if ntotal is not None else "unknown"}
+            else:
+                data["vector_db"] = None
+
+            # 3. LLM 模型注册表概览
+            if self.llm_service is not None:
+                try:
+                    models = self.llm_service.list_models(mask_keys=True) or []
+                    data["llm_models"] = {
+                        "count": len(models),
+                        "by_type": {
+                            t: sum(1 for m in models if m.get("request_type") == t)
+                            for t in {m.get("request_type") for m in models if m.get("request_type")}
+                        },
+                    }
+                except Exception:
+                    data["llm_models"] = {"count": 0, "by_type": {}}
+            else:
+                data["llm_models"] = None
+
+            # 4. 上传文件计数 (仅看 upload_dir 顶层文件数, 不递归)
+            upload_dir = self.config.get_config("api_service.upload_dir", "./uploads")
+            try:
+                p = Path(upload_dir)
+                if p.exists() and p.is_dir():
+                    files = [x for x in p.iterdir() if x.is_file()]
+                    data["uploads"] = {
+                        "count": len(files),
+                        "dir": str(p.resolve()),
+                    }
+                else:
+                    data["uploads"] = {"count": 0, "dir": str(p.resolve()) if p else None}
+            except Exception:
+                data["uploads"] = None
+
+            # 5. 安全 / 多租户开关
+            data["security"] = {
+                "auth_enabled": bool(self.auth_enabled),
+                "auth_type": self.auth_type,
+                "registered_tenants": sorted(set(self._key_to_tenant.values())) if self._key_to_tenant else [],
+            }
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "code": "SUCCESS",
+                    "message": "ok",
+                    "data": data,
                     "trace_id": trace_id,
                     "retryable": False,
                     "details": None,

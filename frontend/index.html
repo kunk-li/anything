@@ -103,6 +103,7 @@
                 </button>
                 <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false" data-i18n="sidebar.metrics">系统指标</button>
                 <button class="side-tab" data-tab="upload" role="tab" aria-selected="false" data-i18n="sidebar.upload">文档</button>
+                <button class="side-tab" data-tab="admin" role="tab" aria-selected="false" data-i18n="sidebar.admin">管理</button>
             </nav>
             <div class="side-panels">
                 <!-- 检索结果 -->
@@ -130,19 +131,32 @@
                     <pre class="metrics-text" id="metrics-text" data-i18n="sidebar.metrics.placeholder">点击刷新查看实时指标</pre>
                 </div>
 
-                <!-- 文档上传 -->
+                <!-- 文档上传 (Task P: 多文件批量队列) -->
                 <div class="side-panel" data-panel="upload">
                     <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" hidden />
+                        <input type="file" id="file-input" multiple hidden />
                         <label for="file-input" class="upload-label">
                             <span class="upload-icon">📂</span>
-                            <span data-i18n="sidebar.upload.label">点击或拖拽文件到此上传</span>
-                            <span class="upload-hint" data-i18n="sidebar.upload.hint">支持 md / txt / pdf / docx</span>
+                            <span data-i18n="sidebar.upload.label">点击或拖拽多文件到此上传</span>
+                            <span class="upload-hint" data-i18n="sidebar.upload.hint">支持 md / txt / pdf / docx, 支持多选</span>
                         </label>
                     </div>
+                    <!-- Task P: 多文件队列 + 每文件状态 -->
+                    <ul class="upload-queue" id="upload-queue"></ul>
                     <div class="upload-result" id="upload-result"></div>
                     <button id="build-index-btn" class="small-btn block" data-i18n="sidebar.upload.build">触发索引构建</button>
                     <div class="job-result" id="job-result"></div>
+                </div>
+
+                <!-- Task S: Admin / 运行期状态 -->
+                <div class="side-panel" data-panel="admin">
+                    <div class="metrics-controls">
+                        <button id="admin-refresh" class="small-btn" data-i18n="admin.refresh">刷新</button>
+                        <span class="hint" data-i18n="admin.hint">来自 /admin/status (只读)</span>
+                    </div>
+                    <div class="admin-grid" id="admin-grid">
+                        <div class="empty-state" data-i18n="admin.empty">点击刷新查看运行期状态</div>
+                    </div>
                 </div>
             </div>
         </aside>
