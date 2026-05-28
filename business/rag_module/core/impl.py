@@ -25,6 +25,7 @@ class SimpleRAG(BaseRAG):
         doc_store=None,
         reranker=None,
         query_rewriter=None,
+        state_store=None,  # Task #46: 会话记忆 (从这里读历史 + 写新轮)
         deps: Optional[BasicDeps] = None,
     ):
         # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
@@ -40,6 +41,7 @@ class SimpleRAG(BaseRAG):
         self.doc_store = doc_store
         self.reranker = reranker
         self.query_rewriter = query_rewriter
+        self.state_store = state_store
 
         # 关键配置项走 get_effective_value, 允许环境变量覆盖
         # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
@@ -68,7 +70,68 @@ class SimpleRAG(BaseRAG):
             default=False, value_type=bool,
         )
 
+        # Task #46 会话记忆: 保留最近 N 轮 (默认 6), 0 = 关闭历史
+        self.history_max_turns = self.config.get_effective_value(
+            "rag.history_max_turns", env_var="ANYTHING_RAG_HISTORY_MAX_TURNS",
+            default=6, value_type=int,
+        )
+
         self.logger.info("RAG 模块初始化完成")
+
+    # ============ 会话历史读写 (Task #46) ============
+
+    def _load_history(self, session_id: Optional[str]) -> List[Dict[str, str]]:
+        """从 state_store 读最近 N 轮对话, 返回 [{role,content}, ...] 形式.
+
+        - 未注入 state_store / session_id 为空 / history_max_turns=0 时返回 []
+        - 只保留 role/content 字段, 不带 timestamp 等元信息 (LLM 不需要)
+        - 严格按 N 轮 (= 2N 条 message, user+assistant 各算 1) 截断
+        """
+        if not session_id or not self.state_store or self.history_max_turns <= 0:
+            return []
+        try:
+            state = self.state_store.get_state(session_id)
+        except Exception as e:
+            self.logger.warning(f"读会话状态失败 (忽略): session_id={session_id}, err={e}")
+            return []
+        if not isinstance(state, dict):
+            return []
+        events = state.get("events") or []
+        # 截断到最近 2N 条
+        max_msgs = self.history_max_turns * 2
+        if len(events) > max_msgs:
+            events = events[-max_msgs:]
+        messages: List[Dict[str, str]] = []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            role = ev.get("role")
+            content = ev.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content:
+                messages.append({"role": role, "content": content})
+        return messages
+
+    def _save_turn(
+        self,
+        session_id: Optional[str],
+        user_query: str,
+        assistant_answer: str,
+        trace_id: Optional[str] = None,
+    ) -> None:
+        """把本轮 (user + assistant) 各 append 一个 event 到 state_store. 失败仅 WARN."""
+        if not session_id or not self.state_store:
+            return
+        try:
+            self.state_store.append_event(session_id, {
+                "role": "user", "content": user_query,
+                "trace_id": trace_id, "type": "rag",
+            })
+            self.state_store.append_event(session_id, {
+                "role": "assistant", "content": assistant_answer,
+                "trace_id": trace_id, "type": "rag",
+            })
+        except Exception as e:
+            self.logger.warning(f"写会话状态失败 (忽略): session_id={session_id}, err={e}")
 
     def retrieve(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
         """执行 chunk 级检索并返回标准结果列表(文档第 12 章 6 步链路)。
@@ -173,12 +236,16 @@ class SimpleRAG(BaseRAG):
         """基于 chunk 级检索结果生成回答与 citations"""
         query = self._normalize_query(request.get("query", ""))
         trace_id = request.get("trace_id")
+        session_id = request.get("session_id")
 
         context_chunks = self._assemble_context(retrieved_chunks)
-        prompt = self._build_prompt(query=query, context_chunks=context_chunks)
+        # Task #46: 注入历史
+        history = self._load_history(session_id)
+        prompt = self._build_prompt(query=query, context_chunks=context_chunks, history=history)
 
         self.logger.info(
-            f"RAG 生成开始：trace_id={trace_id}, context_chunks={len(context_chunks)}"
+            f"RAG 生成开始：trace_id={trace_id}, context_chunks={len(context_chunks)}, "
+            f"history_messages={len(history)}"
         )
 
         answer_text = self._call_llm_generate(prompt=prompt, trace_id=trace_id)
@@ -186,6 +253,14 @@ class SimpleRAG(BaseRAG):
 
         # 若模型未输出引用标记，则在答案后补最基础引用
         answer_text = self._ensure_citation_marker(answer_text, citations)
+
+        # Task #46: 落 session 历史
+        self._save_turn(
+            session_id=session_id,
+            user_query=query,
+            assistant_answer=answer_text,
+            trace_id=trace_id,
+        )
 
         self.logger.info(f"RAG 生成完成：trace_id={trace_id}")
         return {
@@ -228,13 +303,16 @@ class SimpleRAG(BaseRAG):
 
             # 2. 拼上下文 + prompt + citations (跟 generate() 同样)
             query = self._normalize_query(request.get("query", ""))
+            session_id = request.get("session_id")
             context_chunks = self._assemble_context(retrieved_chunks)
-            prompt = self._build_prompt(query=query, context_chunks=context_chunks)
+            history = self._load_history(session_id)  # Task #46
+            prompt = self._build_prompt(query=query, context_chunks=context_chunks, history=history)
             citations = self._build_citations(context_chunks)
 
             self.logger.info(
                 f"RAG run_stream: trace_id={trace_id}, "
                 f"context_chunks={len(context_chunks)}, "
+                f"history_messages={len(history)}, "
                 f"prompt_length={len(prompt)}"
             )
 
@@ -289,6 +367,14 @@ class SimpleRAG(BaseRAG):
 
             full_answer = "".join(answer_buffer)
             full_answer = self._ensure_citation_marker(full_answer, citations)
+
+            # Task #46: 流式完成后落 session 历史
+            self._save_turn(
+                session_id=session_id,
+                user_query=query,
+                assistant_answer=full_answer,
+                trace_id=trace_id,
+            )
 
             # 5. 完成事件
             yield {
@@ -552,20 +638,38 @@ class SimpleRAG(BaseRAG):
 
         return selected
 
-    def _build_prompt(self, query: str, context_chunks: List[Dict[str, Any]]) -> str:
-        """构建最小可运行 prompt"""
+    def _build_prompt(
+        self,
+        query: str,
+        context_chunks: List[Dict[str, Any]],
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """构建最小可运行 prompt, 可选携带会话历史 (Task #46).
+
+        history: [{role:"user"|"assistant", content:str}, ...] 按时间顺序, 已经截断到 N 轮。
+        """
         context_parts = []
         for chunk in context_chunks:
             context_parts.append(
                 f"[{chunk.get('chunk_id')}] {chunk.get('content', '')}"
             )
-
         context_text = "\n\n".join(context_parts)
+
+        history_block = ""
+        if history:
+            lines = []
+            for m in history:
+                tag = "用户" if m.get("role") == "user" else "助手"
+                lines.append(f"{tag}: {m.get('content','')}")
+            history_block = "\n\n=== 历史对话 (最近几轮, 仅供理解上下文) ===\n" + "\n".join(lines) + "\n=== 历史结束 ===\n\n"
+
         prompt = (
             "你是一个基于知识片段回答问题的助手。\n"
-            "请严格依据提供的上下文回答，并尽量保留引用标记。\n\n"
-            f"问题：{query}\n\n"
-            f"上下文：\n{context_text}\n\n"
+            "请严格依据提供的上下文回答，并尽量保留引用标记。\n"
+            "如果用户问题涉及之前对话内容, 也可参考下面的历史。\n"
+            f"{history_block}"
+            f"当前问题: {query}\n\n"
+            f"上下文:\n{context_text}\n\n"
             "请给出中文回答。"
         )
         return prompt

@@ -80,3 +80,114 @@ class TestSimpleRAG(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ==========================================
+# Task #46 — 会话记忆
+# ==========================================
+import unittest as _ut
+
+
+class _MemStateStore:
+    """内存版 state_store, 跟 LocalStateStore 同接口"""
+    def __init__(self):
+        self.data = {}
+    def get_state(self, session_id):
+        return self.data.get(session_id)
+    def append_event(self, session_id, event):
+        st = self.data.setdefault(session_id, {"events": []})
+        st["events"].append(dict(event))
+        return True
+    def save_state(self, session_id, state):
+        self.data[session_id] = dict(state)
+        return True
+
+
+class TestRAGHistoryMemory(_ut.TestCase):
+    """RAG 会话记忆 _load_history / _save_turn / _build_prompt 集成"""
+
+    def _make_rag(self, history_max_turns=6):
+        store = _MemStateStore()
+        rag = SimpleRAG(
+            llm_client=MockLLMClient(),
+            state_store=store,
+        )
+        rag.history_max_turns = history_max_turns
+        return rag, store
+
+    def test_history_empty_when_no_session(self):
+        rag, _ = self._make_rag()
+        self.assertEqual(rag._load_history(None), [])
+        self.assertEqual(rag._load_history(""), [])
+
+    def test_history_empty_when_no_state_store(self):
+        rag, _ = self._make_rag()
+        rag.state_store = None
+        self.assertEqual(rag._load_history("sess_x"), [])
+
+    def test_save_then_load_round_trip(self):
+        rag, store = self._make_rag()
+        rag._save_turn("sess_x", "你好", "你好啊!")
+        rag._save_turn("sess_x", "几点了?", "中午 12 点")
+        hist = rag._load_history("sess_x")
+        self.assertEqual(len(hist), 4)
+        self.assertEqual(hist[0], {"role": "user", "content": "你好"})
+        self.assertEqual(hist[1], {"role": "assistant", "content": "你好啊!"})
+        self.assertEqual(hist[2], {"role": "user", "content": "几点了?"})
+        self.assertEqual(hist[3], {"role": "assistant", "content": "中午 12 点"})
+
+    def test_max_turns_truncates(self):
+        rag, _ = self._make_rag(history_max_turns=2)
+        for i in range(5):
+            rag._save_turn("s1", f"q{i}", f"a{i}")
+        hist = rag._load_history("s1")
+        # 最多 2 轮 = 4 条
+        self.assertEqual(len(hist), 4)
+        # 应该是最近 2 轮 (q3/a3, q4/a4)
+        self.assertEqual(hist[0]["content"], "q3")
+        self.assertEqual(hist[-1]["content"], "a4")
+
+    def test_disabled_when_max_turns_zero(self):
+        rag, _ = self._make_rag(history_max_turns=0)
+        rag._save_turn("s2", "q", "a")
+        self.assertEqual(rag._load_history("s2"), [])
+
+    def test_history_isolated_by_session_id(self):
+        rag, _ = self._make_rag()
+        rag._save_turn("sA", "qA", "aA")
+        rag._save_turn("sB", "qB", "aB")
+        self.assertEqual(len(rag._load_history("sA")), 2)
+        self.assertEqual(len(rag._load_history("sB")), 2)
+        self.assertEqual(rag._load_history("sA")[0]["content"], "qA")
+        self.assertEqual(rag._load_history("sB")[0]["content"], "qB")
+
+    def test_build_prompt_includes_history(self):
+        history = [
+            {"role": "user", "content": "刚刚问了什么"},
+            {"role": "assistant", "content": "天气"},
+        ]
+        rag, _ = self._make_rag()
+        prompt = rag._build_prompt(
+            query="再问一次", context_chunks=[], history=history
+        )
+        self.assertIn("历史对话", prompt)
+        self.assertIn("刚刚问了什么", prompt)
+        self.assertIn("再问一次", prompt)
+
+    def test_build_prompt_no_history_block_when_empty(self):
+        rag, _ = self._make_rag()
+        prompt = rag._build_prompt(
+            query="hello", context_chunks=[], history=None
+        )
+        self.assertNotIn("历史对话", prompt)
+
+    def test_state_store_failure_silent(self):
+        """state_store 抛异常不应中断 RAG (只是 WARN 日志)"""
+        class _BadStore:
+            def get_state(self, sid): raise RuntimeError("disk full")
+            def append_event(self, sid, ev): raise RuntimeError("disk full")
+        rag, _ = self._make_rag()
+        rag.state_store = _BadStore()
+        # 不抛异常
+        self.assertEqual(rag._load_history("sess"), [])
+        rag._save_turn("sess", "q", "a")  # 不抛

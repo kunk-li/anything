@@ -199,6 +199,7 @@ def build_business_layer(
         doc_store=data_layer.get("document_store"),
         reranker=reranker,
         query_rewriter=query_rewriter,
+        state_store=data_layer.get("state_store"),  # Task #46 会话记忆
         deps=deps,
     )
 

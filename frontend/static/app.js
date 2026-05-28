@@ -129,6 +129,14 @@
             if (hist) state.history = JSON.parse(hist);
         } catch (_) {}
 
+        // Task #46: 自动生成稳定 session_id (没显式配置时), 后端 RAG 据此读写会话历史
+        if (!state.settings.sessionId) {
+            state.settings.sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+            try {
+                localStorage.setItem('anything_settings', JSON.stringify(state.settings));
+            } catch (_) {}
+        }
+
         els.apiBaseInput.value = state.settings.baseUrl;
         els.apiKeyInput.value = state.settings.apiKey;
         els.sessionInput.value = state.settings.sessionId;
@@ -1079,6 +1087,13 @@
         renderHistory();
         renderRetrievedChunks([]);
         renderAgentSteps([]);
+        // Task #46: 清空对话时也重置 session_id, 让后端不再拿到上轮历史
+        state.settings.sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        try {
+            localStorage.setItem('anything_settings', JSON.stringify(state.settings));
+        } catch (_) {}
+        els.sessionInput.value = state.settings.sessionId;
+        ApiClient.configure(state.settings);
         toast('info', t('toast.history.cleared'), '');
         closeDrawer('settings');
     }
