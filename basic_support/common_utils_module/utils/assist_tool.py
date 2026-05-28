@@ -28,31 +28,38 @@ _FORMAT_MAP: Dict[str, str] = {
     "DD": "%d",
     "HH": "%H",
     "mm": "%M",  # 兼容小写写法
-    "MMIN": "%M",  # 内部占位，避免和月冲突
     "SS": "%S",
 }
+# 内部用的"分钟占位符" — 故意不含 MM 子串, 避免后续 MM(月) 替换误吃。
+# 'ZQQQ' 在时间格式串里不会自然出现, 安全。
+_MIN_PLACEHOLDER = "ZQQQ"
 
 
 def _normalize_format(fmt: str) -> str:
-    """将文档约定的时间格式转换为 Python strftime/strptime 格式。"""
+    """将文档约定的时间格式转换为 Python strftime/strptime 格式。
+
+    实现要点 (历史 bug):
+        原版用 ":MMIN" 当分钟占位, 但 .replace(":MM:", ":MMIN:") 后再调
+        .replace(":MM", ":MMIN") 会把刚注入的 :MMIN: 里的 :MM 又匹配一次,
+        产出 :MMININ:. Python 3.11+ 的 strptime 检测到正则里重复 group name
+        'm' 直接抛 PatternError. 修法: 用一个不含 MM 子串的占位符.
+    """
     if fmt is None or not isinstance(fmt, str) or not fmt.strip():
         raise ValueError("format_ 不能为空")
     f = fmt.strip()
 
-    # 为避免 MM(月) 与 MM(分钟)冲突：约定分钟使用 HH:MM:SS 中的 MM，
-    # 实现上先把 ':MM' 替换成 ':MMIN' 再统一替换
-    f = f.replace(":MM:", ":MMIN:").replace(":MM", ":MMIN")
-    # 统一替换
+    # 1. 先把分钟位置 (':MM' 出现在 HH:MM:SS 上下文里) 换成占位符,
+    #    占位符不含 "MM" 所以不会被后续 MM->月 替换误伤
+    f = f.replace(":MM:", ":" + _MIN_PLACEHOLDER + ":")
+    f = f.replace(":MM",  ":" + _MIN_PLACEHOLDER)
+    # 2. 其它一对一替换
     f = f.replace("YYYY", _FORMAT_MAP["YYYY"])
-    f = f.replace("DD", _FORMAT_MAP["DD"])
-    # 月份替换（剩余的 MM）
-    f = f.replace("MM", _FORMAT_MAP["MM"])
-    # 小时
-    f = f.replace("HH", _FORMAT_MAP["HH"])
-    # 分钟（MMIN）
-    f = f.replace("MMIN", _FORMAT_MAP["MMIN"])
-    # 秒
-    f = f.replace("SS", _FORMAT_MAP["SS"])
+    f = f.replace("DD",   _FORMAT_MAP["DD"])
+    f = f.replace("MM",   _FORMAT_MAP["MM"])      # 月
+    f = f.replace("HH",   _FORMAT_MAP["HH"])
+    f = f.replace("SS",   _FORMAT_MAP["SS"])
+    # 3. 最后把分钟占位符还原成 %M
+    f = f.replace(_MIN_PLACEHOLDER, "%M")
     return f
 
 

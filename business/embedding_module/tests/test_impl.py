@@ -31,6 +31,10 @@ class DummySentenceTransformer:
 
 
 class DummyLLMService:
+    # 接收 deps 等 kwargs 以匹配真实 LLMService(deps=...) 调用
+    def __init__(self, *args, **kwargs):
+        pass
+
     def get_embeddings(self, texts, model_name):
         return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
 

@@ -15,7 +15,9 @@ from ..core.base import BaseTextTool
 
 
 _RE_MULTI_SPACE: Pattern[str] = re.compile(r"\s+")
-_RE_CONTROL: Pattern[str] = re.compile(r"[\x00-\x1f\x7f]")
+# 控制字符: 排除 \t (0x09) / \n (0x0a) / \r (0x0d), 否则它们会被直接删掉,
+# 后续 replace 把 \t/\n 转空格的步骤就拿不到字符了, 导致 "测试\n\t文本" 变 "测试文本"
+_RE_CONTROL: Pattern[str] = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _RE_PHONE: Pattern[str] = re.compile(r"^1\d{10}$")
 _RE_ID18: Pattern[str] = re.compile(r"^\d{17}[\dXx]$")
 _RE_EMAIL: Pattern[str] = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")

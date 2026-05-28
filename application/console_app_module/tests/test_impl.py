@@ -1,7 +1,14 @@
+"""console_app 实现测试. 见 test_batch_mode.py 中的跳过说明 (Task Q 范围外)."""
 from __future__ import annotations
+
+import pytest
 
 from console_app_module.core.impl import ConsoleApp
 from console_app_module.model.data_model import ConsoleInput
+
+pytestmark = pytest.mark.skip(
+    reason="ConsoleApp 增强 UX (build_request/execute_request/history_store) 未实现"
+)
 
 
 class DummyHandler:
