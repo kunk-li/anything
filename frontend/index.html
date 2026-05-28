@@ -301,6 +301,45 @@
         </div>
     </div>
 
+    <!-- ============== Plan Approval Modal (Task DD #64) ============== -->
+    <div class="drawer" id="plan-drawer" hidden>
+        <div class="drawer-backdrop" data-close="plan"></div>
+        <div class="drawer-panel plan-panel">
+            <div class="drawer-header">
+                <h3 data-i18n="plan.modal.title">计划审批</h3>
+                <button class="icon-btn" data-close="plan" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <p class="hint" data-i18n="plan.modal.hint">
+                    Agent 准备执行以下计划. 审批后执行, 或取消返回. (Claude Code Plan Mode 风格)
+                </p>
+                <div class="plan-section">
+                    <h4 data-i18n="plan.modal.thought">💭 思考</h4>
+                    <pre class="plan-text" id="plan-thought"></pre>
+                </div>
+                <div class="plan-section" id="plan-action-section" hidden>
+                    <h4 data-i18n="plan.modal.action">🔧 拟调工具</h4>
+                    <div class="plan-action">
+                        <span class="plan-tool-name" id="plan-tool-name"></span>
+                        <pre class="plan-text plan-input" id="plan-tool-input"></pre>
+                    </div>
+                </div>
+                <div class="plan-section" id="plan-final-section" hidden>
+                    <h4 data-i18n="plan.modal.final">🎯 最终答案 (不调工具)</h4>
+                    <pre class="plan-text" id="plan-final-answer"></pre>
+                </div>
+                <div class="plan-actions">
+                    <button id="plan-approve-btn" class="primary-btn" data-i18n="plan.modal.approve">
+                        ✓ 批准执行
+                    </button>
+                    <button id="plan-cancel-btn" class="secondary-btn" data-i18n="plan.modal.cancel">
+                        ✗ 取消
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============== Toast ============== -->
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 

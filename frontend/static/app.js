@@ -54,6 +54,16 @@
         previewTitle: $('preview-title'),
         previewMeta: $('preview-meta'),
         previewText: $('preview-text'),
+        // Task DD (#64) — Plan approval modal
+        planDrawer: $('plan-drawer'),
+        planThought: $('plan-thought'),
+        planActionSection: $('plan-action-section'),
+        planToolName: $('plan-tool-name'),
+        planToolInput: $('plan-tool-input'),
+        planFinalSection: $('plan-final-section'),
+        planFinalAnswer: $('plan-final-answer'),
+        planApproveBtn: $('plan-approve-btn'),
+        planCancelBtn: $('plan-cancel-btn'),
         streamToggle: $('stream-toggle'),
         planToggle: $('plan-toggle'),               // Task X (#58): Plan mode
         composerInputRow: $('composer-input-row'),
@@ -762,6 +772,41 @@
     async function sendOnce(body, placeholderId, { tenant, mode }) {
         try {
             const { payload, traceId, costTime, status } = await ApiClient.invoke(body);
+
+            // Task DD (#64): PLAN_PENDING → 弹审批 modal
+            if (payload?.code === 'PLAN_PENDING' && payload?.data?.plan) {
+                updateMessage(placeholderId, {
+                    loading: false,
+                    content: t('plan.modal.pending_hint'),
+                    meta: {
+                        code: 'PLAN_PENDING',
+                        traceId: payload?.trace_id || traceId,
+                        costTime: payload?.cost_time != null ? payload.cost_time.toFixed(3) : '',
+                        tenant, mode,
+                    },
+                    streaming: false,
+                });
+                showPlanApprovalModal(payload.data.plan, {
+                    onApprove: async () => {
+                        closeDrawer('plan');
+                        // 把 approve_plan=true 加到同一份 body 重发
+                        const approveBody = { ...body };
+                        approveBody.extra_params = { ...(approveBody.extra_params || {}), approve_plan: true };
+                        updateMessage(placeholderId, {
+                            loading: true,
+                            content: '',
+                            meta: { tenant, mode, code: 'EXECUTING' },
+                        });
+                        await sendOnce(approveBody, placeholderId, { tenant, mode });
+                    },
+                    onCancel: () => {
+                        closeDrawer('plan');
+                        toast('info', t('plan.modal.cancelled'), '');
+                    },
+                });
+                return;  // 不走默认渲染
+            }
+
             updateMessage(placeholderId, {
                 loading: false,
                 content: extractAnswer(payload),
@@ -862,6 +907,38 @@
                         output_summary: m.output_summary,
                     };
                     renderReactTrace(reactTrace);
+                },
+                // Task DD (#64): 流式 plan 事件 — 也弹审批 modal
+                onPlan: (m) => {
+                    const plan = m.plan || {};
+                    // 流式 plan 之后 server 会接着发 done(code=PLAN_PENDING).
+                    // modal 直接弹, Approve 时关闭流 + 重新非流式发 (approve_plan=true)
+                    showPlanApprovalModal(plan, {
+                        onApprove: async () => {
+                            closeDrawer('plan');
+                            try { if (activeStream) activeStream.close(); } catch (_) {}
+                            const approveBody = { ...body };
+                            approveBody.extra_params = { ...(approveBody.extra_params || {}), approve_plan: true };
+                            updateMessage(placeholderId, {
+                                loading: true, content: '',
+                                meta: { tenant, mode, code: 'EXECUTING' },
+                            });
+                            // 重新走流式 (而非 sendOnce) 以保持 UX 一致
+                            sendStream(approveBody, placeholderId, { tenant, mode })
+                                .then(() => resolve());
+                        },
+                        onCancel: () => {
+                            closeDrawer('plan');
+                            try { if (activeStream) activeStream.close(); } catch (_) {}
+                            updateMessage(placeholderId, {
+                                loading: false,
+                                content: t('plan.modal.cancelled'),
+                                meta: { tenant, mode, code: 'PLAN_CANCELLED' },
+                            });
+                            toast('info', t('plan.modal.cancelled'), '');
+                            resolve();
+                        },
+                    });
                 },
                 onDone: (m) => {
                     // 完成 -> 重新渲染 (走 markdown 完整路径)
@@ -1797,6 +1874,63 @@
     function closeDrawer(name) {
         const drawer = $(`${name}-drawer`);
         if (drawer) drawer.hidden = true;
+    }
+
+    // ---------- Plan Approval Modal (Task DD #64) ----------
+    /**
+     * 显示 plan 审批 modal. 用户点 Approve 触发 onApprove(), Cancel 触发 onCancel().
+     * plan: { thought, action?: {tool, input}, final_answer?, summary? }
+     */
+    function showPlanApprovalModal(plan, { onApprove, onCancel }) {
+        if (!els.planDrawer) {
+            // DOM 元素缺失 → fallback to auto-approve (向后兼容旧前端)
+            if (onApprove) onApprove();
+            return;
+        }
+        // 渲染 thought
+        els.planThought.textContent = plan.thought || '(无 thought)';
+
+        // 渲染 action 段
+        if (plan.action && plan.action.tool) {
+            els.planActionSection.hidden = false;
+            els.planFinalSection.hidden = true;
+            els.planToolName.textContent = plan.action.tool;
+            try {
+                els.planToolInput.textContent = JSON.stringify(plan.action.input || {}, null, 2);
+            } catch (e) {
+                els.planToolInput.textContent = String(plan.action.input || '');
+            }
+        } else if (plan.final_answer) {
+            els.planActionSection.hidden = true;
+            els.planFinalSection.hidden = false;
+            els.planFinalAnswer.textContent = plan.final_answer;
+        } else {
+            els.planActionSection.hidden = true;
+            els.planFinalSection.hidden = true;
+        }
+
+        // 绑定一次性 button 处理 (避免重复绑定)
+        const handleApprove = () => {
+            cleanup();
+            if (onApprove) onApprove();
+        };
+        const handleCancel = () => {
+            cleanup();
+            if (onCancel) onCancel();
+        };
+        const handleBackdrop = (e) => {
+            if (e.target && e.target.matches('[data-close="plan"]')) handleCancel();
+        };
+        const cleanup = () => {
+            els.planApproveBtn.removeEventListener('click', handleApprove);
+            els.planCancelBtn.removeEventListener('click', handleCancel);
+            els.planDrawer.removeEventListener('click', handleBackdrop);
+        };
+        els.planApproveBtn.addEventListener('click', handleApprove);
+        els.planCancelBtn.addEventListener('click', handleCancel);
+        els.planDrawer.addEventListener('click', handleBackdrop);
+
+        openDrawer('plan');
     }
 
     // ---------- Toast ----------

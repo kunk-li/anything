@@ -21,6 +21,20 @@ from .utils.skills import (
     reset_skill_registry,
     inject_skills_into_prompt,
 )
+from .utils.quota import (
+    QuotaGuard,
+    get_quota_guard,
+    reset_quota_guard,
+    configure_quota,
+    install_quota_hooks,
+)
+from .utils.audit_log import (
+    AuditLogger,
+    get_audit_logger,
+    reset_audit_logger,
+    configure_audit_logger,
+    install_audit_hooks,
+)
 
 __all__ = [
     "CommonUtils",
@@ -28,4 +42,8 @@ __all__ = [
     "BlockedError", "HookRegistry", "get_hook_registry", "reset_hook_registry",
     "Skill", "SkillRegistry", "get_skill_registry", "reset_skill_registry",
     "inject_skills_into_prompt",
+    "QuotaGuard", "get_quota_guard", "reset_quota_guard",
+    "configure_quota", "install_quota_hooks",
+    "AuditLogger", "get_audit_logger", "reset_audit_logger",
+    "configure_audit_logger", "install_audit_hooks",
 ]

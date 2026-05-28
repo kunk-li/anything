@@ -1142,6 +1142,69 @@ body.has-drag .chat-pane::before {
 .admin-card .badge-on  { background: rgba(74, 222, 128, 0.15); color: var(--success); }
 .admin-card .badge-off { background: rgba(108, 117, 125, 0.15); color: var(--text-dim); }
 
+/* ============== Task DD (#64): Plan 审批 modal ============== */
+.plan-panel { max-width: 720px; }
+.plan-section {
+    margin: 14px 0;
+}
+.plan-section h4 {
+    margin: 0 0 6px 0;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+}
+.plan-text {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+    max-height: 240px;
+    overflow-y: auto;
+    margin: 0;
+}
+.plan-action {
+    background: rgba(250, 204, 21, 0.06);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+}
+.plan-tool-name {
+    display: inline-block;
+    padding: 3px 10px;
+    background: var(--warning);
+    color: #1a1a1a;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+.plan-input {
+    background: transparent;
+    border: none;
+    padding: 8px 0 0 0;
+    max-height: 160px;
+}
+.plan-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+.plan-actions .primary-btn,
+.plan-actions .secondary-btn {
+    flex: 1;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
 /* ============== Buttons ============== */
 
 .small-btn {

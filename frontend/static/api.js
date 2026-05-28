@@ -213,6 +213,8 @@ const ApiClient = (() => {
                 case 'thought':     handlers.onThought && handlers.onThought(msg); break;
                 case 'action':      handlers.onAction && handlers.onAction(msg); break;
                 case 'observation': handlers.onObservation && handlers.onObservation(msg); break;
+                // Task V/DD: Plan mode 事件
+                case 'plan':        handlers.onPlan && handlers.onPlan(msg); break;
                 case 'done':        handlers.onDone && handlers.onDone(msg); break;
                 case 'error':       handlers.onError && handlers.onError(msg); break;
             }
