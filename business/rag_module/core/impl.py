@@ -358,7 +358,11 @@ class SimpleRAG(BaseRAG):
                         "file_name": item.get("file_name"),
                         "chunk_index": item.get("chunk_index"),
                         "score": item.get("score"),
+                        # 可观察性: 透传 rerank_source 让调用方知道 score 是
+                        # 来自 vector_db 原始相似度还是 rerank 加工后的分数
                         "rerank_source": item.get("rerank_source"),
+                        # Task #49: 混合检索时透传 RRF 融合分数
+                        "rrf_score": item.get("rrf_score"),
                     }
                     for item in retrieved_chunks
                 ],
@@ -469,6 +473,8 @@ class SimpleRAG(BaseRAG):
                             # 可观察性: 透传 rerank_source 让调用方知道 score 是
                             # 来自 vector_db 原始相似度还是 rerank 加工后的分数
                             "rerank_source": item.get("rerank_source"),
+                            # Task #49: 混合检索时透传 RRF 融合分数
+                            "rrf_score": item.get("rrf_score"),
                         }
                         for item in retrieved_chunks
                     ],

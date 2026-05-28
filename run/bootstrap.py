@@ -368,10 +368,12 @@ def build_application_layer(
     build_console: bool = False,
     deps: Optional[BasicDeps] = None,
     data_layer: Optional[Dict[str, Any]] = None,
+    business_layer: Optional[Dict[str, Any]] = None,  # Task #49: 复用 bm25_retriever
 ) -> Dict[str, Any]:
     """构建应用层（共享 BasicDeps,按需构建,避免 API 启动时强依赖 ConsoleApp）
 
     data_layer: 可选, 透传给 ApiService 让 /config/models 端点能拿到 LLMService。
+    business_layer: 可选, 透传给 _index_runner 让上传文件自动喂 BM25 索引 (Task #49)。
                 未传时自动 build_data_layer 一次 (跟其他层一样的 DI 共享原则)。
     """
     deps = deps or build_basic_deps()
@@ -456,6 +458,7 @@ def build_api_app():
         build_console=False,
         deps=deps,
         data_layer=data_layer,
+        business_layer=business_layer,
     )
     return app_layer["api_service"].app
 
@@ -481,6 +484,7 @@ def build_all(include_console: bool = False) -> Dict[str, Any]:
         build_console=include_console,
         deps=deps,
         data_layer=data,
+        business_layer=business,
     )
 
     return {

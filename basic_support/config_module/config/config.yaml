@@ -73,6 +73,9 @@ llm:
       api_key: "${OPENAI_API_KEY}"
       api_base: "https://api.openai.com/v1"
 
+rag:
+  enable_hybrid_search: true
+
 agent:
   max_retries: 3
   timeout: 30
