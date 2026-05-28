@@ -14,6 +14,9 @@ class ConsoleSessionConfig:
     renderer: str = "plain"
     attachments: List[str] = field(default_factory=list)
     multiline: bool = False
+    # Task X (#58): plan mode + 工具审批 state, 跟 SimpleAgent.extra_params 对齐
+    plan_only: bool = False
+    approve_tools: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

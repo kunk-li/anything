@@ -5,6 +5,7 @@ Agent 模块具体实现类
 """
 
 import json
+import os
 import re
 import time
 import uuid
@@ -14,6 +15,7 @@ from .base import BaseAgent
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 from observability_module import trace_span
+from common_utils_module import get_project_memory
 
 
 class SimpleAgent(BaseAgent):
@@ -81,7 +83,32 @@ class SimpleAgent(BaseAgent):
             default=5, value_type=int,
         )
 
-        self.logger.info("Agent 模块初始化完成")
+        # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
+        # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
+        # 借鉴 Codex approval modes 模式. 默认拉一份合理基线;
+        # 运维通过 config agent.tool_approval_required 或 env ANYTHING_AGENT_APPROVAL 覆盖.
+        default_dangerous = [
+            "py_sandbox",      # 跑任意 Python, 沙箱后仍是高敏感
+            "http_request",    # 外网调用, 可能泄露 / 计费
+            "file_write",      # 写文件
+            "email_send",      # 发邮件 (业务影响)
+            "shell_exec",      # 假设未来有 shell 工具
+        ]
+        env_approval = os.environ.get("ANYTHING_AGENT_APPROVAL", "")
+        if env_approval:
+            self.tool_approval_required = set(
+                t.strip() for t in env_approval.split(",") if t.strip()
+            )
+        else:
+            cfg = self.config.get_config("agent.tool_approval_required", default_dangerous)
+            if isinstance(cfg, list):
+                self.tool_approval_required = set(str(t) for t in cfg if t)
+            else:
+                self.tool_approval_required = set(default_dangerous)
+
+        self.logger.info(
+            f"Agent 模块初始化完成 (需审批工具: {sorted(self.tool_approval_required)})"
+        )
 
     def register_tool(self, name: str, tool_func: Callable,
                       description: str, input_schema: Dict) -> bool:
@@ -155,6 +182,30 @@ class SimpleAgent(BaseAgent):
                    "message": "LLM 或 tool_registry 不可用"}
             return
 
+        # Task V (#56) 流式版: plan_only=true → 跑一遍拿 plan, yield 给前端就停
+        plan_only = bool(extra_params.get("plan_only", False)) and not bool(
+            extra_params.get("approve_plan", False)
+        )
+        if plan_only:
+            plan_result = self._generate_plan(
+                task=task, available_tools=available_tools, trace_id=trace_id,
+                llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
+            )
+            if plan_result is not None:
+                yield {
+                    "type": "plan",
+                    "plan": plan_result,
+                    "available_tools": available_tools,
+                }
+                yield {
+                    "type": "done",
+                    "code": "PLAN_PENDING",
+                    "cost_time": round(time.time() - start_time, 3),
+                    "message": "请审批后带 approve_plan=true 重提.",
+                }
+                return
+            # plan 失败 → 继续走完整 ReAct
+
         history: List[Dict[str, Any]] = []
         tool_results: List[Dict[str, Any]] = []
         final_answer: Optional[str] = None
@@ -212,6 +263,17 @@ class SimpleAgent(BaseAgent):
                     "input": {k: v for k, v in tool_input.items()
                               if k not in ("trace_id", "session_id", "extra_params")},
                 }
+
+                # Task W (#57): 危险工具审批门槛 (流式版同样守护)
+                if self._needs_approval(tool_name, extra_params):
+                    yield {
+                        "type": "error",
+                        "code": "TOOL_APPROVAL_REQUIRED",
+                        "message": f"工具 '{tool_name}' 需要审批; 请带 extra_params.approve_tools=['{tool_name}'] 重提.",
+                        "tool_name": tool_name,
+                        "required_tools": sorted(self.tool_approval_required),
+                    }
+                    return
 
                 tool_result = self._call_tool_with_retry(
                     step={
@@ -556,6 +618,44 @@ class SimpleAgent(BaseAgent):
         if not available_tools:
             return None
 
+        # ============ Task V (#56): Plan mode 早出 ============
+        # extra_params.plan_only=True 时, 跑 ReAct 第 1 轮拿到 plan (LLM 的
+        # thought + action 或 final_answer), 不执行 action 直接返回. code=PLAN_PENDING.
+        # 用户带 extra_params.approve_plan=true 再次提交则走完整 ReAct.
+        plan_only = bool(extra_params.get("plan_only", False)) and not bool(
+            extra_params.get("approve_plan", False)
+        )
+        if plan_only:
+            plan_result = self._generate_plan(
+                task=task, available_tools=available_tools, trace_id=trace_id,
+                llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
+            )
+            if plan_result is None:
+                # plan 生成失败, 降级到正常 ReAct
+                pass
+            else:
+                self._append_state_event(
+                    session_id=session_id, event_type="plan_generated", trace_id=trace_id,
+                    payload={"plan": plan_result},
+                )
+                return {
+                    "code": "PLAN_PENDING",
+                    "message": "已生成执行计划; 用户审批后带 extra_params.approve_plan=true 重新提交以执行.",
+                    "data": {
+                        "plan": plan_result,
+                        "available_tools": available_tools,
+                        "answer": "",
+                        "citations": [],
+                        "retrieved_chunks": [],
+                        "steps": [],
+                        "tool_results_summary": [],
+                    },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": {"plan_only": True},
+                    "cost_time": round(time.time() - start_time, 3),
+                }
+
         self._append_state_event(
             session_id=session_id, event_type="react_started", trace_id=trace_id,
             payload={"task": task, "max_iterations": self.max_react_iterations},
@@ -612,6 +712,39 @@ class SimpleAgent(BaseAgent):
             tool_input.setdefault("trace_id", trace_id)
             tool_input.setdefault("session_id", session_id)
             tool_input.setdefault("extra_params", extra_params)
+
+            # Task W (#57): 危险工具审批门槛
+            if self._needs_approval(tool_name, extra_params):
+                self.logger.warning(
+                    f"[react] tool '{tool_name}' 需要审批但未通过, 中断: trace_id={trace_id}"
+                )
+                self._append_state_event(
+                    session_id=session_id, event_type="react_approval_required",
+                    trace_id=trace_id,
+                    payload={"iteration": iteration, "tool_name": tool_name},
+                )
+                return {
+                    "code": "TOOL_APPROVAL_REQUIRED",
+                    "message": f"工具 '{tool_name}' 需要审批; 请带 extra_params.approve_tools=['{tool_name}', ...] 重新提交.",
+                    "data": {
+                        "tool_name": tool_name,
+                        "tool_input": {
+                            k: v for k, v in tool_input.items()
+                            if k not in ("trace_id", "session_id", "extra_params")
+                        },
+                        "required_tools": sorted(self.tool_approval_required),
+                        "approved_so_far": list(extra_params.get("approve_tools") or []),
+                        "answer": "",
+                        "citations": [],
+                        "retrieved_chunks": [],
+                        "steps": [],
+                        "tool_results_summary": [],
+                    },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": {"iteration": iteration},
+                    "cost_time": round(time.time() - start_time, 3),
+                }
 
             self._append_state_event(
                 session_id=session_id, event_type="react_action", trace_id=trace_id,
@@ -697,6 +830,9 @@ class SimpleAgent(BaseAgent):
 
         tool_descriptions 是从 registry.describe_all() 拿到的, 优先级最高;
         缺失时退回内置 tool_docs (向后兼容 rag_search / llm_generate)。
+
+        Task U (#55): 顶部注入 ProjectMemory (AGENTS.md / CLAUDE.md) 让 LLM
+        知道项目约定/偏好/架构, 调工具风格更一致。
         """
         tool_descriptions = tool_descriptions or {}
         fallback_docs = {
@@ -721,7 +857,19 @@ class SimpleAgent(BaseAgent):
 
         history_text = "\n".join(history_lines) if history_lines else "(尚无历史)"
 
+        # Task U: 顶部拼项目记忆 (AGENTS.md / CLAUDE.md)
+        memory_block = ""
+        try:
+            mem = get_project_memory().load()
+            if mem:
+                memory_block = (
+                    f"<ProjectMemory>\n{mem.strip()}\n</ProjectMemory>\n\n"
+                )
+        except Exception:
+            memory_block = ""
+
         return (
+            f"{memory_block}"
             f"你是一个 ReAct 模式智能代理。当前任务: {task}\n"
             f"\n"
             f"可用工具:\n" + "\n".join(tool_lines) + "\n"
@@ -775,6 +923,77 @@ class SimpleAgent(BaseAgent):
                 "tool": tool_name,
                 "input": action.get("input") or {},
             },
+        }
+
+    # =========================
+    # Task W (#57): 工具审批门槛
+    # =========================
+    def _needs_approval(self, tool_name: Optional[str], extra_params: Dict[str, Any]) -> bool:
+        """判断该工具是否需要审批但未通过.
+
+        返回 True = 该工具在 tool_approval_required 名单且 extra_params.approve_tools
+                    不包含它 → 应该中断, 返回 TOOL_APPROVAL_REQUIRED.
+        返回 False = 工具不在名单, 或已被 approve, 或工具名为空 → 正常执行.
+        """
+        if not tool_name:
+            return False
+        if tool_name not in self.tool_approval_required:
+            return False
+        approved = extra_params.get("approve_tools") or []
+        if isinstance(approved, str):
+            approved = [approved]
+        if "*" in approved or tool_name in approved:
+            return False
+        return True
+
+    # =========================
+    # Task V (#56): Plan mode — 一次性 LLM 调用产 plan, 不执行 action
+    # =========================
+    def _generate_plan(
+            self,
+            task: str,
+            available_tools: List[str],
+            trace_id: Optional[str],
+            llm_call: Callable[[str], str],
+            tool_descriptions: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """跑一次 ReAct 风格的 LLM 调用, 拿到 plan (thought + action 或 final_answer),
+        不执行任何工具. 失败返回 None.
+
+        plan 结构:
+            {thought: str, action: {tool, input}}   # 准备调工具
+          或
+            {thought: str, final_answer: str}        # LLM 觉得不需要调工具
+
+        前端可用这份 plan 给用户预览 + 审批; 审批通过后带 approve_plan=true 重提.
+        """
+        prompt = self._build_react_prompt(
+            task=task,
+            available_tools=available_tools,
+            history=[],
+            iteration=1,
+            max_iterations=self.max_react_iterations,
+            tool_descriptions=tool_descriptions or {},
+        )
+        try:
+            raw = llm_call(prompt)
+        except Exception as e:
+            self.logger.warning(f"[plan-mode] LLM 调用异常: trace_id={trace_id}, err={e}")
+            return None
+        step = self._parse_react_response(raw, available_tools)
+        if step is None:
+            self.logger.warning(f"[plan-mode] LLM 输出无法解析: trace_id={trace_id}")
+            return None
+        # 返回结构化 plan + 摘要文本 (给前端展示)
+        summary_parts = [f"💭 思考: {step.get('thought', '')}"]
+        if "final_answer" in step:
+            summary_parts.append(f"🎯 直接答: {step['final_answer'][:200]}")
+        elif "action" in step:
+            a = step["action"]
+            summary_parts.append(f"🔧 拟调: {a.get('tool')} {json.dumps(a.get('input') or {}, ensure_ascii=False)[:100]}")
+        return {
+            **step,
+            "summary": "\n".join(summary_parts),
         }
 
     # =========================

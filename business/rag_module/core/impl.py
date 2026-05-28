@@ -12,6 +12,7 @@ from .base import BaseRAG
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 from observability_module import trace_span
+from common_utils_module import get_project_memory
 
 
 class SimpleRAG(BaseRAG):
@@ -737,7 +738,20 @@ class SimpleRAG(BaseRAG):
                 lines.append(f"{tag}: {m.get('content','')}")
             history_block = "\n\n=== 历史对话 (最近几轮, 仅供理解上下文) ===\n" + "\n".join(lines) + "\n=== 历史结束 ===\n\n"
 
+        # Task U (#55): 顶部注入 ProjectMemory (AGENTS.md / CLAUDE.md), 让 RAG
+        # 答案符合项目约定/语言/术语. 失败仅 WARN 不中断主链路.
+        memory_block = ""
+        try:
+            mem = get_project_memory().load()
+            if mem:
+                memory_block = (
+                    f"<ProjectMemory>\n{mem.strip()}\n</ProjectMemory>\n\n"
+                )
+        except Exception as e:
+            self.logger.warning(f"[rag] 加载 ProjectMemory 失败 (忽略): {e}")
+
         prompt = (
+            f"{memory_block}"
             "你是一个基于知识片段回答问题的助手。\n"
             "请严格依据提供的上下文回答，并尽量保留引用标记。\n"
             "如果用户问题涉及之前对话内容, 也可参考下面的历史。\n"

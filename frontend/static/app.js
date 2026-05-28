@@ -55,6 +55,7 @@
         previewMeta: $('preview-meta'),
         previewText: $('preview-text'),
         streamToggle: $('stream-toggle'),
+        planToggle: $('plan-toggle'),               // Task X (#58): Plan mode
         composerInputRow: $('composer-input-row'),
         composerAttachments: $('composer-attachments'),
         imageBtn: $('image-btn'),
@@ -686,6 +687,13 @@
         }
 
         const body = { type: mode, top_k: topK, tenant_id: tenant };
+
+        // Task X (#58): plan mode 注入到 extra_params 让 Agent 走 plan_only 分支
+        const planMode = !!(els.planToggle && els.planToggle.checked);
+        if (planMode) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.plan_only = true;
+        }
 
         // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
         let finalText = text;

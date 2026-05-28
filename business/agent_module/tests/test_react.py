@@ -203,5 +203,162 @@ class TestReActExecute(unittest.TestCase):
         self.assertEqual(result["data"].get("execution_strategy"), "react")
 
 
+# ==========================================================
+# Task V (#56) — Plan mode
+# ==========================================================
+class TestPlanMode(unittest.TestCase):
+    """plan_only=true 时 Agent 只输出 plan, 不执行工具; approve_plan=true 跑全流程"""
+
+    def _make_agent(self, responses):
+        reg = _DictRegistry()
+        reg.register("rag_search", _stub_tool_success)
+        reg.register("llm_generate", _stub_tool_success)
+        llm = _ScriptedLLM(responses)
+        agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
+        agent.execution_strategy = "react"
+        agent.use_llm_planner = False
+        return agent, llm
+
+    def test_plan_only_returns_pending_without_executing(self):
+        """plan_only 模式: LLM 调 1 次拿 plan, 工具不被调用, code=PLAN_PENDING"""
+        responses = [
+            '{"thought":"先检索语料","action":{"tool":"rag_search","input":{"query":"x"}}}',
+        ]
+        agent, llm = self._make_agent(responses)
+        result = agent.execute({
+            "task": "找 x 的资料",
+            "trace_id": "t-plan",
+            "session_id": "s1",
+            "extra_params": {"plan_only": True},
+        })
+        self.assertEqual(result["code"], "PLAN_PENDING")
+        self.assertEqual(llm.call_count, 1)  # 只调 LLM 一次拿 plan
+        plan = result["data"]["plan"]
+        self.assertEqual(plan["action"]["tool"], "rag_search")
+        self.assertIn("先检索语料", plan["thought"])
+        self.assertIn("summary", plan)
+        # 工具没被执行, 所以 tool_results_summary 应该为空
+        self.assertEqual(result["data"]["tool_results_summary"], [])
+
+    def test_plan_only_final_answer_path(self):
+        """plan_only 时 LLM 直接给 final_answer 也算 plan (告诉用户不需要调工具)"""
+        responses = [
+            '{"thought":"我已经知道答案","final_answer":"直接答 X"}',
+        ]
+        agent, _ = self._make_agent(responses)
+        result = agent.execute({
+            "task": "x?",
+            "trace_id": "t-plan2",
+            "session_id": "s1",
+            "extra_params": {"plan_only": True},
+        })
+        self.assertEqual(result["code"], "PLAN_PENDING")
+        plan = result["data"]["plan"]
+        self.assertEqual(plan["final_answer"], "直接答 X")
+
+    def test_approve_plan_skips_plan_only_returns_full(self):
+        """plan_only=true 且 approve_plan=true → 视为已审批, 走完整 ReAct"""
+        responses = [
+            '{"thought":"先检索","action":{"tool":"rag_search","input":{"query":"x"}}}',
+            '{"thought":"已完成","final_answer":"最终 X"}',
+        ]
+        agent, llm = self._make_agent(responses)
+        result = agent.execute({
+            "task": "x",
+            "trace_id": "t-plan3",
+            "session_id": "s1",
+            "extra_params": {"plan_only": True, "approve_plan": True},
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["data"]["answer"], "最终 X")
+        self.assertEqual(llm.call_count, 2)
+
+
+# ==========================================================
+# Task W (#57) — Tool approval gates
+# ==========================================================
+def _stub_dangerous_tool(payload):
+    """模拟 py_sandbox 等敏感工具"""
+    return {"code": "SUCCESS", "data": {"answer": "ran code"}}
+
+
+class TestApprovalGates(unittest.TestCase):
+    """工具白名单审批: 名单内工具未 approve 时返回 TOOL_APPROVAL_REQUIRED"""
+
+    def _make_agent(self, responses, approval_required):
+        reg = _DictRegistry()
+        reg.register("rag_search", _stub_tool_success)
+        reg.register("py_sandbox", _stub_dangerous_tool)
+        reg.register("llm_generate", _stub_tool_success)
+        llm = _ScriptedLLM(responses)
+        agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
+        agent.execution_strategy = "react"
+        agent.use_llm_planner = False
+        agent.tool_approval_required = set(approval_required)
+        return agent, llm
+
+    def test_safe_tool_runs_without_approval(self):
+        """rag_search 不在审批名单 → 正常执行"""
+        responses = [
+            '{"thought":"go","action":{"tool":"rag_search","input":{}}}',
+            '{"thought":"done","final_answer":"ok"}',
+        ]
+        agent, _ = self._make_agent(responses, approval_required=["py_sandbox"])
+        result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "SUCCESS")
+
+    def test_dangerous_tool_blocked_without_approval(self):
+        """py_sandbox 在名单 + extra_params 无 approve_tools → TOOL_APPROVAL_REQUIRED"""
+        responses = [
+            '{"thought":"跑代码","action":{"tool":"py_sandbox","input":{"code":"print(1)"}}}',
+        ]
+        agent, llm = self._make_agent(responses, approval_required=["py_sandbox"])
+        result = agent.execute({"task": "calc", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "TOOL_APPROVAL_REQUIRED")
+        self.assertEqual(result["data"]["tool_name"], "py_sandbox")
+        self.assertIn("py_sandbox", result["data"]["required_tools"])
+        self.assertEqual(result["data"]["approved_so_far"], [])
+        # LLM 只调了 1 次 (拿 plan), 工具没被真执行
+        self.assertEqual(llm.call_count, 1)
+
+    def test_dangerous_tool_runs_when_approved(self):
+        """py_sandbox 在名单 + extra_params.approve_tools 含它 → 正常执行"""
+        responses = [
+            '{"thought":"跑代码","action":{"tool":"py_sandbox","input":{"code":"print(1)"}}}',
+            '{"thought":"done","final_answer":"代码已跑"}',
+        ]
+        agent, _ = self._make_agent(responses, approval_required=["py_sandbox"])
+        result = agent.execute({
+            "task": "calc",
+            "trace_id": "t1",
+            "session_id": "s1",
+            "extra_params": {"approve_tools": ["py_sandbox"]},
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["data"]["answer"], "代码已跑")
+
+    def test_wildcard_approve_all(self):
+        """approve_tools=['*'] → 一次性批准所有危险工具"""
+        responses = [
+            '{"thought":"跑","action":{"tool":"py_sandbox","input":{}}}',
+            '{"thought":"done","final_answer":"ok"}',
+        ]
+        agent, _ = self._make_agent(responses, approval_required=["py_sandbox"])
+        result = agent.execute({
+            "task": "x", "trace_id": "t1", "session_id": "s1",
+            "extra_params": {"approve_tools": ["*"]},
+        })
+        self.assertEqual(result["code"], "SUCCESS")
+
+    def test_needs_approval_helper(self):
+        """_needs_approval 内部辅助方法的边界"""
+        agent, _ = self._make_agent([], approval_required=["py_sandbox"])
+        self.assertTrue(agent._needs_approval("py_sandbox", {}))
+        self.assertFalse(agent._needs_approval("py_sandbox", {"approve_tools": ["py_sandbox"]}))
+        self.assertFalse(agent._needs_approval("rag_search", {}))
+        self.assertFalse(agent._needs_approval(None, {}))
+        self.assertFalse(agent._needs_approval("py_sandbox", {"approve_tools": ["*"]}))
+
+
 if __name__ == "__main__":
     unittest.main()

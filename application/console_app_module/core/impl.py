@@ -137,6 +137,11 @@ class ConsoleApp(BaseConsoleApp):
         "quit":           "_cmd_exit",
         "session_id":     "_cmd_session_id",
         "sid":            "_cmd_session_id",
+        # Task X (#58): plan / approve / memory 借鉴 codex + claude code
+        "plan":           "_cmd_plan",         # /plan on|off — 切 plan_only toggle
+        "approve":        "_cmd_approve",      # /approve tool1,tool2 — 加白名单
+        "unapprove":      "_cmd_unapprove",    # /unapprove tool1 — 撤白名单
+        "memory":         "_cmd_memory",       # /memory — 显示当前项目记忆
     }
 
     def parse_input(self, text: str) -> ConsoleInput:
@@ -250,6 +255,62 @@ class ConsoleApp(BaseConsoleApp):
         self.session.session_id = arg.strip()
         print(f"session_id -> {self.session.session_id}")
 
+    # ---- Task X (#58): plan / approve / memory ----
+    def _cmd_plan(self, arg: Optional[str]) -> None:
+        """/plan on|off|toggle. 不带参数则切换."""
+        a = (arg or "").strip().lower()
+        if a in ("on", "true", "1", "yes"):
+            self.session.plan_only = True
+        elif a in ("off", "false", "0", "no"):
+            self.session.plan_only = False
+        elif a in ("", "toggle"):
+            self.session.plan_only = not self.session.plan_only
+        else:
+            print(f"[error] /plan 接受 on/off/toggle, 收到 {a!r}")
+            return
+        state = "ON (LLM 只输出计划, 待审批)" if self.session.plan_only else "OFF (直接执行)"
+        print(f"plan mode -> {state}")
+
+    def _cmd_approve(self, arg: Optional[str]) -> None:
+        """/approve tool1,tool2 — 给工具发白名单. 不带参显示当前白名单."""
+        if not arg:
+            print(f"已审批工具: {self.session.approve_tools or '(无)'}")
+            return
+        for t in [x.strip() for x in arg.split(",") if x.strip()]:
+            if t not in self.session.approve_tools:
+                self.session.approve_tools.append(t)
+        print(f"approve_tools -> {self.session.approve_tools}")
+
+    def _cmd_unapprove(self, arg: Optional[str]) -> None:
+        """/unapprove tool1,tool2 — 撤白名单. 不带参清空."""
+        if not arg:
+            self.session.approve_tools.clear()
+            print("已清空 approve_tools")
+            return
+        for t in [x.strip() for x in arg.split(",") if x.strip()]:
+            if t in self.session.approve_tools:
+                self.session.approve_tools.remove(t)
+        print(f"approve_tools -> {self.session.approve_tools}")
+
+    def _cmd_memory(self, _arg: Optional[str]) -> None:
+        """/memory — 显示当前生效的 ProjectMemory 文件 + 摘要."""
+        try:
+            from common_utils_module import get_project_memory
+            mem = get_project_memory()
+            path, n = mem.info()
+            if path is None:
+                print("(未找到 ProjectMemory 文件; 默认查 AGENTS.md / CLAUDE.md / .anything/memory.md)")
+                return
+            content = mem.load()
+            preview = content[:400]
+            print(f"ProjectMemory: {path}  ({n} chars)")
+            print("--- preview (前 400 字) ---")
+            print(preview)
+            if n > 400:
+                print(f"... [truncated, 总 {n} 字]")
+        except Exception as e:
+            print(f"[error] /memory: {e}")
+
     # =========================
     # Task T: 请求构造 / 执行 / 渲染
     # =========================
@@ -270,13 +331,20 @@ class ConsoleApp(BaseConsoleApp):
         else:
             raise TypeError(f"build_request 不支持的输入类型: {type(source).__name__}")
 
+        # Task X (#58): plan_only + approve_tools 也透传 (Agent 端读 extra_params)
+        extra: Dict[str, Any] = {
+            "source": "console_app",
+            "attachments": attachments,
+        }
+        if self.session.plan_only:
+            extra["plan_only"] = True
+        if self.session.approve_tools:
+            extra["approve_tools"] = list(self.session.approve_tools)
+
         req: Dict[str, Any] = {
             "type": mode,
             "top_k": self.session.top_k,
-            "extra_params": {
-                "source": "console_app",
-                "attachments": attachments,
-            },
+            "extra_params": extra,
         }
         # rag 用 query, agent/hybrid 用 task; 同时也填一个 query 兜底, 不同 handler 都能拿到
         if mode == "rag":
@@ -688,13 +756,19 @@ class ConsoleApp(BaseConsoleApp):
         return "\n".join(lines) if lines else "暂无历史记录。"
 
     def _help_text(self) -> str:
+        plan_state = "ON" if self.session.plan_only else "OFF"
+        approved = ",".join(self.session.approve_tools) or "(空)"
         return (
-            "可用命令 (Task T 增强):\n"
+            "可用命令 (Task T + X 增强):\n"
             "  /mode <rag|agent|hybrid>   切换模式 (当前 = " + str(self.session.mode) + ")\n"
             "  /topk <N>                   设置 top_k (当前 = " + str(self.session.top_k) + ")\n"
             "  /attach <path>              添加附件路径\n"
             "  /clear_attach               清空附件\n"
             "  /session_id <id>            绑定 session_id (跨请求关联)\n"
+            "  /plan <on|off|toggle>       Plan mode — 先看 LLM 计划再决定 (当前 = " + plan_state + ")\n"
+            "  /approve <tool1,tool2|*>    给危险工具发白名单 (当前 = " + approved + ")\n"
+            "  /unapprove <tool1|all>      撤回白名单\n"
+            "  /memory                     显示当前生效的 AGENTS.md / CLAUDE.md\n"
             "  /history                    查看最近历史\n"
             "  /help                       查看帮助\n"
             "  /exit / /quit               退出控制台\n"
