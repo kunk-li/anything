@@ -26,6 +26,7 @@ class SimpleRAG(BaseRAG):
         reranker=None,
         query_rewriter=None,
         state_store=None,  # Task #46: 会话记忆 (从这里读历史 + 写新轮)
+        bm25_retriever=None,  # Task #49: 混合检索, 关键字稀疏召回
         deps: Optional[BasicDeps] = None,
     ):
         # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
@@ -42,6 +43,7 @@ class SimpleRAG(BaseRAG):
         self.reranker = reranker
         self.query_rewriter = query_rewriter
         self.state_store = state_store
+        self.bm25_retriever = bm25_retriever
 
         # 关键配置项走 get_effective_value, 允许环境变量覆盖
         # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
@@ -74,6 +76,16 @@ class SimpleRAG(BaseRAG):
         self.history_max_turns = self.config.get_effective_value(
             "rag.history_max_turns", env_var="ANYTHING_RAG_HISTORY_MAX_TURNS",
             default=6, value_type=int,
+        )
+
+        # Task #49 混合检索 (BM25 + 向量), 默认关 (向后兼容); bm25_retriever 注入了才生效
+        self.enable_hybrid_search = self.config.get_effective_value(
+            "rag.enable_hybrid_search", env_var="ANYTHING_RAG_ENABLE_HYBRID",
+            default=False, value_type=bool,
+        )
+        self.hybrid_rrf_k = self.config.get_effective_value(
+            "rag.hybrid_rrf_k", env_var="ANYTHING_RAG_HYBRID_RRF_K",
+            default=60, value_type=int,
         )
 
         self.logger.info("RAG 模块初始化完成")
@@ -177,8 +189,28 @@ class SimpleRAG(BaseRAG):
             )
 
         # 5. 统一 chunk 结构
-        chunks = [self._normalize_retrieved_item(item) for item in raw_items]
-        chunks = [c for c in chunks if c is not None]
+        vec_chunks = [self._normalize_retrieved_item(item) for item in raw_items]
+        vec_chunks = [c for c in vec_chunks if c is not None]
+
+        # 5b. Task #49 BM25 关键字稀疏召回 (混合检索开关 + retriever 都满足时触发)
+        bm25_chunks: List[Dict[str, Any]] = []
+        hybrid_active = (
+            self.enable_hybrid_search
+            and self.bm25_retriever is not None
+            and getattr(self.bm25_retriever, "size", 0) > 0
+        )
+        if hybrid_active:
+            bm25_chunks = self._query_bm25(
+                query_text=effective_query, top_k=retrieve_k, trace_id=trace_id,
+            )
+
+        # 5c. 融合 (RRF) - 仅在混合模式且 BM25 有结果时
+        if hybrid_active and bm25_chunks:
+            chunks = self._hybrid_merge(
+                vec_chunks=vec_chunks, bm25_chunks=bm25_chunks, trace_id=trace_id,
+            )
+        else:
+            chunks = vec_chunks
 
         # 6. 可选 rerank (用 effective_query 而非 original)
         if self.enable_rerank and self.reranker is not None and chunks:
@@ -546,6 +578,42 @@ class SimpleRAG(BaseRAG):
                 return items
 
         return []
+
+    # ============ Task #49 BM25 + RRF 融合 ============
+
+    def _query_bm25(
+        self,
+        query_text: str,
+        top_k: int,
+        trace_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """调 bm25_retriever.query() 返回 chunk 列表; 失败仅 WARN 不抛."""
+        if self.bm25_retriever is None or not query_text:
+            return []
+        try:
+            return self.bm25_retriever.query(query_text=query_text, top_k=top_k)
+        except Exception as e:
+            self.logger.warning(f"BM25 检索失败 (忽略): trace_id={trace_id}, err={e}")
+            return []
+
+    def _hybrid_merge(
+        self,
+        vec_chunks: List[Dict[str, Any]],
+        bm25_chunks: List[Dict[str, Any]],
+        trace_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """RRF 融合 vec + bm25 两路 chunk 列表, 用 rag_module.extensions.rrf_merge."""
+        from rag_module.extensions import rrf_merge
+        merged = rrf_merge(
+            rank_lists=[vec_chunks, bm25_chunks],
+            k=self.hybrid_rrf_k,
+            id_field="chunk_id",
+        )
+        self.logger.info(
+            f"混合检索融合完成: trace_id={trace_id}, vec={len(vec_chunks)}, "
+            f"bm25={len(bm25_chunks)}, fused={len(merged)}"
+        )
+        return merged
 
     def _normalize_retrieved_item(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """将向量库结果标准化为 chunk 级结构"""

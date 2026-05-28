@@ -23,7 +23,9 @@ from embedding_module import STEmbedding
 
 # 业务层
 from rag_module import SimpleRAG
-from rag_module.extensions import LLMQueryRewriter, LLMReranker, CrossEncoderReranker
+from rag_module.extensions import (
+    LLMQueryRewriter, LLMReranker, CrossEncoderReranker, BM25Retriever,
+)
 from agent_module import SimpleAgent
 from orchestrator_module import SimpleOrchestrator
 
@@ -192,6 +194,22 @@ def build_business_layer(
     else:
         reranker = None
 
+    # Task #49: BM25 单例 — 持久化到 run/bm25_index.json,
+    # bootstrap 阶段尝试 load (没有索引文件就空跑, index_build 会逐步 add_chunks)
+    bm25_index_path = deps.config.get_effective_value(
+        "rag.bm25_index_path",
+        env_var="ANYTHING_RAG_BM25_INDEX_PATH",
+        default="bm25_index.json",
+    )
+    bm25_retriever = BM25Retriever()
+    try:
+        if bm25_retriever.load(bm25_index_path):
+            deps.logger.info(f"BM25 索引已加载: path={bm25_index_path}, size={bm25_retriever.size}")
+        else:
+            deps.logger.info(f"BM25 索引不存在或为空, 等待 index_build 增量构建: path={bm25_index_path}")
+    except Exception as e:
+        deps.logger.warning(f"BM25 索引加载失败 (将以空索引继续): err={e}")
+
     rag = SimpleRAG(
         llm_client=llm_client,
         embedding=data_layer.get("embedding"),
@@ -200,6 +218,7 @@ def build_business_layer(
         reranker=reranker,
         query_rewriter=query_rewriter,
         state_store=data_layer.get("state_store"),  # Task #46 会话记忆
+        bm25_retriever=bm25_retriever,              # Task #49 混合检索
         deps=deps,
     )
 
@@ -326,6 +345,9 @@ def build_business_layer(
         "agent": agent,
         "orchestrator": orchestrator,
         "tool_registry": tool_registry,
+        # Task #49: 暴露给 index_build 阶段往里 add_chunks + save
+        "bm25_retriever": bm25_retriever,
+        "bm25_index_path": bm25_index_path,
     }
 
 
@@ -377,6 +399,9 @@ def build_application_layer(
         # index_runner: 上传文件后自动触发 parse + chunk + embed + upsert,
         # 让 /documents/upload 真的能让 RAG 立刻查到。复用现有 data_layer 不重 new。
         # 走 default tenant 的 vector_store (多租户运行期 upload 走 PR4+ 路径)。
+        # Task #49: 同时把 chunks 写入 BM25 索引, 让混合检索拿到新文档。
+        bm25_for_index = business_layer.get("bm25_retriever") if business_layer else None
+        bm25_index_path_for_index = business_layer.get("bm25_index_path") if business_layer else None
         index_runner = None
         if data_layer is not None and data_layer.get("embedding") and data_layer.get("vector_db"):
             def _index_runner(file_path: str):
@@ -385,6 +410,8 @@ def build_application_layer(
                     source_type="file",
                     source_path=file_path,
                     data_layer=data_layer,
+                    bm25_retriever=bm25_for_index,
+                    bm25_index_path=bm25_index_path_for_index,
                 )
             index_runner = _index_runner
 

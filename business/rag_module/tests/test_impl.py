@@ -191,3 +191,109 @@ class TestRAGHistoryMemory(_ut.TestCase):
         # 不抛异常
         self.assertEqual(rag._load_history("sess"), [])
         rag._save_turn("sess", "q", "a")  # 不抛
+
+
+# ==========================================
+# Task #49 — 混合检索 (BM25 + vector via RRF)
+# ==========================================
+import unittest as _ut2  # noqa: E402
+from rag_module.extensions import BM25Retriever  # noqa: E402
+
+
+class _MockVectorDB:
+    """vector_db 桩, query() 返回固定结果."""
+    def __init__(self, results):
+        self.results = results
+
+    def query(self, query_vector=None, top_k=5, filters=None):
+        return [dict(r) for r in self.results[:top_k]]
+
+
+class _MockEmbedding:
+    """embedding 桩, embed_text 返回固定向量."""
+    def embed_text(self, text, trace_id=None):
+        return [0.1, 0.2, 0.3]
+
+
+class TestHybridRetrieval(_ut2.TestCase):
+    """混合检索单元测试: 验证 BM25 + 向量 RRF 融合在 retrieve() 链路里生效"""
+
+    def _make_corpus(self):
+        return [
+            {"chunk_id": "c_vec_only", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": 0, "content": "语义相近但关键字差", "score": 0.95},
+            {"chunk_id": "c_both", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": 1, "content": "FastAPI WebSocket streaming", "score": 0.7},
+        ]
+
+    def _make_rag_with_hybrid(self):
+        vec_results = [
+            {"chunk_id": "c_vec_only", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": 0, "content": "语义相近但关键字差", "score": 0.95},
+            {"chunk_id": "c_both", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": 1, "content": "FastAPI WebSocket streaming", "score": 0.7},
+        ]
+        bm25 = BM25Retriever()
+        bm25.add_chunks([
+            {"chunk_id": "c_both", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": 1, "content": "FastAPI WebSocket streaming"},
+            {"chunk_id": "c_bm25_only", "doc_id": "d2", "file_name": "k.md",
+             "chunk_index": 0, "content": "BM25 keyword sparse retrieval"},
+        ])
+        rag = SimpleRAG(
+            llm_client=MockLLMClient(),
+            embedding=_MockEmbedding(),
+            vector_db=_MockVectorDB(vec_results),
+            bm25_retriever=bm25,
+        )
+        rag.enable_hybrid_search = True
+        return rag, bm25
+
+    def test_hybrid_off_falls_back_to_vector_only(self):
+        rag, _ = self._make_rag_with_hybrid()
+        rag.enable_hybrid_search = False
+        chunks = rag.retrieve({"query": "WebSocket", "top_k": 5, "trace_id": "t1"})
+        ids = [c["chunk_id"] for c in chunks]
+        # 仅向量路 -> bm25_only chunk 不出现
+        self.assertIn("c_vec_only", ids)
+        self.assertIn("c_both", ids)
+        self.assertNotIn("c_bm25_only", ids)
+
+    def test_hybrid_on_merges_both_paths(self):
+        rag, _ = self._make_rag_with_hybrid()
+        # query 词同时命中 BM25 corpus 两条记录: "WebSocket" → c_both, "BM25" → c_bm25_only
+        chunks = rag.retrieve({"query": "WebSocket BM25", "top_k": 5, "trace_id": "t1"})
+        ids = [c["chunk_id"] for c in chunks]
+        # 三个来源都应出现 (两路并集)
+        self.assertIn("c_vec_only", ids)
+        self.assertIn("c_both", ids)
+        self.assertIn("c_bm25_only", ids)
+        # 出现在两路的 c_both 应排第一 (RRF consensus 加权)
+        self.assertEqual(ids[0], "c_both")
+        # 每个 chunk 应携带 rrf_score (融合后的总分)
+        self.assertTrue(all("rrf_score" in c for c in chunks))
+
+    def test_hybrid_on_bm25_empty_falls_back_to_vector(self):
+        """开了混合但 BM25 没结果时应只用向量, 不应抛错."""
+        rag, bm25 = self._make_rag_with_hybrid()
+        bm25.clear()
+        chunks = rag.retrieve({"query": "anything", "top_k": 5, "trace_id": "t1"})
+        ids = [c["chunk_id"] for c in chunks]
+        # 仍能拿到向量路结果
+        self.assertIn("c_vec_only", ids)
+        self.assertIn("c_both", ids)
+        # 没有 rrf_score (没走 RRF)
+        self.assertFalse(any("rrf_score" in c for c in chunks))
+
+    def test_hybrid_failure_in_bm25_query_is_silent(self):
+        """BM25 query() 抛异常应仅 WARN 不中断检索."""
+        rag, _ = self._make_rag_with_hybrid()
+        class _BadBM25:
+            size = 5
+            def query(self, **kw): raise RuntimeError("boom")
+        rag.bm25_retriever = _BadBM25()
+        chunks = rag.retrieve({"query": "x", "top_k": 5, "trace_id": "t1"})
+        # 不抛, 走向量
+        self.assertIsInstance(chunks, list)
+        ids = [c["chunk_id"] for c in chunks]
+        self.assertIn("c_vec_only", ids)

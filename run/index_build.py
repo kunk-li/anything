@@ -136,8 +136,14 @@ def build_index(
     chunk_size_tokens: int = 400,
     chunk_overlap_tokens: int = 80,
     data_layer: "Optional[Dict[str, Any]]" = None,
+    bm25_retriever: Any = None,         # Task #49: 同步喂 BM25 索引
+    bm25_index_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """构建索引. data_layer 不传时现 new (CLI 模式), 传入时复用 (ApiService 模式)."""
+    """构建索引. data_layer 不传时现 new (CLI 模式), 传入时复用 (ApiService 模式).
+
+    Task #49: 若传入 bm25_retriever, 则在 upsert 向量后同步 add_chunks 到 BM25,
+    并 (可选) 持久化到 bm25_index_path 让进程重启后可恢复。
+    """
     if data_layer is None:
         data_layer = build_data_layer()
 
@@ -216,6 +222,14 @@ def build_index(
         upsert_items = build_upsert_items(chunks, vectors)
         upsert_result = upsert_vectors(vector_db, upsert_items)
 
+        # Task #49: 同步把 chunks 喂给 BM25 (失败仅 print, 不影响向量主链路)
+        if bm25_retriever is not None:
+            try:
+                added = bm25_retriever.add_chunks(chunks)
+                print(f"[bm25] +{added} chunks (size={bm25_retriever.size})")
+            except Exception as e:
+                print(f"[bm25] add_chunks 失败 (忽略): {e}")
+
         total_docs += 1
         total_chunks += len(chunks)
         total_vectors += len(vectors)
@@ -229,6 +243,11 @@ def build_index(
                 "upsert_result": upsert_result,
             }
         )
+
+    # Task #49: 持久化 BM25 索引 (仅当本次有新 chunks 落库时)
+    if bm25_retriever is not None and bm25_index_path and total_chunks > 0:
+        ok = bm25_retriever.save(bm25_index_path)
+        print(f"[bm25] save {'OK' if ok else 'FAIL'}: path={bm25_index_path}, size={bm25_retriever.size}")
 
     return {
         "code": "SUCCESS",
