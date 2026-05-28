@@ -396,8 +396,68 @@ class ApiService(
         self._register_index_routes()
         self._register_admin_routes()
         self._register_config_routes()
+        # Task VV (#82): 在前端路由之前, 把所有现有 API 路由复制一份到 /v1/<path>
+        # 让客户端可逐步迁到带版本的 URL; 老 path 保留无限期 (打 deprecated 头).
+        self._register_v1_aliases()
         # 前端路由最后注册, 避免覆盖 /admin/status 等 GET 端点
         self._register_frontend_routes()
+
+    def _register_v1_aliases(self) -> None:
+        """Task VV (#82): 给所有 API 路由加 /v1/<path> 镜像别名.
+
+        遍历 self.app.routes 快照, 对每个 path 不以 /v1/ 开头且不属于 frontend/health
+        排除清单的, 用同一个 endpoint 函数再 register 一份带 /v1 前缀的路由.
+
+        排除清单 (这些 path 不加版本前缀):
+            /              SPA 入口
+            /ui            SPA 别名
+            /static/*      静态资源 (Mount, 不在 self.app.routes 里)
+            /health        k8s liveness probe 习惯打不带版本的
+            /healthz       同上
+            /openapi.json  FastAPI 自动暴露的 schema
+            /docs, /redoc  FastAPI 自动暴露的 UI
+            /v1/*          已经是 v1 的不再镜像
+
+        老 path 调用方仍然有效; 新调用方推荐用 /v1/<path>.
+        废弃信号: 老 path 的响应 header 由 middleware 加 'Deprecation: ...'
+        (本 Task 暂不做, future Phase 2 可加).
+        """
+        from fastapi.routing import APIRoute, APIWebSocketRoute
+
+        EXCLUDE = {"/", "/ui", "/health", "/healthz", "/openapi.json", "/docs", "/redoc",
+                   "/docs/oauth2-redirect"}
+
+        # 必须复制一份 routes 列表, 避免迭代时修改原列表
+        existing = list(self.app.routes)
+        added = 0
+        for route in existing:
+            path = getattr(route, "path", None)
+            if not path or path.startswith("/v1/") or path in EXCLUDE:
+                continue
+            v1_path = "/v1" + path
+            try:
+                if isinstance(route, APIRoute):
+                    self.app.add_api_route(
+                        path=v1_path,
+                        endpoint=route.endpoint,
+                        methods=list(route.methods or []),
+                        name=f"{route.name}_v1" if route.name else None,
+                        # 跳过 OpenAPI 文档展示, 避免一个 endpoint 出现两条 spec
+                        include_in_schema=False,
+                    )
+                    added += 1
+                elif isinstance(route, APIWebSocketRoute):
+                    self.app.add_api_websocket_route(
+                        path=v1_path,
+                        endpoint=route.endpoint,
+                        name=f"{route.name}_v1" if route.name else None,
+                    )
+                    added += 1
+            except Exception as e:
+                # 单条注册失败不阻止后面的, 只打 WARNING
+                self.logger.warning(f"[VV] v1 alias 注册失败 {v1_path}: {e}")
+
+        self.logger.info(f"[VV #82] 已注册 {added} 条 /v1/ 镜像路由, 老 path 仍然可用")
 
     # =========================
     # 辅助方法
