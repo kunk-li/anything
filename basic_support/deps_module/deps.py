@@ -125,17 +125,41 @@ def handle_exception_to_envelope(
 class BasicDeps:
     """基础支撑层依赖容器。
 
-    Fields:
+    Fields (核心 4):
         config: ConfigManager 实例（已 load_config / load）
         logger: SystemLogger 实例
         utils: CommonUtils 实例
         exception_handler: ExceptionHandler 实例
+
+    Fields (Task PP #76 — 7 cross-cutting registries via DI):
+        hook_registry:    HookRegistry           (Task Z #60)
+        skill_registry:   SkillRegistry          (Task AA #61)
+        quota_guard:      QuotaGuard             (Task BB #62)
+        audit_logger:     AuditLogger            (Task CC #63)
+        project_memory:   ProjectMemory          (Task U #55)
+        usage_tracker:    UsageTracker           (Task Y #59)
+        health_tracker:   ModelHealthTracker     (Task HH #68)
+
+    用法 — 推荐 DI:
+        agent = SimpleAgent(deps=deps); reg = deps.hook_registry
+    用法 — back-compat 直接拿单例 (仍可用):
+        from hooks_module import get_hook_registry; reg = get_hook_registry()
+    两条路径访问的是同一个进程单例 (build_basic_deps 内部走 get_X 拿引用).
     """
 
     config: Any
     logger: Any
     utils: Any
     exception_handler: Any
+    # PP (#76): 7 cross-cutting registries 通过 deps 注入, 替代各模块独立 import singleton.
+    # default=None 让单元测试可以只构造 4 核心字段的 BasicDeps, 不强制注入这 7 个.
+    hook_registry: Any = None
+    skill_registry: Any = None
+    quota_guard: Any = None
+    audit_logger: Any = None
+    project_memory: Any = None
+    usage_tracker: Any = None
+    health_tracker: Any = None
 
 
 def _load_dotenv_if_exists() -> None:
@@ -222,9 +246,63 @@ def build_basic_deps() -> BasicDeps:
                     hint="见 docs/secrets-management.md 配置 .env 或 GitHub Secrets",
                 )
 
+    # Task PP (#76): 7 cross-cutting registries 通过 get_X() 拿到进程单例引用,
+    # 塞进 deps 让上层走 DI. 各 import 用 try/except — 子模块缺失也不阻塞
+    # 启动 (deps.<field> 设 None, 上层应做 None 检查 fallback 到 get_X()).
+    hook_registry = None
+    skill_registry = None
+    quota_guard = None
+    audit_logger = None
+    project_memory = None
+    usage_tracker = None
+    health_tracker = None
+
+    try:
+        from hooks_module import get_hook_registry
+        hook_registry = get_hook_registry()
+    except Exception:
+        pass
+    try:
+        from skills_module import get_skill_registry
+        skill_registry = get_skill_registry()
+    except Exception:
+        pass
+    try:
+        from quota_module import get_quota_guard
+        quota_guard = get_quota_guard()
+    except Exception:
+        pass
+    try:
+        from audit_module import get_audit_logger
+        audit_logger = get_audit_logger()
+    except Exception:
+        pass
+    try:
+        from project_memory_module import get_project_memory
+        project_memory = get_project_memory()
+    except Exception:
+        pass
+    try:
+        from observability_module import get_usage_tracker
+        usage_tracker = get_usage_tracker()
+    except Exception:
+        pass
+    try:
+        from llm_adapter_module.utils import get_health_tracker
+        health_tracker = get_health_tracker()
+    except Exception:
+        pass
+
     return BasicDeps(
         config=config,
         logger=SystemLogger(),
         utils=CommonUtils(),
         exception_handler=ExceptionHandler(),
+        hook_registry=hook_registry,
+        skill_registry=skill_registry,
+        quota_guard=quota_guard,
+        audit_logger=audit_logger,
+        project_memory=project_memory,
+        usage_tracker=usage_tracker,
+        health_tracker=health_tracker,
     )
