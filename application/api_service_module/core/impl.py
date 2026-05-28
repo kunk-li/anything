@@ -894,6 +894,130 @@ class ApiService:
                 headers={"X-Request-Id": trace_id},
             )
 
+        # Task JJ (#70): 文档管理 — list / delete
+        @self.app.get("/documents")
+        async def list_documents(request: Request):
+            """列出当前 tenant 已索引文档. 跟 /admin/status 同等权限 (生产网关加 RBAC)."""
+            trace_id = request.state.trace_id
+            if self.document_store_factory is None:
+                return JSONResponse(
+                    status_code=501,
+                    content={
+                        "code": "SERVICE_UNAVAILABLE",
+                        "message": "document_store_factory 未注入",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            tid = self._resolve_tenant_from_auth(request) or "default"
+            try:
+                store = self.document_store_factory(tid)
+                if not hasattr(store, "list_documents"):
+                    return JSONResponse(
+                        status_code=501,
+                        content={
+                            "code": "SERVICE_UNAVAILABLE",
+                            "message": "doc_store 不支持 list_documents",
+                            "data": None,
+                            "trace_id": trace_id,
+                            "retryable": False,
+                            "details": None,
+                        },
+                        headers={"X-Request-Id": trace_id},
+                    )
+                docs = store.list_documents()
+            except Exception as e:
+                self.logger.error(f"[documents.list] tenant={tid} err={e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "code": "UNKNOWN_ERROR",
+                        "message": str(e),
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "code": "SUCCESS",
+                    "message": "ok",
+                    "data": {
+                        "tenant_id": tid,
+                        "count": len(docs),
+                        "documents": docs,
+                    },
+                    "trace_id": trace_id,
+                    "retryable": False,
+                    "details": None,
+                },
+                headers={"X-Request-Id": trace_id},
+            )
+
+        @self.app.delete("/documents/{doc_id}")
+        async def delete_document(doc_id: str, request: Request):
+            """删除文档 — 同时从 document_store + vector_db (按 doc_id filter) + BM25 摘.
+
+            注: BM25 没暴露 remove API, 只能等下次重启加载时按需重新构建.
+            BM25 文件 stale 也不影响检索质量, 因为查时按 chunk_id 取 content 兜底.
+            """
+            trace_id = request.state.trace_id
+            if self.document_store_factory is None:
+                return JSONResponse(
+                    status_code=501,
+                    content={
+                        "code": "SERVICE_UNAVAILABLE",
+                        "message": "document_store_factory 未注入",
+                        "data": None,
+                        "trace_id": trace_id, "retryable": False, "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            tid = self._resolve_tenant_from_auth(request) or "default"
+
+            deleted_doc = False
+            deleted_vectors = False
+            warnings: List[str] = []
+            try:
+                store = self.document_store_factory(tid)
+                try:
+                    deleted_doc = bool(store.delete_document(doc_id))
+                except Exception as e:
+                    warnings.append(f"document_store: {e}")
+            except Exception as e:
+                warnings.append(f"document_store_factory: {e}")
+
+            if self.vector_db is not None:
+                try:
+                    if hasattr(self.vector_db, "delete"):
+                        deleted_vectors = bool(self.vector_db.delete(filters={"doc_id": doc_id}))
+                except Exception as e:
+                    warnings.append(f"vector_db: {e}")
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "code": "SUCCESS" if deleted_doc else "NOT_FOUND",
+                    "message": "deleted" if deleted_doc else "doc_id not found in document_store",
+                    "data": {
+                        "doc_id": doc_id,
+                        "tenant_id": tid,
+                        "deleted_from_document_store": deleted_doc,
+                        "deleted_from_vector_db": deleted_vectors,
+                        "warnings": warnings,
+                        "note": "BM25 索引中的 chunks 暂不在线移除, 下次 index_build 时清理",
+                    },
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                },
+                headers={"X-Request-Id": trace_id},
+            )
+
         @self.app.get("/documents/{doc_id}/preview")
         async def get_document_preview(
             doc_id: str,

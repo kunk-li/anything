@@ -150,6 +150,21 @@ const ApiClient = (() => {
         });
     }
 
+    // ==================== 文档管理 (Task JJ #70) ====================
+    /**
+     * GET /documents — 列出当前 tenant 的所有已索引文档
+     */
+    async function listDocuments() {
+        return _doFetch('GET', '/documents');
+    }
+
+    /**
+     * DELETE /documents/{doc_id} — 删除文档 + 关联向量
+     */
+    async function deleteDocument(docId) {
+        return _doFetch('DELETE', `/documents/${encodeURIComponent(docId)}`);
+    }
+
     /**
      * 文档预览: GET /documents/{doc_id}/preview
      * @param {string} docId
@@ -271,6 +286,8 @@ const ApiClient = (() => {
         buildIndex,
         getIndexJob,
         getDocumentPreview,
+        listDocuments,        // Task JJ (#70)
+        deleteDocument,
         listModels,
         registerModel,
         deleteModel,

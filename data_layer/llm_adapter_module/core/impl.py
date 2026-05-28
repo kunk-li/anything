@@ -1040,46 +1040,159 @@ class LLMService(BaseLLMService):
         return None
 
     def call_llm(self, request: LLMRequest) -> LLMResponse:
+        """统一 LLM 调用入口. Task HH (#68): 失败时按 fallback chain 自动切换模型.
+
+        fallback chain 解析顺序:
+          1. request.model_param.fallback_models (调用方显式)
+          2. config llm.<request_type>_fallbacks (yaml 配置)
+          3. 同 request_type 的默认模型 (兜底)
+        每个模型受 ModelHealthTracker 控制 — unhealthy 的会被跳过 (在冷却期内).
+        """
         start = now_ts()
         trace_id = gen_trace_id()
         ok, msg = self.validate_request(request)
         if not ok:
             return LLMResponse(code="PARAM_INVALID", message=msg, request_info={"trace_id": trace_id}, cost_time=now_ts()-start, trace_id=trace_id)
 
-        model_name = self._resolve_model_name(request)
-        adapter = self._get_adapter(model_name)
-        if not adapter:
-            return LLMResponse(code="MODEL_NOT_FOUND", message=f"未注册的模型名称：{model_name}", request_info={"trace_id": trace_id}, cost_time=now_ts()-start, trace_id=trace_id)
+        # 解析候选模型链 (主 + fallback)
+        candidates = self._resolve_model_chain(request)
+        if not candidates:
+            return LLMResponse(code="MODEL_NOT_FOUND", message="没有可用的模型 (候选链为空)",
+                              request_info={"trace_id": trace_id},
+                              cost_time=now_ts()-start, trace_id=trace_id)
 
-        # 补充 request_info
-        request_info = {
-            "request_type": request.request_type,
-            "model_name": model_name,
-            "trace_id": trace_id,
-        }
-
+        # Task HH (#68): 健康追踪
         try:
-            request.model_name = model_name
-            resp: LLMResponse = adapter.call(request)
-            # 强制带上 trace_id 与 request_info
-            resp.trace_id = resp.trace_id or trace_id
-            resp.request_info = resp.request_info or request_info
-            # Task Y (#59): token / cost 跟踪
-            # adapter 没填 tokens 就用 4 字符 ≈ 1 token 简易估算 (中文 2 字符 ≈ 1 token,
-            # 平均 3 字符更稳, 但 4 是行业默认; chat_stream 路径目前不进 call_llm 不影响).
+            from llm_adapter_module.utils import get_health_tracker
+            health = get_health_tracker()
+        except Exception:
+            health = None
+
+        last_resp: Optional[LLMResponse] = None
+        tried: List[str] = []
+        for model_name in candidates:
+            # 跳过 unhealthy 模型 (冷却中)
+            if health and not health.is_available(model_name):
+                self.logger.warning(
+                    f"[fallback] 跳过 unhealthy 模型: {model_name}, trace_id={trace_id}"
+                )
+                continue
+
+            adapter = self._get_adapter(model_name)
+            if not adapter:
+                if health:
+                    health.record_failure(model_name, f"adapter not found")
+                tried.append(model_name)
+                continue
+
+            request_info = {
+                "request_type": request.request_type,
+                "model_name": model_name,
+                "trace_id": trace_id,
+                "fallback_chain": candidates,
+                "tried_models": tried + [model_name],
+            }
             try:
-                self._record_usage_safe(request, resp, model_name)
-            except Exception as _track_err:
-                self.logger.warning(f"[usage-tracker] 记录失败 (忽略): {_track_err}")
-            return resp
-        except SystemBaseException as se:
-            # 按系统异常码封装
-            err = self.exception_handler.handle_exception(se)
-            return LLMResponse(code=err.get("code", "UNKNOWN_ERROR"), message=err.get("message", str(se)), request_info=request_info, cost_time=now_ts()-start, trace_id=trace_id)
-        except Exception as e:
-            # 未知异常
-            err = self.exception_handler.handle_exception(e)
-            return LLMResponse(code=err.get("code", "UNKNOWN_ERROR"), message=err.get("message", str(e)), request_info=request_info, cost_time=now_ts()-start, trace_id=trace_id)
+                request.model_name = model_name
+                resp: LLMResponse = adapter.call(request)
+                resp.trace_id = resp.trace_id or trace_id
+                resp.request_info = resp.request_info or request_info
+                # 调成功 → 记 health success, 触发 usage tracker, 返回
+                if resp.code == "SUCCESS":
+                    if health:
+                        health.record_success(model_name)
+                    try:
+                        self._record_usage_safe(request, resp, model_name)
+                    except Exception as _track_err:
+                        self.logger.warning(f"[usage-tracker] 记录失败 (忽略): {_track_err}")
+                    return resp
+                # 业务码非 SUCCESS → 标 failure 但继续 fallback
+                if health:
+                    health.record_failure(model_name, f"code={resp.code}: {resp.message[:100]}")
+                self.logger.warning(
+                    f"[fallback] 模型 {model_name} 返回 {resp.code}, "
+                    f"尝试下一个; trace_id={trace_id}"
+                )
+                last_resp = resp
+                tried.append(model_name)
+                continue
+            except SystemBaseException as se:
+                if health:
+                    health.record_failure(model_name, f"SysException: {se}")
+                err = self.exception_handler.handle_exception(se)
+                last_resp = LLMResponse(
+                    code=err.get("code", "UNKNOWN_ERROR"),
+                    message=err.get("message", str(se)),
+                    request_info=request_info,
+                    cost_time=now_ts() - start, trace_id=trace_id,
+                )
+                tried.append(model_name)
+                continue
+            except Exception as e:
+                if health:
+                    health.record_failure(model_name, f"Exception: {e}")
+                err = self.exception_handler.handle_exception(e)
+                last_resp = LLMResponse(
+                    code=err.get("code", "UNKNOWN_ERROR"),
+                    message=err.get("message", str(e)),
+                    request_info=request_info,
+                    cost_time=now_ts() - start, trace_id=trace_id,
+                )
+                tried.append(model_name)
+                continue
+
+        # 所有候选都失败 → 返回最后一个错误信封 (或合成 ALL_MODELS_FAILED)
+        if last_resp is not None:
+            if last_resp.request_info is None:
+                last_resp.request_info = {}
+            last_resp.request_info["fallback_exhausted"] = True
+            last_resp.request_info["tried_models"] = tried
+            return last_resp
+        return LLMResponse(
+            code="ALL_MODELS_FAILED",
+            message=f"所有候选模型都不可用 (健康检查均失败): {candidates}",
+            request_info={"trace_id": trace_id, "tried_models": tried},
+            cost_time=now_ts() - start, trace_id=trace_id,
+        )
+
+    def _resolve_model_chain(self, request: LLMRequest) -> List[str]:
+        """生成 [主模型, fallback1, fallback2, ...] 列表, 已去重."""
+        seen = set()
+        chain: List[str] = []
+
+        def _add(name):
+            if name and name not in seen:
+                seen.add(name)
+                chain.append(name)
+
+        # 1. 主模型
+        primary = self._resolve_model_name(request)
+        _add(primary)
+
+        # 2. request.model_param.fallback_models (显式)
+        try:
+            mp = request.model_param
+            fallback_models = getattr(mp, "fallback_models", None) if mp else None
+            if isinstance(fallback_models, (list, tuple)):
+                for m in fallback_models:
+                    _add(str(m))
+        except Exception:
+            pass
+
+        # 3. config llm.{type}_fallbacks (yaml)
+        try:
+            req_type = (request.request_type or "").lower()
+            config_key = f"llm.{req_type}_fallbacks"
+            cfg_list = self.cfg.get_config(config_key, []) if hasattr(self.cfg, "get_config") else []
+            if isinstance(cfg_list, list):
+                for m in cfg_list:
+                    _add(str(m))
+        except Exception:
+            pass
+
+        return chain
+
+    # _call_llm_legacy 删除 — call_llm 上面的 fallback 路径已覆盖所有异常分支.
 
     def call_by_file(self, file_content: FileContent, request_type: str, model_param: Any = None) -> LLMResponse:
         req = LLMRequest(

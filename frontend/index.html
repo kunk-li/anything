@@ -152,6 +152,14 @@
                     <div class="upload-result" id="upload-result"></div>
                     <button id="build-index-btn" class="small-btn block" data-i18n="sidebar.upload.build">触发索引构建</button>
                     <div class="job-result" id="job-result"></div>
+
+                    <!-- Task JJ (#70): 已索引文档列表 -->
+                    <hr class="form-divider" />
+                    <div class="metrics-controls">
+                        <button id="docs-refresh-btn" class="small-btn" data-i18n="docs.refresh">已索引文档</button>
+                        <span class="hint" id="docs-count-hint" data-i18n="docs.hint">从 /documents 拉取</span>
+                    </div>
+                    <ul class="docs-list" id="docs-list"></ul>
                 </div>
 
                 <!-- Task S: Admin / 运行期状态 -->

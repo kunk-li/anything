@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 
 from .base import BaseDocumentStore
 from ..config.config import DocumentStoreConfig
@@ -341,6 +341,42 @@ class LocalDocumentStore(BaseDocumentStore):
         except Exception as e:
             self.logger.error(f"write_info_file failed: {e}", exc_info=True)
             return False
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """Task JJ (#70): 列出当前 tenant 下所有已索引文档的元信息.
+
+        扫描 storage_dir 下所有 .info.json, 解析后返回简化结构 (前端表格用).
+        失败的 info 文件跳过, 不抛错.
+        """
+        if not os.path.isdir(self.storage_dir):
+            return []
+        docs: List[Dict[str, Any]] = []
+        try:
+            for entry in os.listdir(self.storage_dir):
+                if not entry.endswith(".info.json"):
+                    continue
+                doc_id = entry[: -len(".info.json")]
+                if not is_uuid4(doc_id):
+                    continue
+                try:
+                    info = self.read_info_file(doc_id) or {}
+                except Exception:
+                    continue
+                docs.append({
+                    "doc_id": doc_id,
+                    "file_name": info.get("file_name"),
+                    "file_type": info.get("file_type"),
+                    "content_hash": info.get("content_hash"),
+                    "content_length": info.get("content_length") or info.get("content_size"),
+                    "created_time": info.get("created_time") or info.get("upload_time"),
+                    "last_access_time": info.get("last_access_time"),
+                    "source": (info.get("meta") or {}).get("source") if isinstance(info.get("meta"), dict) else None,
+                })
+        except OSError:
+            return []
+        # 按 created_time 倒序 (最近上传的在前)
+        docs.sort(key=lambda d: str(d.get("created_time") or ""), reverse=True)
+        return docs
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, str]]:
         if not is_uuid4(doc_id):

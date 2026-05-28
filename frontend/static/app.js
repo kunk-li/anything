@@ -45,6 +45,10 @@
         jobResult: $('job-result'),
         adminRefresh: $('admin-refresh'),       // Task S
         adminGrid: $('admin-grid'),
+        // Task JJ (#70): 已索引文档管理
+        docsRefreshBtn: $('docs-refresh-btn'),
+        docsList: $('docs-list'),
+        docsCountHint: $('docs-count-hint'),
         toastContainer: $('toast-container'),
         langBtn: $('lang-btn'),
         sidebarToggle: $('sidebar-toggle'),
@@ -586,6 +590,11 @@
         // Task S: admin 面板刷新
         if (els.adminRefresh) {
             els.adminRefresh.addEventListener('click', refreshAdminStatus);
+        }
+
+        // Task JJ (#70): 已索引文档列表 + 删除
+        if (els.docsRefreshBtn) {
+            els.docsRefreshBtn.addEventListener('click', refreshDocsList);
         }
     }
 
@@ -1593,6 +1602,68 @@
     }
 
     // ---------- 侧栏:Admin (Task S) ----------
+    // ---------- Task JJ (#70): 已索引文档列表 + 删除 ----------
+    async function refreshDocsList() {
+        if (!els.docsList) return;
+        els.docsList.innerHTML = `<li class="empty-state">${t('docs.loading')}</li>`;
+        try {
+            const { payload, status } = await ApiClient.listDocuments();
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                els.docsList.innerHTML =
+                    `<li class="empty-state error">× ${payload?.code || status} ${payload?.message || ''}</li>`;
+                return;
+            }
+            const docs = (payload.data || {}).documents || [];
+            if (els.docsCountHint) {
+                els.docsCountHint.textContent = `${docs.length} ${t('docs.count_suffix')}`;
+            }
+            if (!docs.length) {
+                els.docsList.innerHTML = `<li class="empty-state">${t('docs.empty')}</li>`;
+                return;
+            }
+            els.docsList.innerHTML = '';
+            for (const d of docs) {
+                const li = document.createElement('li');
+                li.className = 'doc-item';
+                const name = (d.file_name || d.doc_id || '?').slice(0, 60);
+                const size = d.content_length
+                    ? `${(d.content_length / 1024).toFixed(1)} KB`
+                    : '?';
+                const created = d.created_time
+                    ? new Date(d.created_time).toLocaleString()
+                    : '';
+                li.innerHTML = `
+                    <div class="doc-info">
+                        <div class="doc-name">${escapeHtml(name)}</div>
+                        <div class="doc-meta">${escapeHtml(d.doc_id || '').slice(0, 30)} · ${size} · ${escapeHtml(created)}</div>
+                    </div>
+                    <button class="icon-btn doc-delete" title="${t('docs.delete')}">✕</button>
+                `;
+                const delBtn = li.querySelector('.doc-delete');
+                delBtn.addEventListener('click', async () => {
+                    if (!confirm(`${t('docs.confirm_delete')}\n${name}`)) return;
+                    delBtn.disabled = true;
+                    try {
+                        const { payload: dp, status: dst } = await ApiClient.deleteDocument(d.doc_id);
+                        if (dst === 200 && dp?.code === 'SUCCESS') {
+                            toast('success', t('docs.deleted'), name);
+                            li.remove();
+                        } else {
+                            toast('error', dp?.code || dst, dp?.message || '');
+                            delBtn.disabled = false;
+                        }
+                    } catch (e) {
+                        toast('error', t('docs.delete_fail'), e.message);
+                        delBtn.disabled = false;
+                    }
+                });
+                els.docsList.appendChild(li);
+            }
+        } catch (e) {
+            els.docsList.innerHTML = `<li class="empty-state error">× ${e.message}</li>`;
+        }
+    }
+
     async function refreshAdminStatus() {
         if (!els.adminGrid) return;
         els.adminGrid.innerHTML = `<div class="empty-state">${t('admin.empty')}...</div>`;
