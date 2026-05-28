@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-common_utils_module.utils.quota — back-compat re-export shim (Task OO #75).
+quota_module — 配额 / 限流 (Task BB #62), 从 common_utils_module 提到独立模块 (Task OO #75).
 
-实际实现已搬到 quota_module/. 老的深度 import 仍可用:
-    from common_utils_module.utils.quota import install_quota_hooks
+per-tenant USD + rate limit, 通过 hooks_module 的 pre_llm_call / pre_tool_call 钩子挂载.
 """
 
-from quota_module.impl import (
+from .impl import (
     QuotaGuard,
     get_quota_guard,
     reset_quota_guard,

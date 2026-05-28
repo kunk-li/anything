@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-common_utils_module.utils.skills — back-compat re-export shim (Task OO #75).
+skills_module — Skill 系统 (Task AA #61), 从 common_utils_module 提到独立模块 (Task OO #75).
 
-实际实现已搬到 skills_module/. 老的深度 import 仍可用:
-    from common_utils_module.utils.skills import parse_skill_file
+skills/*.md 自动注入到 Agent system prompt 的能力. 跨业务/接口/应用层共享.
 """
 
-from skills_module.impl import (
+from .impl import (
     Skill,
     SkillRegistry,
     parse_skill_file,

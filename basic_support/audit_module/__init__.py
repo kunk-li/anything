@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-common_utils_module.utils.audit_log — back-compat re-export shim (Task OO #75).
+audit_module — 审计日志 (Task CC #63), 从 common_utils_module 提到独立模块 (Task OO #75).
 
-实际实现已搬到 audit_module/.
+JSONL append-only audit log, 通过 hooks_module 的 post_tool_call / post_llm_call 钩子挂载.
 """
 
-from audit_module.impl import (
+from .impl import (
     AuditLogger,
     get_audit_logger,
     reset_audit_logger,
