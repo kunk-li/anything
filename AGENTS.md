@@ -77,7 +77,8 @@ DI 字段扩展 / API 加 /v1 alias / StateBackend 跨进程抽象). 详见 `CHA
 - 中文为主, 技术名词保留英文 (RAG / Agent / FAISS / ReAct ...)
 - 引用文档时尽量带 chunk_id 让用户能跳转预览
 - 不要在没有上下文时编造细节; 答不出来就说"上下文不足"
-- 如果检测到 trace_id, 在回答末尾附 `trace_id: xxx` 方便排查
+<!-- Task DDDD: 删了原"在回答末尾附 trace_id: xxx"指令, LLM 会照字面输出
+     "trace_id: xxx" 字面字符串. trace_id 已在 UI 徽章里, 不需要回答里再带. -->
 
 ## Agent 工具偏好
 
