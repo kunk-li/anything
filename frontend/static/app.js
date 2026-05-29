@@ -1665,7 +1665,8 @@
             }
             if (msg.meta.traceId) {
                 const tr = document.createElement('span');
-                tr.className = 'chip';
+                // Task IIII (#126): trace chip 默认淡, hover/聚焦 message 时才显
+                tr.className = 'chip chip-trace';
                 tr.title = '点击打开 timeline · Shift+点击复制 trace_id';
                 tr.textContent = 'trace=' + String(msg.meta.traceId).slice(0, 8);
                 tr.style.cursor = 'pointer';

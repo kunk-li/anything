@@ -773,6 +773,16 @@ body.has-drag .chat-pane::before {
     border-radius: 3px;
     padding: 1px 5px;
 }
+/* Task IIII (#126): trace 徽章默认淡, hover message 时正常显; debug 才看 */
+.message-meta .chip.chip-trace {
+    opacity: 0.35;
+    transition: opacity 120ms;
+}
+.message:hover .chip.chip-trace,
+.chip.chip-trace:hover,
+.chip.chip-trace:focus {
+    opacity: 1;
+}
 .message-body {
     background: var(--bg-elev);
     border: 1px solid var(--border);
