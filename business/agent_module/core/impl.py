@@ -58,6 +58,7 @@ class SimpleAgent(
             session_prefix: str = "session",
             llm_planner: Optional[Callable[[str], str]] = None,
             deps: Optional[BasicDeps] = None,
+            long_term_memory=None,  # Task FFF (#92): 注入 LongTermMemoryImpl, None 时关闭
     ):
         # 基础依赖优先走 DI 注入; 未注入时构造一套(向后兼容)
         deps = deps or build_basic_deps()
@@ -69,6 +70,18 @@ class SimpleAgent(
         # (deps.hook_registry / deps.audit_logger / 等). mixin 通过 self.deps
         # 优先访问; None 时 fallback get_X() 全局单例.
         self.deps = deps
+
+        # Task FFF (#92): 长期记忆 — 跨 session 持久化, 对话前注入相关 fact,
+        # 对话后抽取新 fact 落盘. None 时所有 memory 路径都 no-op.
+        self.long_term_memory = long_term_memory
+        self.memory_top_k = self.config.get_effective_value(
+            "agent.memory_top_k", env_var="ANYTHING_AGENT_MEMORY_TOP_K",
+            default=5, value_type=int,
+        )
+        self.memory_enabled = bool(long_term_memory is not None and self.config.get_effective_value(
+            "agent.memory_enabled", env_var="ANYTHING_AGENT_MEMORY_ENABLED",
+            default=True, value_type=bool,
+        ))
 
         # LLM 规划器: 可显式注入 callable (prompt -> str);
         # 未注入时回退到 tool_registry["llm_generate"]
@@ -224,6 +237,22 @@ class SimpleAgent(
         execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
         strategy = extra_params.get("execution_strategy", self.execution_strategy)
 
+        # Task FFF (#92): 长期记忆 — 任务执行前注入相关 fact 作为前置上下文
+        original_task = task
+        memory_tenant = self._memory_tenant(request)
+        memory_hits_used: List[Dict[str, Any]] = []
+        if task and self.memory_enabled and self.long_term_memory is not None:
+            try:
+                augmented_task, memory_hits_used = self._inject_long_term_memory(
+                    task=task, tenant_id=memory_tenant, trace_id=trace_id,
+                )
+                task = augmented_task
+            except Exception as _mem_err:
+                self.logger.warning(
+                    f"[memory] inject 失败 (continue without memory): "
+                    f"trace_id={trace_id} err={_mem_err}"
+                )
+
         # ReAct 模式优先 (hybrid 由文档定义为固定流水线, 不走 ReAct)
         if strategy == "react" and execution_mode != "hybrid":
             react_result = self._react_execute(
@@ -317,12 +346,33 @@ class SimpleAgent(
                     trace_id=trace_id,
                 )
 
-            return {
+            # Task FFF (#92): 任务完成后从对话抽取 fact 写入长期记忆 (best-effort)
+            if self.memory_enabled and self.long_term_memory is not None:
+                try:
+                    self._extract_and_store_memory(
+                        task=original_task,
+                        final_answer=str(aggregated.get("answer") or "")
+                            if isinstance(aggregated, dict) else "",
+                        session_id=session_id,
+                        tenant_id=memory_tenant,
+                        trace_id=trace_id,
+                    )
+                except Exception as _mem_err:
+                    self.logger.warning(
+                        f"[memory] extract+store 失败 (不影响响应): "
+                        f"trace_id={trace_id} err={_mem_err}"
+                    )
+
+            response = {
                 "code": "SUCCESS", "message": "ok",
                 "data": aggregated, "trace_id": trace_id,
                 "retryable": False, "details": None,
                 "cost_time": round(time.time() - start_time, 3),
             }
+            # 把命中的记忆条目记到 details, 让前端 / debug 可见 (不影响 SUCCESS 字段语义)
+            if memory_hits_used:
+                response["details"] = {"memory_hits": memory_hits_used}
+            return response
 
         except Exception as e:
             self.logger.error(f"Agent执行异常: {str(e)}, trace_id={trace_id}, session_id={session_id}")
@@ -653,6 +703,115 @@ class SimpleAgent(
     def _fallback_session_id(self) -> str:
         """仅兼容兜底使用, 不作为主路径."""
         return f"{self.session_prefix}_{uuid.uuid4().hex[:12]}"
+
+    # ============================================================
+    # Task FFF (#92): 长期记忆集成 helpers
+    # ============================================================
+
+    def _memory_tenant(self, request: Dict[str, Any]) -> str:
+        """从 request / observability context 解析当前 tenant_id, 兜底 default."""
+        tenant = (request.get("extra_params") or {}).get("tenant_id")
+        if tenant:
+            return str(tenant)
+        # 走 observability_module 的 context var (ApiService middleware 设的)
+        try:
+            from observability_module import get_current_tenant
+            cur = get_current_tenant()
+            if cur:
+                return str(cur)
+        except Exception:
+            pass
+        return "default"
+
+    def _inject_long_term_memory(
+        self, task: str, tenant_id: str, trace_id: Optional[str],
+    ) -> tuple:
+        """从长期记忆查相关 fact, 拼成 context block 加到 task 前面.
+
+        返回 (augmented_task, hits_summary_list).
+        hits_summary_list 用于响应 details["memory_hits"], 方便前端显示
+        "Agent 用到了 X 条长期记忆".
+        """
+        try:
+            from long_term_memory_module import MemoryQuery
+        except Exception:
+            return task, []
+
+        query = MemoryQuery(
+            query=task, tenant_id=tenant_id, top_k=self.memory_top_k,
+        )
+        hits = self.long_term_memory.search_facts(query)
+        if not hits:
+            return task, []
+
+        lines = ["[长期记忆 — 已知关于用户/上下文的相关信息]"]
+        summary: List[Dict[str, Any]] = []
+        for h in hits:
+            lines.append(f"- {h.fact.content}")
+            summary.append({
+                "fact_id": h.fact.fact_id,
+                "content": h.fact.content[:120],
+                "score": round(h.score, 3),
+                "reason": h.reason,
+            })
+        lines.append("")
+        lines.append("[当前任务]")
+        lines.append(task)
+        augmented = "\n".join(lines)
+        self.logger.info(
+            f"[memory] 注入 {len(hits)} 条 fact 到 task, "
+            f"tenant={tenant_id}, trace_id={trace_id}"
+        )
+        return augmented, summary
+
+    def _extract_and_store_memory(
+        self,
+        task: str,
+        final_answer: str,
+        session_id: str,
+        tenant_id: str,
+        trace_id: Optional[str],
+    ) -> int:
+        """从 (task, final_answer) 抽 fact list 入库 long_term_memory.
+
+        返回新增 / bump 的 fact 总数. 用户的设计核心:
+            extract → 每条 add_fact → impl 内部按 hash + 语义双阶段 dedup
+            重复 fact 走 mark_accessed 而不是新增 (符合"存在就标记")
+        失败 (LLM 不可用 / 抽取报错) 不阻断主响应.
+        """
+        try:
+            facts = self.long_term_memory.extract_facts(
+                messages=[
+                    {"role": "user", "content": task},
+                    {"role": "assistant", "content": final_answer},
+                ],
+                tenant_id=tenant_id,
+                session_id=session_id,
+            )
+        except NotImplementedError:
+            # impl 没注入 llm_client — 静默关闭, 不报警
+            return 0
+        except Exception as e:
+            self.logger.warning(
+                f"[memory] extract_facts 失败: tenant={tenant_id} trace_id={trace_id} err={e}"
+            )
+            return 0
+
+        count = 0
+        for f in facts:
+            try:
+                self.long_term_memory.add_fact(f)
+                count += 1
+            except Exception as e:
+                self.logger.warning(
+                    f"[memory] add_fact 失败 fact_id={f.fact_id}: {e}"
+                )
+        if count:
+            self.logger.info(
+                f"[memory] 落盘 {count} 条 fact: tenant={tenant_id} session={session_id} "
+                f"trace_id={trace_id}"
+            )
+        return count
 
     def _summarize_tool_output(self, output: Any) -> str:
         """将工具输出压缩为简短摘要 (给 LLM 看 + 给前端展示).
