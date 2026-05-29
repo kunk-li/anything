@@ -363,11 +363,14 @@
             ApiClient.configure(state.settings);
             // 3. 刷新列表 (新 session 自动 active 高亮)
             await refreshSessions();
-            // 4. 清空主聊天区(新会话 = 新对话)
+            // 4. 清空主聊天区 → 重渲 welcome (含示例 prompt)
+            //    + Task MMMM (#130) 淡入动效
+            state.history = [];
+            renderHistory();
             if (els.messages) {
-                const welcome = els.messages.querySelector('.welcome');
-                els.messages.innerHTML = '';
-                if (welcome) els.messages.appendChild(welcome);
+                els.messages.classList.remove('session-switched');
+                void els.messages.offsetWidth;
+                els.messages.classList.add('session-switched');
             }
             toast('success', '新会话已创建', newId);
         } catch (e) {
@@ -483,7 +486,13 @@
     async function _loadSessionHistory(sid) {
         // 清空当前展示, 先给"正在加载"占位
         state.history = [];
-        if (els.messages) els.messages.innerHTML = '<div class="welcome"><p>加载会话历史中…</p></div>';
+        if (els.messages) {
+            els.messages.innerHTML = '<div class="welcome"><p>加载会话历史中…</p></div>';
+            // Task MMMM (#130): 触发淡入动效 (replay 需先移除再加 class)
+            els.messages.classList.remove('session-switched');
+            void els.messages.offsetWidth;
+            els.messages.classList.add('session-switched');
+        }
         try {
             const { payload, status } = await ApiClient.getSession(sid);
             if (status === 404) {

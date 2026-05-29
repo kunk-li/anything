@@ -640,6 +640,15 @@ body.has-drag .chat-pane::before {
     scroll-behavior: smooth;
 }
 
+/* Task MMMM (#130): 切会话/新建会话时, messages 区淡入, 给视觉反馈 */
+.messages.session-switched {
+    animation: messagesFadeIn 220ms ease-out;
+}
+@keyframes messagesFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 .welcome {
     max-width: 640px;
     margin: 48px auto;
