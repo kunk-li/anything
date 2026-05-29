@@ -1717,6 +1717,59 @@
         return baseAnswer;
     }
 
+    // Task VVVV (#146): 给消息里每张图加 hover 出现的下载按钮
+    function _attachImageDownloadButtons(root) {
+        if (!root) return;
+        root.querySelectorAll('img').forEach(img => {
+            if (img.dataset.dlBound) return;
+            img.dataset.dlBound = '1';
+            // 包一层 wrapper, 容纳绝对定位的按钮
+            const wrapper = document.createElement('span');
+            wrapper.className = 'md-img-wrapper';
+            img.parentNode.insertBefore(wrapper, img);
+            wrapper.appendChild(img);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'md-img-download';
+            btn.innerHTML = '⬇ 下载';
+            btn.title = '下载到本地';
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const url = img.src;
+                try {
+                    btn.disabled = true;
+                    btn.textContent = '下载中…';
+                    const res = await fetch(url);
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const blob = await res.blob();
+                    const objUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = objUrl;
+                    // 文件名: 从 url 抠最后一段 + 时间戳兜底
+                    let fname = (url.split('?')[0].split('/').pop() || '');
+                    if (!fname || !/\.(png|jpe?g|webp|gif)$/i.test(fname)) {
+                        fname = 'image_' + Date.now() + '.png';
+                    }
+                    a.download = fname;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(objUrl);
+                    toast('success', '已保存', fname);
+                } catch (err) {
+                    // CORS 失败 → 退回直接打开新 tab 让用户右键保存
+                    window.open(url, '_blank', 'noopener');
+                    toast('warn', '直接下载失败 (已新开 tab)', err.message);
+                } finally {
+                    btn.disabled = false;
+                    btn.innerHTML = '⬇ 下载';
+                }
+            });
+            wrapper.appendChild(btn);
+        });
+    }
+
     // Task TTTT-6: 找出工具返回的图片 URL (image_generate 等)
     function _collectGeneratedImages(d) {
         const urls = new Set();
@@ -1928,6 +1981,8 @@
             // 助手成功响应走 markdown 渲染 (用户消息保持 plain text 防 XSS)
             body.innerHTML = window.Markdown.render(msg.content || '');
             window.Markdown.bindCopyButtons(body);
+            // Task VVVV (#146): 给每张 <img> 包 wrapper + 下载按钮
+            _attachImageDownloadButtons(body);
         } else {
             body.textContent = msg.content || '';
         }
