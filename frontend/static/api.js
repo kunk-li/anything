@@ -269,6 +269,10 @@ const ApiClient = (() => {
     async function createSession() {
         return _doFetch('POST', '/sessions', {});
     }
+    // Task ZZZZ (#117): 读取 session state (切换时拉历史)
+    async function getSession(sessionId) {
+        return _doFetch('GET', `/sessions/${encodeURIComponent(sessionId)}`);
+    }
 
     function getSettings() { return { ...settings }; }
 
@@ -393,6 +397,7 @@ const ApiClient = (() => {
         listSessions,
         deleteSession,
         createSession,
+        getSession,  // ZZZZ (#117)
     };
 })();
 

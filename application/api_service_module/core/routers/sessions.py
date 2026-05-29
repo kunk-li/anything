@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-SessionsRoutesMixin (Task SSS #105)
+SessionsRoutesMixin (Task SSS #105 + ZZZZ #117)
 
-3 个会话管理路由 (基于 state_store_module):
+4 个会话管理路由 (基于 state_store_module):
     GET    /sessions/list           列已知 session_id
+    GET    /sessions/{session_id}   读取 session state (供切换时拉历史)
     DELETE /sessions/{session_id}   清除 session 状态
     POST   /sessions                创建新 session (返回新 uuid)
 
@@ -46,6 +47,39 @@ class SessionsRoutesMixin:
             except Exception as e:
                 return JSONResponse(
                     {"code": "SESSIONS_LIST_FAILED", "message": str(e),
+                     "data": None, "trace_id": trace_id,
+                     "retryable": False, "details": None},
+                    status_code=500,
+                )
+
+        # Task ZZZZ (#117): 读取 session state — 切换会话时拉历史用
+        @self.app.get("/sessions/{session_id}")
+        async def sessions_get(session_id: str, request: Request):
+            trace_id = request.state.trace_id
+            if not getattr(self, "state_store", None):
+                return JSONResponse(
+                    {"code": "SERVICE_UNAVAILABLE", "message": "state_store 未注入",
+                     "data": None, "trace_id": trace_id,
+                     "retryable": False, "details": None},
+                    status_code=501,
+                )
+            try:
+                state = self.state_store.get_state(session_id)
+                if state is None:
+                    return JSONResponse(
+                        {"code": "SESSION_NOT_FOUND", "message": f"session 不存在: {session_id}",
+                         "data": None, "trace_id": trace_id,
+                         "retryable": False, "details": None},
+                        status_code=404,
+                    )
+                return JSONResponse({
+                    "code": "SUCCESS", "message": "ok",
+                    "data": state,  # 直接返完整 state, 前端按 events 数组里 role=user/assistant 重建
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                })
+            except Exception as e:
+                return JSONResponse(
+                    {"code": "SESSIONS_GET_FAILED", "message": str(e),
                      "data": None, "trace_id": trace_id,
                      "retryable": False, "details": None},
                     status_code=500,

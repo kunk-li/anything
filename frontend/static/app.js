@@ -172,6 +172,15 @@
         pollHealth();
         setInterval(pollHealth, 30000);
 
+        // Task ZZZZ (#117): 启动后用服务端 session state 覆盖 localStorage 缓存,
+        // 避免上次 sessionA 留下来的 history 误显示在切了 sessionB 之后. 服务端是单一真相源.
+        setTimeout(() => {
+            const sid = state.settings.sessionId;
+            if (sid && typeof _loadSessionHistory === 'function') {
+                _loadSessionHistory(sid).catch(() => {});
+            }
+        }, 400);
+
         // Task KKK (#97): 长期记忆面板 — 工厂注入 deps + bindEvents
         if (window.AnythingApp && window.AnythingApp.memoryPanel) {
             const memPanel = window.AnythingApp.memoryPanel({ els, t, toast, escapeHtml });
@@ -358,14 +367,116 @@
         return deleteSessionById(sid);
     }
 
+    // Task ZZZZ (#117): 把后端 session state 转成前端 message 数组.
+    //   优先级:
+    //     1. events 里 role=user/assistant 直接对应 (RAG/chat 路径)
+    //     2. events 里 react_started.payload.task / react_final.payload.final_answer_preview (React 路径)
+    //     3. state 顶层 task (React agent 短路径 — 任务执行完只保留概要)
+    function _stateToMessages(state_data) {
+        if (!state_data || typeof state_data !== 'object') return [];
+        const events = state_data.events || state_data.history || [];
+        const out = [];
+        let idx = 0;
+        // 路径 1: role event
+        let hasRoleMsg = false;
+        for (const ev of events) {
+            if (!ev || typeof ev !== 'object') continue;
+            if (ev.role === 'user' || ev.role === 'assistant') {
+                hasRoleMsg = true;
+                out.push({
+                    id: 'hist_' + (idx++) + '_' + (ev.trace_id || '').slice(0, 8),
+                    role: ev.role,
+                    content: String(ev.content || ''),
+                    timestamp: ev.timestamp || null,
+                    trace_id: ev.trace_id || null,
+                    type: ev.type || null,
+                });
+            }
+        }
+        if (hasRoleMsg) return out;
+        // 路径 2: React event 流
+        for (const ev of events) {
+            if (!ev || typeof ev !== 'object') continue;
+            if (ev.event_type === 'react_started') {
+                const task = (ev.payload || {}).task;
+                if (task) out.push({
+                    id: 'hist_' + (idx++) + '_started',
+                    role: 'user', content: String(task),
+                    timestamp: ev.timestamp || null,
+                    trace_id: ev.trace_id || null,
+                    type: 'agent',
+                });
+            } else if (ev.event_type === 'react_final') {
+                const ans = (ev.payload || {}).final_answer_preview;
+                if (ans) out.push({
+                    id: 'hist_' + (idx++) + '_final',
+                    role: 'assistant', content: String(ans),
+                    timestamp: ev.timestamp || null,
+                    trace_id: ev.trace_id || null,
+                    type: 'agent',
+                });
+            }
+        }
+        if (out.length > 0) return out;
+        // 路径 3: 状态顶层 task — 兜底, react agent 执行完后 events 可能被清空只留 task
+        const topTask = state_data.task;
+        if (topTask) {
+            out.push({
+                id: 'hist_top_task',
+                role: 'user', content: String(topTask),
+                type: state_data.execution_mode || 'agent',
+            });
+            // 状态是 completed 但没 final_answer_preview, 给个占位
+            if (state_data.status === 'completed') {
+                out.push({
+                    id: 'hist_top_done',
+                    role: 'assistant',
+                    content: `_（此会话已完成, 但未保留完整回答内容. 仅显示任务: "${topTask}"）_`,
+                    type: state_data.execution_mode || 'agent',
+                });
+            }
+        }
+        return out;
+    }
+
+    async function _loadSessionHistory(sid) {
+        // 清空当前展示, 先给"正在加载"占位
+        state.history = [];
+        if (els.messages) els.messages.innerHTML = '<div class="welcome"><p>加载会话历史中…</p></div>';
+        try {
+            const { payload, status } = await ApiClient.getSession(sid);
+            if (status === 404) {
+                // 新会话/空会话, 渲欢迎页就好
+                renderHistory();
+                return;
+            }
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载失败 ${payload?.code || status} ${payload?.message || ''}</p></div>`;
+                return;
+            }
+            const state_data = payload.data || {};
+            const msgs = _stateToMessages(state_data);
+            state.history = msgs;
+            renderHistory();
+        } catch (e) {
+            els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载异常: ${escapeHtml(e.message)}</p></div>`;
+        }
+    }
+
     function switchSessionTo(sid) {
         if (!sid || sid === state.settings.sessionId) return;
+        // 切前停掉正在跑的 stream, 避免到错 session
+        try {
+            if (typeof stopSending === 'function') stopSending();
+        } catch (_) {}
         state.settings.sessionId = sid;
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
         ApiClient.configure(state.settings);
         // 重新渲列表 active 状态
         refreshSessions();
+        // Task ZZZZ (#117): 拉新 session 的 events → 重建 message 区
+        _loadSessionHistory(sid);
         toast('info', '已切换会话', sid);
     }
 
