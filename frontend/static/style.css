@@ -916,9 +916,38 @@ body.has-drag .chat-pane::before {
     font-size: 12px;
     cursor: pointer;
     user-select: none;
+    position: relative;
 }
 .stream-toggle input { margin: 0; cursor: pointer; }
 .stream-toggle input:checked + span { color: var(--accent); font-weight: 600; }
+
+/* Task JJJJ (#127): 自绘 tooltip — 比 native title 立刻显, 样式可控 */
+.has-tip::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-elev2, #232328);
+    color: var(--text, #e0e0e0);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: normal;
+    width: 220px;
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 100ms 200ms;  /* 200ms 延迟才显, 避鼠标扫过乱闪 */
+    z-index: 1000;
+}
+.has-tip:hover::after {
+    opacity: 1;
+    visibility: visible;
+}
 
 .stream-cursor {
     display: inline-block;
