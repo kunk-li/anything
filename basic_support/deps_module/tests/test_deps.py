@@ -4,6 +4,13 @@ deps_module 单元测试
 """
 
 import os
+
+# Task WW (#83): 单独跑本测试时显式启用 dev mode 避免 build_basic_deps
+# 在生产模式因 secrets 未配抛 StartupError. 通过 scripts/run_tests.sh 跑时
+# 该变量已被设置, 这里 setdefault 不覆盖 (跟 api_service_module/tests/test_impl.py
+# 一致的处理). 没有这个 setdefault, 3 个 BasicDeps 测试会 ERROR.
+os.environ.setdefault("ANYTHING_DEV_MODE", "1")
+
 import unittest
 
 from deps_module import (
