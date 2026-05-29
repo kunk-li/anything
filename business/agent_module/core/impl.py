@@ -114,10 +114,11 @@ class SimpleAgent(
             "agent.execution_strategy", env_var="ANYTHING_AGENT_EXECUTION_STRATEGY",
             default="single_shot",
         )
-        # ReAct 模式最大轮数
+        # Task TTTT-1 (#138): ReAct 模式最大轮数 — 默认 15 (旧 5 太短, 长 agentic 任务卡死).
+        # 单次 invoke 可以 extra_params.max_iterations 临时覆盖.
         self.max_react_iterations = self.config.get_effective_value(
             "agent.max_react_iterations", env_var="ANYTHING_AGENT_MAX_REACT_ITER",
-            default=5, value_type=int,
+            default=15, value_type=int,
         )
 
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带

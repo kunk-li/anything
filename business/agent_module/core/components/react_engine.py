@@ -87,9 +87,17 @@ class ReActEngineMixin:
                     "cost_time": round(time.time() - start_time, 3),
                 }
 
+        # Task TTTT-1 (#138): 允许 extra_params.max_iterations 临时覆盖默认 self.max_react_iterations.
+        # 限制 1~50 防爆掉成本.
+        _override = extra_params.get("max_iterations")
+        if isinstance(_override, int) and 1 <= _override <= 50:
+            max_iter = _override
+        else:
+            max_iter = self.max_react_iterations
+
         self._append_state_event(
             session_id=session_id, event_type="react_started", trace_id=trace_id,
-            payload={"task": task, "max_iterations": self.max_react_iterations},
+            payload={"task": task, "max_iterations": max_iter},
         )
 
         history: List[Dict[str, Any]] = []
@@ -99,13 +107,13 @@ class ReActEngineMixin:
 
         tool_descriptions = self._tool_descriptions()
 
-        for iteration in range(1, self.max_react_iterations + 1):
+        for iteration in range(1, max_iter + 1):
             prompt = self._build_react_prompt(
                 task=task,
                 available_tools=available_tools,
                 history=history,
                 iteration=iteration,
-                max_iterations=self.max_react_iterations,
+                max_iterations=max_iter,
                 tool_descriptions=tool_descriptions,
             )
             try:
