@@ -238,6 +238,20 @@
                            data-i18n-attr="placeholder:settings.session.placeholder" />
                     <p class="hint" data-i18n="settings.session.hint">用于跨请求关联,留空自动生成</p>
                 </div>
+
+                <!-- Task SSS (#105): 多会话管理 -->
+                <div class="form-row">
+                    <label data-i18n="sessions.title">会话切换 (Sessions)</label>
+                    <div class="sessions-toolbar">
+                        <select id="sessions-select" class="full-row">
+                            <option value="">(选择已存在会话)</option>
+                        </select>
+                        <button type="button" class="small-btn" id="sessions-refresh-btn" data-i18n="sessions.refresh">🔁 刷新</button>
+                        <button type="button" class="small-btn primary" id="sessions-new-btn" data-i18n="sessions.new">+ 新会话</button>
+                        <button type="button" class="small-btn danger" id="sessions-delete-btn" data-i18n="sessions.delete">✕ 删除</button>
+                    </div>
+                    <p class="hint" data-i18n="sessions.hint">每个 session 独立的 Agent 状态 + RAG 对话历史. 切换后输入框还在, 但 Agent 会从新 session 开始记忆.</p>
+                </div>
                 <div class="form-row">
                     <label data-i18n="settings.locale">界面语言</label>
                     <div class="lang-switch">

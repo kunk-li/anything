@@ -248,6 +248,17 @@ const ApiClient = (() => {
         );
     }
 
+    // ============== Task SSS (#105) — Sessions APIs ==============
+    async function listSessions(limit = 50) {
+        return _doFetch('GET', `/sessions/list?limit=${limit}`);
+    }
+    async function deleteSession(sessionId) {
+        return _doFetch('DELETE', `/sessions/${encodeURIComponent(sessionId)}`);
+    }
+    async function createSession() {
+        return _doFetch('POST', '/sessions', {});
+    }
+
     function getSettings() { return { ...settings }; }
 
     /**
@@ -363,6 +374,10 @@ const ApiClient = (() => {
         deleteMemoryFact,
         pinMemoryFact,
         searchMemory,
+        // Task SSS (#105) — Sessions
+        listSessions,
+        deleteSession,
+        createSession,
     };
 })();
 

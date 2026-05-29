@@ -35,6 +35,7 @@ from .routers import (
     ConfigRoutesMixin,
     MemoryRoutesMixin,
     SchedulerRoutesMixin,
+    SessionsRoutesMixin,
     FrontendRoutesMixin,
 )
 
@@ -47,6 +48,7 @@ class ApiService(
     ConfigRoutesMixin,
     MemoryRoutesMixin,
     SchedulerRoutesMixin,
+    SessionsRoutesMixin,
     FrontendRoutesMixin,
 ):
     """标准 API 服务实现: 只负责 HTTP 协议层, 不承载业务语义校验.
@@ -67,6 +69,7 @@ class ApiService(
         vector_db=None,            # Task S: 读 ntotal
         long_term_memory=None,     # Task GGG (#93): /memory/* 路由用
         scheduler=None,            # Task PPP (#102): /scheduler/* 路由用 (II #69 TaskScheduler)
+        state_store=None,          # Task SSS (#105): /sessions/* 路由用
     ):
         """
         Args:
@@ -92,6 +95,8 @@ class ApiService(
         self.long_term_memory = long_term_memory
         # Task PPP (#102): /scheduler/* 路由用. None 时所有 scheduler 路由返 SERVICE_UNAVAILABLE.
         self.scheduler = scheduler
+        # Task SSS (#105): /sessions/* 路由用. 注入 state_store 让用户能列/删 session.
+        self.state_store = state_store
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils
@@ -409,6 +414,7 @@ class ApiService(
         self._register_config_routes()
         self._register_memory_routes()  # Task GGG (#93): /memory/* 5 路由
         self._register_scheduler_routes()  # Task PPP (#102): /scheduler/* 3 路由
+        self._register_sessions_routes()  # Task SSS (#105): /sessions/* 3 路由
         # Task VV (#82): 在前端路由之前, 把所有现有 API 路由复制一份到 /v1/<path>
         # 让客户端可逐步迁到带版本的 URL; 老 path 保留无限期 (打 deprecated 头).
         self._register_v1_aliases()

@@ -115,6 +115,11 @@
         traceModeChip: $('trace-mode-chip'),
         traceTimeline: $('trace-timeline'),
         traceRaw: $('trace-raw'),
+        // Task SSS (#105): 多会话切换 (settings drawer 内)
+        sessionsSelect: $('sessions-select'),
+        sessionsRefreshBtn: $('sessions-refresh-btn'),
+        sessionsNewBtn: $('sessions-new-btn'),
+        sessionsDeleteBtn: $('sessions-delete-btn'),
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -164,6 +169,101 @@
             window.AnythingApp._memoryPanel = memPanel;
             memPanel.bindEvents();
         }
+
+        // Task SSS (#105): 多会话切换 bindEvents
+        if (els.sessionsRefreshBtn) els.sessionsRefreshBtn.addEventListener('click', refreshSessions);
+        if (els.sessionsNewBtn) els.sessionsNewBtn.addEventListener('click', createNewSession);
+        if (els.sessionsDeleteBtn) els.sessionsDeleteBtn.addEventListener('click', deleteSelectedSession);
+        if (els.sessionsSelect) els.sessionsSelect.addEventListener('change', switchSession);
+        // 打开 settings 抽屉时自动刷新一次 session 列表
+        if (els.settingsBtn) {
+            els.settingsBtn.addEventListener('click', () => {
+                setTimeout(refreshSessions, 100);
+            });
+        }
+    }
+
+    // ---------- Task SSS (#105): 多会话管理 ----------
+    async function refreshSessions() {
+        if (!els.sessionsSelect) return;
+        try {
+            const { payload, status } = await ApiClient.listSessions(50);
+            if (status === 501) {
+                els.sessionsSelect.innerHTML = '<option value="">(state_store 未注入)</option>';
+                return;
+            }
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                els.sessionsSelect.innerHTML = `<option value="">(${payload?.code || status})</option>`;
+                return;
+            }
+            const sessions = (payload.data || {}).sessions || [];
+            const current = state.settings.sessionId;
+            const opts = ['<option value="">(选择会话)</option>'];
+            for (const s of sessions) {
+                const sid = s.session_id;
+                const when = s.last_modified
+                    ? new Date(s.last_modified * 1000).toLocaleString()
+                    : '';
+                const flag = s.has_history ? '💬 ' : '   ';
+                const selected = sid === current ? ' selected' : '';
+                const label = `${flag}${sid.slice(0, 30)} · ${when}`;
+                opts.push(`<option value="${escapeHtml(sid)}"${selected}>${escapeHtml(label)}</option>`);
+            }
+            els.sessionsSelect.innerHTML = opts.join('');
+        } catch (e) {
+            els.sessionsSelect.innerHTML = `<option value="">(${escapeHtml(e.message)})</option>`;
+        }
+    }
+
+    async function createNewSession() {
+        try {
+            const { payload, status } = await ApiClient.createSession();
+            if (status === 200 && payload?.code === 'SUCCESS') {
+                const newId = payload.data?.session_id;
+                if (newId) {
+                    state.settings.sessionId = newId;
+                    if (els.sessionInput) els.sessionInput.value = newId;
+                    saveSettings();  // 顺手存 localStorage
+                    refreshSessions();
+                    toast('success', '新会话已创建', newId);
+                }
+            } else {
+                toast('error', payload?.code || status, payload?.message || '');
+            }
+        } catch (e) {
+            toast('error', '新建会话失败', e.message);
+        }
+    }
+
+    async function deleteSelectedSession() {
+        if (!els.sessionsSelect || !els.sessionsSelect.value) {
+            toast('warn', '请先选择一个会话', '');
+            return;
+        }
+        const sid = els.sessionsSelect.value;
+        if (!confirm(`确认删除会话 ${sid}? 不可恢复.`)) return;
+        try {
+            const { payload, status } = await ApiClient.deleteSession(sid);
+            if (status === 200 && payload?.code === 'SUCCESS') {
+                toast('success', '会话已删除', sid);
+                refreshSessions();
+            } else {
+                toast('error', payload?.code || status, payload?.message || '');
+            }
+        } catch (e) {
+            toast('error', '删除会话失败', e.message);
+        }
+    }
+
+    function switchSession() {
+        if (!els.sessionsSelect) return;
+        const sid = els.sessionsSelect.value;
+        if (!sid) return;
+        state.settings.sessionId = sid;
+        if (els.sessionInput) els.sessionInput.value = sid;
+        try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+        ApiClient.configure(state.settings);
+        toast('info', '已切换会话', sid);
     }
 
     function updateLangButton() {

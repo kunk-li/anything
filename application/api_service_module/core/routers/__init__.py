@@ -21,6 +21,7 @@ from .admin import AdminRoutesMixin
 from .config import ConfigRoutesMixin
 from .memory import MemoryRoutesMixin
 from .scheduler import SchedulerRoutesMixin
+from .sessions import SessionsRoutesMixin
 from .frontend import FrontendRoutesMixin
 
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "ConfigRoutesMixin",
     "MemoryRoutesMixin",
     "SchedulerRoutesMixin",
+    "SessionsRoutesMixin",
     "FrontendRoutesMixin",
 ]

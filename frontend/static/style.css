@@ -1839,6 +1839,24 @@ body.has-drag .chat-pane::before {
     font-style: italic;
 }
 
+/* Task SSS (#105): 多会话切换 toolbar */
+.sessions-toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 6px;
+    align-items: center;
+}
+.sessions-toolbar select {
+    grid-column: 1 / -1;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+}
+
 /* Task RRR (#104): Trace timeline 视图 */
 .trace-timeline {
     list-style: none;

@@ -238,3 +238,50 @@ class LocalStateStore(BaseStateStore):
         except Exception as e:
             self.logger.error(f"状态清理失败：{session_id} - {e}", logger_name="state_store_module")
             raise StateStoreException("STATE_STORE_CLEAR_FAILED", f"状态清理失败：{e}") from e
+
+    def list_sessions(self, limit: int = 100) -> list:
+        """Task SSS (#105): 扫 store_dir 列已知 session.
+
+        返回 [{session_id, last_modified, size_bytes, has_history}, ...],
+        按 last_modified 倒序. has_history 看 state.get("history") 是否非空.
+        """
+        out = []
+        try:
+            if not os.path.isdir(self.store_dir):
+                return out
+            entries = []
+            for name in os.listdir(self.store_dir):
+                if not name.endswith(".json"):
+                    continue
+                p = os.path.join(self.store_dir, name)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                session_id = name[:-5]  # strip .json
+                entries.append((st.st_mtime, st.st_size, session_id, p))
+            entries.sort(key=lambda x: x[0], reverse=True)
+            for mtime, size, sid, p in entries[:limit]:
+                has_history = False
+                # 尝试 peek state 看 history 是否非空 (不读完整文件浪费 IO 还是要读)
+                try:
+                    import json as _json
+                    with open(p, "r", encoding="utf-8") as f:
+                        st = _json.load(f)
+                    if isinstance(st, dict):
+                        events = st.get("events") or st.get("history") or []
+                        has_history = bool(events)
+                except Exception:
+                    pass
+                out.append({
+                    "session_id": sid,
+                    "last_modified": mtime,
+                    "size_bytes": size,
+                    "has_history": has_history,
+                })
+        except Exception as e:
+            self.logger.warning(
+                f"list_sessions 扫描失败 (返回部分): {e}",
+                logger_name="state_store_module",
+            )
+        return out
