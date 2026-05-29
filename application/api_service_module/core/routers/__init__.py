@@ -22,6 +22,7 @@ from .config import ConfigRoutesMixin
 from .memory import MemoryRoutesMixin
 from .scheduler import SchedulerRoutesMixin
 from .sessions import SessionsRoutesMixin
+from .agent import AgentRoutesMixin  # Task FFFF (#123)
 from .frontend import FrontendRoutesMixin
 
 __all__ = [
@@ -33,5 +34,6 @@ __all__ = [
     "MemoryRoutesMixin",
     "SchedulerRoutesMixin",
     "SessionsRoutesMixin",
+    "AgentRoutesMixin",
     "FrontendRoutesMixin",
 ]

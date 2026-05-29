@@ -1340,6 +1340,60 @@ body.has-drag .chat-pane::before {
     word-break: break-word;
 }
 
+/* ============== Task FFFF (#123): Agent 工具空态卡片网格 ============== */
+.agent-tools-empty {
+    text-align: left;
+    padding: 8px 4px;
+}
+.empty-state-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 6px 4px 10px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+}
+.empty-state-header strong { font-size: 13px; color: var(--text); }
+.empty-state-header .hint { font-size: 10px; color: var(--text-faint); }
+.agent-tools-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.agent-tools-cat h5 {
+    margin: 0 0 6px 0;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.agent-tool-card {
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    cursor: default;
+}
+.agent-tool-card code {
+    color: var(--accent, #4f8cff);
+    font-size: 11px;
+    font-family: var(--mono);
+    font-weight: 600;
+}
+.agent-tool-desc {
+    color: var(--text-faint);
+    font-size: 10px;
+    margin-top: 2px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
 /* ============== Task YYYY-J (#115): 文档 tab 视觉分区 ============== */
 .docs-section {
     padding: 8px 4px 12px;

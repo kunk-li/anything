@@ -183,6 +183,10 @@
             }
         }, 400);
 
+        // Task FFFF (#123): 启动后拉一次 /agent/tools, 让 "工具调用" tab 空态时
+        // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
+        setTimeout(_loadAgentTools, 600);
+
         // Task KKK (#97): 长期记忆面板 — 工厂注入 deps + bindEvents
         if (window.AnythingApp && window.AnythingApp.memoryPanel) {
             const memPanel = window.AnythingApp.memoryPanel({ els, t, toast, escapeHtml });
@@ -2251,6 +2255,46 @@
         } catch (e) {
             els.jobResult.className = 'job-result error';
             els.jobResult.textContent = `× ${e.message}`;
+        }
+    }
+
+    // ---------- Task FFFF (#123): Agent 工具列表 (空态展示) ----------
+    async function _loadAgentTools() {
+        const grid = document.getElementById('agent-tools-grid');
+        if (!grid) return;
+        try {
+            const r = await fetch('/agent/tools');
+            const j = await r.json();
+            if (r.status !== 200 || j?.code !== 'SUCCESS') {
+                grid.innerHTML = `<div class="hint">加载失败: ${j?.code || r.status}</div>`;
+                return;
+            }
+            const by_category = j.data?.by_category || {};
+            const cats = Object.keys(by_category).sort();
+            if (cats.length === 0) {
+                grid.innerHTML = '<div class="hint">没有注册任何工具</div>';
+                return;
+            }
+            const cat_label = {
+                knowledge: '🔍 信息检索', compute: '🧮 计算/时间', text: '📝 文本',
+                file: '📄 文件', system: '💻 系统', llm: '🤖 LLM/Agent',
+                external: '🌐 外部 API', other: '🧰 其他',
+            };
+            const html = cats.map(cat => {
+                const items = (by_category[cat] || []).map(t => `
+                    <div class="agent-tool-card" title="${escapeHtml(t.description || '')}">
+                        <code>${escapeHtml(t.name)}</code>
+                        <div class="agent-tool-desc">${escapeHtml((t.description || '').slice(0, 100))}</div>
+                    </div>
+                `).join('');
+                return `<div class="agent-tools-cat">
+                    <h5>${cat_label[cat] || cat}</h5>
+                    ${items}
+                </div>`;
+            }).join('');
+            grid.innerHTML = html;
+        } catch (e) {
+            grid.innerHTML = `<div class="hint">加载异常: ${escapeHtml(e.message)}</div>`;
         }
     }
 

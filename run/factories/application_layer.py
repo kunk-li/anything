@@ -79,6 +79,8 @@ def build_application_layer(
         long_term_memory = business_layer.get("long_term_memory") if business_layer else None
         # Task SSS (#105): 透传 state_store 给 /sessions/* 3 路由
         state_store = data_layer.get("state_store") if data_layer else None
+        # Task FFFF (#123): 透传 tool_registry 给 /agent/tools 路由
+        tool_registry = business_layer.get("tool_registry") if business_layer else None
 
         result["api_service"] = ApiService(
             handler=handler,
@@ -90,6 +92,7 @@ def build_application_layer(
             vector_db=vec_db_for_admin,
             long_term_memory=long_term_memory,
             state_store=state_store,
+            tool_registry=tool_registry,
         )
 
     if build_console:
