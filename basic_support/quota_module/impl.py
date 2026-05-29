@@ -28,30 +28,54 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
-from typing import Deque, Dict, Optional
+from typing import Deque, Dict, Optional, TYPE_CHECKING
 
 from hooks_module import BlockedError, get_hook_registry
 
+if TYPE_CHECKING:
+    # Task AAA (#87): Phase 2 — cross-process backend, runtime 不强依赖
+    from state_backend_module import StateBackend
+
 
 class QuotaGuard:
-    """单进程的配额 / 限流计数器. 线程安全.
+    """配额 / 限流计数器, 线程安全.
 
-    Sliding window rate limit: 用 deque 存最近 60s 的 timestamps,
-    超出窗口的自动清理.
-    Daily USD: 维护一个 (date_key, total_usd_today) tuple, 跨天重置.
+    Task AAA (#87): 加 optional backend 参数, 让多 worker 进程共享限流计数.
+    backend=None (默认) 进程内 dict + Lock (跟今天一致);
+    backend=SqliteBackend(path) 让 4 个 worker 看同一份 rate window 和 daily USD,
+    rate=30/min × 4 worker 不再变成实际 120/min.
+
+    限流策略:
+        Sliding window rate limit (in-process): deque 存最近 60s 时间戳
+        Sliding window rate limit (backend):    list_append + list_get 过滤 > 60s 老的
+        Daily USD: 跨天自动重置 (key 带 date 标记)
+        Global USD: 进程内 / 跨进程累计 cost
+
+    精度注意 (backend mode):
+        check + record 不是原子 (StateBackend 无 compare-and-set), N workers
+        竞争时可能溢出 ≤ N 个请求. 对生产场景一般可接受 — 真正强一致要用 Redis Lua.
     """
+
+    # Task AAA (#87): backend mode 时的 key 前缀
+    _KEY_PREFIX = "quota:"
+    _DAILY_KEY = "quota:daily"
+    _RATE_KEY = "quota:rate"
+    _GLOBAL_KEY = "quota:global_usd"
+    _KNOWN_TENANTS_KEY = "quota:known_tenants"
 
     def __init__(
         self,
         daily_usd_limit: Optional[float] = None,
         global_usd_limit: Optional[float] = None,
         rate_per_minute: Optional[int] = None,
+        backend: Optional["StateBackend"] = None,  # Task AAA (#87)
     ):
         # None / 0 / 负数 都视为 "不启用"
         self.daily_usd_limit = self._coerce_positive(daily_usd_limit)
         self.global_usd_limit = self._coerce_positive(global_usd_limit)
         self.rate_per_minute = self._coerce_positive(rate_per_minute, kind=int)
-        # per-tenant 今日 USD: {tenant_id: (date_key, usd)}
+        self._backend = backend  # Task AAA (#87): 跨进程后端
+        # per-tenant 今日 USD: {tenant_id: (date_key, usd)} — 仅 backend=None 时用
         self._daily_usd: Dict[str, Dict[str, float]] = {}
         # per-tenant 最近 60s 请求时间戳
         self._rate_window: Dict[str, Deque[float]] = {}
@@ -91,6 +115,10 @@ class QuotaGuard:
         """
         tenant = tenant_id or "default"
         now = time.time()
+        # Task AAA (#87): backend mode 分支
+        if self._backend is not None:
+            self._check_and_record_backend(tenant, now, cost_usd)
+            return
         with self._lock:
             # 1. Rate limit
             if self.rate_per_minute is not None:
@@ -149,6 +177,13 @@ class QuotaGuard:
         if cost_usd <= 0:
             return
         tenant = tenant_id or "default"
+        # Task AAA (#87): backend mode 分支
+        if self._backend is not None:
+            today = self._today_key()
+            self._backend.incr(f"{self._DAILY_KEY}:{tenant}:{today}:usd", cost_usd)
+            self._backend.incr(self._GLOBAL_KEY, cost_usd)
+            self._backend.list_append(self._KNOWN_TENANTS_KEY, tenant, maxlen=200)
+            return
         with self._lock:
             entry = self._get_or_init_daily(tenant)
             entry["usd"] += cost_usd
@@ -156,6 +191,9 @@ class QuotaGuard:
 
     def snapshot(self) -> Dict[str, object]:
         """给 /admin/status 看用."""
+        # Task AAA (#87): backend mode 分支
+        if self._backend is not None:
+            return self._snapshot_backend()
         with self._lock:
             today = self._today_key()
             daily = {
@@ -177,10 +215,107 @@ class QuotaGuard:
 
     def reset(self) -> None:
         """测试用. 清掉所有计数."""
+        # Task AAA (#87): backend mode 分支
+        if self._backend is not None:
+            self._backend.clear(key_prefix=self._KEY_PREFIX)
+            return
         with self._lock:
             self._daily_usd.clear()
             self._rate_window.clear()
             self._global_usd = 0.0
+
+    # ------------------------------------------------------------------
+    # Task AAA (#87) backend mode 实现
+    # ------------------------------------------------------------------
+
+    def _check_and_record_backend(self, tenant: str, now: float, cost_usd: float) -> None:
+        """走 StateBackend 跨进程共享, 4 个 worker 看同一份 quota state."""
+        b = self._backend
+        assert b is not None
+
+        # 1. Rate limit (sliding window, 60s)
+        if self.rate_per_minute is not None:
+            rate_key = f"{self._RATE_KEY}:{tenant}"
+            timestamps = b.list_get(rate_key)
+            threshold = now - 60.0
+            in_window = [float(t) for t in timestamps if float(t) > threshold]
+            if len(in_window) >= self.rate_per_minute:
+                earliest = min(in_window)
+                retry_after = max(1, int(60 - (now - earliest)))
+                raise BlockedError(
+                    f"tenant={tenant} 每分钟请求数超出限制 ({len(in_window)}/{self.rate_per_minute})",
+                    code="RATE_LIMITED",
+                    details={
+                        "tenant_id": tenant,
+                        "limit_per_minute": self.rate_per_minute,
+                        "current_window": len(in_window),
+                        "retry_after_seconds": retry_after,
+                    },
+                )
+            # 写新时间戳; maxlen 防止 list 无界增长 (2x rate 给宽容窗口)
+            maxlen = max(self.rate_per_minute * 2, 100)
+            b.list_append(rate_key, now, maxlen=maxlen)
+            b.list_append(self._KNOWN_TENANTS_KEY, tenant, maxlen=200)
+
+        # 2. Daily USD (跨进程共享, check + incr 非原子, 接受 ≤ N_workers 溢出)
+        if self.daily_usd_limit is not None and cost_usd > 0:
+            today = self._today_key()
+            daily_key = f"{self._DAILY_KEY}:{tenant}:{today}:usd"
+            current = float(b.get(daily_key, 0) or 0)
+            if current + cost_usd > self.daily_usd_limit:
+                raise BlockedError(
+                    f"tenant={tenant} 今日 USD 上限触顶 "
+                    f"({current:.4f}/{self.daily_usd_limit:.2f} USD)",
+                    code="QUOTA_EXCEEDED",
+                    details={
+                        "tenant_id": tenant,
+                        "daily_usd_limit": self.daily_usd_limit,
+                        "daily_usd_used": current,
+                        "would_add": cost_usd,
+                    },
+                )
+
+        # 3. Global USD
+        if self.global_usd_limit is not None and cost_usd > 0:
+            current = float(b.get(self._GLOBAL_KEY, 0) or 0)
+            if current + cost_usd > self.global_usd_limit:
+                raise BlockedError(
+                    f"全局 USD 上限触顶 "
+                    f"({current:.4f}/{self.global_usd_limit:.2f} USD)",
+                    code="QUOTA_EXCEEDED",
+                    details={
+                        "global_usd_limit": self.global_usd_limit,
+                        "global_usd_used": current,
+                        "would_add": cost_usd,
+                    },
+                )
+
+    def _snapshot_backend(self) -> Dict[str, object]:
+        b = self._backend
+        assert b is not None
+        today = self._today_key()
+        tenants = sorted(set(b.list_get(self._KNOWN_TENANTS_KEY)))
+        daily = {
+            t: float(b.get(f"{self._DAILY_KEY}:{t}:{today}:usd", 0) or 0)
+            for t in tenants
+        }
+        # 用上 self.rate_per_minute 截掉 stale (>60s) 不算
+        now = time.time()
+        threshold = now - 60.0
+        rate_sizes = {}
+        for t in tenants:
+            timestamps = b.list_get(f"{self._RATE_KEY}:{t}")
+            in_window = [ts for ts in timestamps if float(ts) > threshold]
+            rate_sizes[t] = len(in_window)
+        return {
+            "daily_usd_limit": self.daily_usd_limit,
+            "global_usd_limit": self.global_usd_limit,
+            "rate_per_minute": self.rate_per_minute,
+            "today": today,
+            "daily_usd_used_by_tenant": daily,
+            "global_usd_used": round(float(b.get(self._GLOBAL_KEY, 0) or 0), 6),
+            "current_rate_window_size": rate_sizes,
+        }
 
 
 # ============ 单例 + 配置加载 ============
