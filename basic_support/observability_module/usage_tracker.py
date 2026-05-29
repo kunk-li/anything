@@ -29,7 +29,11 @@ import os
 import threading
 import time
 from collections import OrderedDict, deque
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Task XX (#84): 强类型 hint, runtime 不强依赖 state_backend_module
+    from state_backend_module import StateBackend
 
 
 # 默认 pricing 表 (USD per 1K tokens), 2026-05 公开 list price
@@ -59,11 +63,27 @@ _DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
 
 
 class UsageTracker:
-    """全局 token / cost 累加器, 线程安全."""
+    """全局 token / cost 累加器, 线程安全.
 
-    def __init__(self, max_recent: int = 50, pricing: Optional[Dict[str, Dict[str, float]]] = None):
+    Task XX (#84): 加 optional backend 参数让状态可放到 cross-process 后端:
+        - backend=None (默认)         — 进程内 dict + Lock, 跟今天一致
+        - backend=InMemoryBackend()   — 同上但走 StateBackend 接口 (测试用)
+        - backend=SqliteBackend(path) — 多 worker 进程共享 token 计数 + 重启不丢
+    """
+
+    # Key 前缀, backend mode 时所有 usage 状态都打这个前缀, 方便 clear()
+    _KEY_PREFIX = "usage:"
+
+    def __init__(
+        self,
+        max_recent: int = 50,
+        pricing: Optional[Dict[str, Dict[str, float]]] = None,
+        backend: Optional["StateBackend"] = None,  # Task XX (#84)
+    ):
         self._max_recent = max(1, int(max_recent))
         self._pricing = self._build_pricing(pricing)
+        self._backend = backend
+        # 进程内 state — 仅 backend=None 时使用
         self._total = self._fresh_bucket()
         self._by_model: Dict[str, Dict[str, Any]] = {}
         self._by_tenant: Dict[str, Dict[str, Any]] = {}
@@ -145,6 +165,11 @@ class UsageTracker:
             "total_tokens": total,
             "cost_usd": cost_usd,
         }
+        # Task XX (#84): backend mode — 写穿到 cross-process backend
+        if self._backend is not None:
+            self._record_to_backend(record, prompt_tokens, completion_tokens, total, cost_usd)
+            return record
+        # legacy in-process mode
         with self._lock:
             self._accumulate(self._total, prompt_tokens, completion_tokens, cost_usd)
             self._accumulate(
@@ -158,6 +183,33 @@ class UsageTracker:
             self._recent.appendleft(record)
         return record
 
+    def _record_to_backend(
+        self, record: Dict[str, Any], p: int, c: int, total: int, usd: float
+    ) -> None:
+        """Task XX (#84): 把 record 增量写到 backend, 每个 counter 独立 incr 保证原子."""
+        b = self._backend
+        assert b is not None
+        model = record["model"]
+        tenant = record["tenant_id"]
+        # 3 个 bucket × 5 counters = 15 个 incr 调用 — sqlite 已经在 BEGIN IMMEDIATE
+        # 事务里, 跨进程争用时排队 (busy_timeout=5s), 不会撞 SQLITE_BUSY
+        for prefix in (
+            f"{self._KEY_PREFIX}total",
+            f"{self._KEY_PREFIX}by_model:{model}",
+            f"{self._KEY_PREFIX}by_tenant:{tenant}",
+        ):
+            b.incr(f"{prefix}:prompt_tokens", p)
+            b.incr(f"{prefix}:completion_tokens", c)
+            b.incr(f"{prefix}:total_tokens", total)
+            b.incr(f"{prefix}:cost_usd", usd)
+            b.incr(f"{prefix}:calls", 1)
+        # 维护一个 known_models / known_tenants list, snapshot() 时 set() 去重
+        # maxlen=200 防无界增长; 一般 <10 distinct, 重复 append 同一个名字是 OK 的
+        b.list_append(f"{self._KEY_PREFIX}known_models", model, maxlen=200)
+        b.list_append(f"{self._KEY_PREFIX}known_tenants", tenant, maxlen=200)
+        # recent 列表 — backend list 已经有 maxlen FIFO 截
+        b.list_append(f"{self._KEY_PREFIX}recent", record, maxlen=self._max_recent)
+
     @staticmethod
     def _accumulate(bucket: Dict[str, Any], p: int, c: int, usd: float) -> None:
         bucket["prompt_tokens"] += p
@@ -167,6 +219,9 @@ class UsageTracker:
         bucket["calls"] += 1
 
     def snapshot(self) -> Dict[str, Any]:
+        # Task XX (#84): backend mode — 从 backend 重组各 bucket
+        if self._backend is not None:
+            return self._snapshot_from_backend()
         with self._lock:
             return {
                 "total": dict(self._total),
@@ -176,7 +231,39 @@ class UsageTracker:
                 "pricing_known_models": sorted(self._pricing.keys()),
             }
 
+    def _snapshot_from_backend(self) -> Dict[str, Any]:
+        """Task XX (#84): 从 backend 拼装 snapshot."""
+        b = self._backend
+        assert b is not None
+
+        def _bucket(prefix: str) -> Dict[str, Any]:
+            return {
+                "prompt_tokens": int(b.get(f"{prefix}:prompt_tokens", 0) or 0),
+                "completion_tokens": int(b.get(f"{prefix}:completion_tokens", 0) or 0),
+                "total_tokens": int(b.get(f"{prefix}:total_tokens", 0) or 0),
+                "cost_usd": float(b.get(f"{prefix}:cost_usd", 0) or 0),
+                "calls": int(b.get(f"{prefix}:calls", 0) or 0),
+            }
+
+        models = sorted(set(b.list_get(f"{self._KEY_PREFIX}known_models")))
+        tenants = sorted(set(b.list_get(f"{self._KEY_PREFIX}known_tenants")))
+        recent = b.list_get(f"{self._KEY_PREFIX}recent", limit=20)
+        # backend list 是 FIFO append, snapshot 期望最近的在前 (deque.appendleft 语义)
+        recent = list(reversed(recent))
+
+        return {
+            "total": _bucket(f"{self._KEY_PREFIX}total"),
+            "by_model": {m: _bucket(f"{self._KEY_PREFIX}by_model:{m}") for m in models},
+            "by_tenant": {t: _bucket(f"{self._KEY_PREFIX}by_tenant:{t}") for t in tenants},
+            "recent": recent,
+            "pricing_known_models": sorted(self._pricing.keys()),
+        }
+
     def reset(self) -> None:
+        # Task XX (#84): backend mode — 走 backend.clear(prefix)
+        if self._backend is not None:
+            self._backend.clear(key_prefix=self._KEY_PREFIX)
+            return
         with self._lock:
             self._total = self._fresh_bucket()
             self._by_model.clear()
