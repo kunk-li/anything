@@ -2654,6 +2654,7 @@
         pdf_read:         '读 uploads/some.pdf 第 1-3 页',
         excel_read:       '读 uploads/data.xlsx 第一个 sheet 的前 50 行',
         sql_query:        '从 demo 表查所有 country=CN 的 users',
+        browser_visit:    '用浏览器抓 https://news.ycombinator.com 首页文字',
         shell_exec:       '执行 ls /tmp',
         py_sandbox:       '运行 Python: print(sum(range(100)))',
         llm_generate:     '写一首关于秋天的五言诗',

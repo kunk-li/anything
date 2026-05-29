@@ -34,6 +34,7 @@ from .tools_impl import (
     pdf_read,                     # Task TTTT-4 (#141)
     excel_read,                   # Task TTTT-4 (#141)
     sql_query,                    # Task TTTT-3 (#140)
+    browser_visit,                # Task TTTT-5 (#142)
     TOOL_DESCRIPTIONS,
 )
 
@@ -59,5 +60,6 @@ __all__ = [
     "pdf_read",                    # Task TTTT-4 (#141)
     "excel_read",                  # Task TTTT-4 (#141)
     "sql_query",                   # Task TTTT-3 (#140)
+    "browser_visit",               # Task TTTT-5 (#142)
     "TOOL_DESCRIPTIONS",
 ]

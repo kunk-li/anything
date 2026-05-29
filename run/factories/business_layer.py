@@ -192,6 +192,11 @@ def build_business_layer(
     from agent_module.tools.tools_impl.sql_query import SQL_QUERY_DESCRIPTION as _SQL_DESC
     tool_registry.register("sql_query", _sql_query, description=_SQL_DESC)
 
+    # Task TTTT-5 (#142): 浏览器自动化 (Playwright Chromium headless)
+    from agent_module.tools import browser_visit as _browser_visit
+    from agent_module.tools.tools_impl.browser_visit import BROWSER_VISIT_DESCRIPTION as _BV_DESC
+    tool_registry.register("browser_visit", _browser_visit, description=_BV_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(

@@ -48,6 +48,7 @@ from .web_search import web_search   # Task HHH (#94)
 from .image_generate import image_generate_tool  # Task TTTT-6 (#143)
 from .pdf_excel_read import pdf_read, excel_read  # Task TTTT-4 (#141)
 from .sql_query import sql_query  # Task TTTT-3 (#140)
+from .browser_visit import browser_visit  # Task TTTT-5 (#142)
 from ._descriptions import TOOL_DESCRIPTIONS
 
 __all__ = [
@@ -72,5 +73,6 @@ __all__ = [
     "pdf_read",                     # Task TTTT-4 (#141)
     "excel_read",                   # Task TTTT-4 (#141)
     "sql_query",                    # Task TTTT-3 (#140)
+    "browser_visit",                # Task TTTT-5 (#142)
     "TOOL_DESCRIPTIONS",
 ]
