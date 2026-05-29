@@ -219,7 +219,8 @@
                 </button>
                 <!-- Task WWWW-A (#109): 系统指标 tab 删除, 已并入 "管理"->"监控" sub-tab -->
                 <button class="side-tab" data-tab="upload" role="tab" aria-selected="false" data-i18n="sidebar.upload">文档</button>
-                <button class="side-tab" data-tab="admin" role="tab" aria-selected="false" data-i18n="sidebar.admin">管理</button>
+                <!-- Task KKKK (#128): "管理" tab 删除, 已迁到 ⚙ 设置 → 高级 折叠区 -->
+
                 <!-- Task KKK (#97): 长期记忆面板 — list / search / pin / delete facts -->
                 <button class="side-tab" data-tab="memory" role="tab" aria-selected="false">
                     <span data-i18n="sidebar.memory">记忆</span><span class="badge" id="memory-count">0</span>
@@ -279,23 +280,7 @@
                     </section>
                 </div>
 
-                <!-- Task S: Admin / 运行期状态  (Task WWWW-B #110: 拆 4 sub-tab) -->
-                <div class="side-panel" data-panel="admin">
-                    <div class="metrics-controls">
-                        <button id="admin-refresh" class="small-btn" data-i18n="admin.refresh">刷新</button>
-                        <span class="hint" data-i18n="admin.hint">来自 /admin/status (只读)</span>
-                    </div>
-                    <!-- WWWW-B: 4 sub-tab 按类别过滤管理卡片 -->
-                    <nav class="admin-subnav" role="tablist" aria-label="管理分类">
-                        <button class="admin-subtab active" data-cat="monitoring" role="tab" aria-selected="true">📊 监控</button>
-                        <button class="admin-subtab" data-cat="config" role="tab" aria-selected="false">⚙️ 配置</button>
-                        <button class="admin-subtab" data-cat="resource" role="tab" aria-selected="false">📦 资源</button>
-                        <button class="admin-subtab" data-cat="task" role="tab" aria-selected="false">⏰ 任务</button>
-                    </nav>
-                    <div class="admin-grid" id="admin-grid" data-active-cat="monitoring">
-                        <div class="empty-state" data-i18n="admin.empty">点击刷新查看运行期状态</div>
-                    </div>
-                </div>
+                <!-- Task KKKK (#128): admin tab 已迁到 settings drawer → 高级 折叠区 -->
 
                 <!-- Task KKK (#97): 长期记忆面板 -->
                 <div class="side-panel" data-panel="memory">
@@ -451,6 +436,27 @@
 
                 <hr class="form-divider" />
 
+                <!-- Task KKKK (#128): 管理 / 运维 折叠区 — 从右栏 admin tab 迁过来.
+                     用 <details> 默认收起, 普通用户不会被 RAG/BM25/向量库这些 dev 概念干扰. -->
+                <details class="advanced-section">
+                    <summary>🔧 高级 / 运维状态 <span class="hint">RAG/BM25/向量库/模型健康/Hooks 等</span></summary>
+                    <div class="metrics-controls" style="margin-top:10px">
+                        <button id="admin-refresh" class="small-btn">刷新状态</button>
+                        <span class="hint">来自 /admin/status (只读)</span>
+                    </div>
+                    <nav class="admin-subnav" role="tablist" aria-label="管理分类">
+                        <button class="admin-subtab active" data-cat="monitoring" role="tab" aria-selected="true">📊 监控</button>
+                        <button class="admin-subtab" data-cat="config" role="tab" aria-selected="false">⚙️ 配置</button>
+                        <button class="admin-subtab" data-cat="resource" role="tab" aria-selected="false">📦 资源</button>
+                        <button class="admin-subtab" data-cat="task" role="tab" aria-selected="false">⏰ 任务</button>
+                    </nav>
+                    <div class="admin-grid" id="admin-grid" data-active-cat="monitoring">
+                        <div class="empty-state">点击刷新查看运行期状态</div>
+                    </div>
+                </details>
+
+                <hr class="form-divider" />
+
                 <div class="form-row">
                     <button id="save-settings" class="primary-btn" data-i18n="settings.save">保存</button>
                     <button id="clear-history" class="secondary-btn" data-i18n="settings.clear">清空对话历史</button>
@@ -594,21 +600,21 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=131b"></script>
-    <script src="/static/i18n.js?v=131b"></script>
-    <script src="/static/markdown.js?v=131b"></script>
+    <script src="/static/api.js?v=128"></script>
+    <script src="/static/i18n.js?v=128"></script>
+    <script src="/static/markdown.js?v=128"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=131b"></script>
-    <script src="/static/modules/export.js?v=131b"></script>
-    <script src="/static/modules/health.js?v=131b"></script>
-    <script src="/static/modules/upload-manager.js?v=131b"></script>
-    <script src="/static/modules/admin-panel.js?v=131b"></script>
-    <script src="/static/modules/models-admin.js?v=131b"></script>
+    <script src="/static/modules/ui-helpers.js?v=128"></script>
+    <script src="/static/modules/export.js?v=128"></script>
+    <script src="/static/modules/health.js?v=128"></script>
+    <script src="/static/modules/upload-manager.js?v=128"></script>
+    <script src="/static/modules/admin-panel.js?v=128"></script>
+    <script src="/static/modules/models-admin.js?v=128"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=131b"></script>
+    <script src="/static/modules/memory-panel.js?v=128"></script>
 
-    <script src="/static/app.js?v=131b"></script>
+    <script src="/static/app.js?v=128"></script>
 </body>
 </html>

@@ -691,6 +691,38 @@ body.has-drag .chat-pane::before {
     scroll-behavior: smooth;
 }
 
+/* Task KKKK (#128): 设置 drawer 高级折叠区 */
+.advanced-section {
+    margin: 12px 0;
+    padding: 0;
+}
+.advanced-section summary {
+    cursor: pointer;
+    padding: 10px 12px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    user-select: none;
+    list-style: none;
+}
+.advanced-section summary::-webkit-details-marker { display: none; }
+.advanced-section summary::before {
+    content: '▸';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 100ms;
+}
+.advanced-section[open] summary::before { transform: rotate(90deg); }
+.advanced-section summary .hint {
+    margin-left: 8px;
+    font-weight: 400;
+    color: var(--text-faint);
+    font-size: 11px;
+}
+
 /* Task LLLL (#129): 快捷键 panel */
 .shortcuts-panel {
     width: 380px;
