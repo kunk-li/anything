@@ -1704,9 +1704,14 @@
         const d = payload.data || {};
         // Task TTTT-6 (#143): 扫 tool_results_summary 看有没有图片 URL
         const imgs = _collectGeneratedImages(d);
-        const baseAnswer = d.answer || JSON.stringify(d, null, 2);
+        let baseAnswer = d.answer || JSON.stringify(d, null, 2);
         if (imgs.length > 0) {
-            // 用 markdown 图片语法, Markdown.render 会渲成 <img>
+            // 把已经在 baseAnswer 里赤裸出现的 URL 删掉 (后端 description 把 url 拼了),
+            // 否则会同时显原始 URL 文本 + 图片. 删完再 append markdown 图片让 <img> 渲.
+            for (const u of imgs) {
+                baseAnswer = baseAnswer.split(u).join('');
+            }
+            baseAnswer = baseAnswer.replace(/\n{3,}/g, '\n\n').trim();
             return baseAnswer + '\n\n' + imgs.map(u => `![生成图](${u})`).join('\n\n');
         }
         return baseAnswer;
