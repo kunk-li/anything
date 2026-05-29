@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "anything-api",
+      "runtimeExecutable": "cmd.exe",
+      "runtimeArgs": ["/c", "D:\\projects\\python\\ai_work\\anything\\run\\start_dev.bat"],
+      "port": 18877
+    }
+  ]
+}
