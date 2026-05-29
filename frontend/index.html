@@ -432,6 +432,34 @@
         </div>
     </div>
 
+    <!-- ============== Task RRR (#104): Trace timeline drawer ============== -->
+    <div class="drawer" id="trace-drawer" hidden>
+        <div class="drawer-backdrop" data-close="trace"></div>
+        <div class="drawer-panel">
+            <div class="drawer-header">
+                <h3 data-i18n="trace.modal.title">🔍 Trace 时序详情</h3>
+                <button class="icon-btn" data-close="trace" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <div class="reflect-meta-row">
+                    <span class="chip" id="trace-id-chip">trace=-</span>
+                    <span class="chip" id="trace-total-chip">- ms</span>
+                    <span class="chip" id="trace-mode-chip">-</span>
+                </div>
+                <div class="reflect-section">
+                    <h4 data-i18n="trace.modal.timeline">⏱ 阶段时序</h4>
+                    <ul class="trace-timeline" id="trace-timeline">
+                        <li class="empty-state">(无 trace 数据)</li>
+                    </ul>
+                </div>
+                <div class="reflect-section">
+                    <h4 data-i18n="trace.modal.raw">📄 原始 response</h4>
+                    <pre class="reflect-raw" id="trace-raw"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============== Toast ============== -->
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 

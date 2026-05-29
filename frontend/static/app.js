@@ -108,6 +108,13 @@
         reflectSkipSection: $('reflect-skip-section'),
         reflectSkipReason: $('reflect-skip-reason'),
         reflectRaw: $('reflect-raw'),
+        // Task RRR (#104): Trace timeline drawer
+        traceDrawer: $('trace-drawer'),
+        traceIdChip: $('trace-id-chip'),
+        traceTotalChip: $('trace-total-chip'),
+        traceModeChip: $('trace-mode-chip'),
+        traceTimeline: $('trace-timeline'),
+        traceRaw: $('trace-raw'),
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -1214,12 +1221,17 @@
             if (msg.meta.traceId) {
                 const tr = document.createElement('span');
                 tr.className = 'chip';
-                tr.title = msg.meta.traceId;
+                tr.title = '点击打开 timeline · Shift+点击复制 trace_id';
                 tr.textContent = 'trace=' + String(msg.meta.traceId).slice(0, 8);
                 tr.style.cursor = 'pointer';
-                tr.addEventListener('click', () => {
-                    navigator.clipboard?.writeText(msg.meta.traceId);
-                    toast('info', t('toast.copied.trace'), msg.meta.traceId);
+                tr.addEventListener('click', (e) => {
+                    if (e.shiftKey) {
+                        navigator.clipboard?.writeText(msg.meta.traceId);
+                        toast('info', t('toast.copied.trace'), msg.meta.traceId);
+                    } else {
+                        // Task RRR (#104): 默认点开 trace timeline modal
+                        openTraceModal(msg);
+                    }
                 });
                 meta.appendChild(tr);
             }
@@ -2316,6 +2328,104 @@
         };
         els.reflectDrawer.addEventListener('click', handleBackdrop);
         openDrawer('reflect');
+    }
+
+    // ---------- Task RRR (#104): Trace timeline modal ----------
+    /**
+     * 打开 trace timeline 详情. msg.data 里有 cost_time 总耗时.
+     * 由于 OTel 完整 span 列表前端没拿到, 我们从可见的 phase 推断时序:
+     *   - retrieve (RAG): 检索 chunks 数 + 简短
+     *   - parse_task / aggregate (Agent): 看 steps / react_history
+     *   - reflection: msg.meta.reflection.cost_ms
+     *   - memory inject / extract: 推断
+     * 没有精确 ms 时用 "?" 占位, 但用户至少能看到一次请求都做了什么.
+     */
+    function openTraceModal(msg) {
+        if (!els.traceDrawer) return;
+        const meta = msg.meta || {};
+        const data = msg.data || {};
+        const refl = meta.reflection || null;
+        els.traceIdChip.textContent = 'trace=' + String(meta.traceId || '-').slice(0, 24);
+        els.traceTotalChip.textContent = meta.costTime ? `${meta.costTime} s 总耗时` : '- ms';
+        els.traceModeChip.textContent = (msg.mode || '?').toUpperCase();
+
+        // Timeline 推断 (没真实 span 拿到时的兜底)
+        const phases = [];
+        // 1. Mode entrance
+        phases.push({
+            name: '🚪 入口',
+            detail: `mode=${msg.mode || '-'} · session=${(meta.sessionId || '-').slice(0, 12)}`,
+            cost_ms: null,
+        });
+        // 2. Memory inject (KKK)
+        if (meta.memoryHits && meta.memoryHits.length) {
+            phases.push({
+                name: '📚 长期记忆注入',
+                detail: `${meta.memoryHits.length} 条 fact 命中`,
+                cost_ms: null,
+            });
+        }
+        // 3. RAG retrieve
+        const chunks = data.retrieved_chunks || [];
+        if (chunks.length) {
+            phases.push({
+                name: '🔍 RAG 检索',
+                detail: `${chunks.length} chunks · scores ${chunks.slice(0, 3).map(c => (c.score || 0).toFixed(2)).join(', ')}`,
+                cost_ms: null,
+            });
+        }
+        // 4. Agent ReAct iterations
+        const reactHistory = data.react_history || [];
+        if (reactHistory.length) {
+            phases.push({
+                name: '🧠 Agent ReAct',
+                detail: `${reactHistory.length} 轮 · ${(data.tool_results_summary || []).length} 工具调用`,
+                cost_ms: null,
+            });
+        }
+        // 5. Reflection
+        if (refl) {
+            phases.push({
+                name: '✨ Reflection 反思',
+                detail: `${refl.llm_calls || '?'} LLM 调用 · quality=${refl.overall_quality != null ? refl.overall_quality : '?'}`,
+                cost_ms: refl.cost_ms,
+            });
+        }
+        // 6. Total
+        phases.push({
+            name: '✅ 响应聚合',
+            detail: `code=${meta.code} · trace=${(meta.traceId || '-').slice(0, 12)}`,
+            cost_ms: null,
+        });
+
+        if (phases.length) {
+            els.traceTimeline.innerHTML = phases.map(p => `
+                <li class="trace-phase">
+                    <div class="trace-phase-name">${p.name}</div>
+                    <div class="trace-phase-detail">${escapeHtml(p.detail)}</div>
+                    ${p.cost_ms != null ? `<div class="trace-phase-cost">${p.cost_ms} ms</div>` : ''}
+                </li>
+            `).join('');
+        } else {
+            els.traceTimeline.innerHTML = '<li class="empty-state">(无 trace 数据)</li>';
+        }
+
+        // Raw response
+        try {
+            const dump = { mode: msg.mode, content: (msg.content || '').slice(0, 500), meta, data };
+            els.traceRaw.textContent = JSON.stringify(dump, null, 2);
+        } catch (_) {
+            els.traceRaw.textContent = '(无法序列化)';
+        }
+
+        const handleBackdrop = (e) => {
+            if (e.target && e.target.matches('[data-close="trace"]')) {
+                els.traceDrawer.removeEventListener('click', handleBackdrop);
+                closeDrawer('trace');
+            }
+        };
+        els.traceDrawer.addEventListener('click', handleBackdrop);
+        openDrawer('trace');
     }
 
     // ---------- Toast ----------
