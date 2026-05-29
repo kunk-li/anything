@@ -188,19 +188,37 @@
         setTimeout(_loadAgentTools, 600);
 
         // Task GGGG (#124): 欢迎屏 example prompt 卡片 click → 切 mode + 填输入框
+        // Task HHHH (#125): Agent 工具卡 (.agent-tool-card.clickable) → 切 Agent + 填 example
         document.addEventListener('click', (e) => {
-            const card = e.target.closest('.welcome-example');
-            if (!card) return;
-            const mode = card.dataset.mode;
-            const prompt = card.dataset.prompt;
-            if (mode) {
-                const tab = document.querySelector(`.mode-tab[data-mode="${mode}"]`);
-                if (tab) tab.click();
+            const wcard = e.target.closest('.welcome-example');
+            if (wcard) {
+                const mode = wcard.dataset.mode;
+                const prompt = wcard.dataset.prompt;
+                if (mode) {
+                    const tab = document.querySelector(`.mode-tab[data-mode="${mode}"]`);
+                    if (tab) tab.click();
+                }
+                if (prompt && els.inputText) {
+                    els.inputText.value = prompt;
+                    els.inputText.focus();
+                    els.inputText.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                return;
             }
-            if (prompt && els.inputText) {
-                els.inputText.value = prompt;
-                els.inputText.focus();
-                els.inputText.dispatchEvent(new Event('input', { bubbles: true }));
+            const tcard = e.target.closest('.agent-tool-card.clickable');
+            if (tcard) {
+                const example = tcard.dataset.example;
+                if (!example) return;
+                // 切 Agent 模式 (工具只在 Agent 下生效)
+                const tab = document.querySelector('.mode-tab[data-mode="agent"]');
+                if (tab) tab.click();
+                if (els.inputText) {
+                    els.inputText.value = example;
+                    els.inputText.focus();
+                    els.inputText.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                toast('info', '已预填示例 task', tcard.dataset.tool || '');
+                return;
             }
         });
 
@@ -2296,7 +2314,32 @@
         }
     }
 
-    // ---------- Task FFFF (#123): Agent 工具列表 (空态展示) ----------
+    // ---------- Task FFFF (#123) + HHHH (#125): Agent 工具列表 (可点击预填 demo) ----------
+    // 工具名 → 示例 task 映射, 点工具卡时自动填到输入框, 切 Agent 模式
+    const _AGENT_TOOL_EXAMPLES = {
+        calculator:       '12345 乘以 67890 等于多少',
+        currency_convert: '100 美元换多少人民币',
+        datetime:         '现在北京几点',
+        weather:          '北京天气怎么样',
+        email_send:       '发个测试邮件到 demo@example.com',
+        rag_search:       '查项目里 tenant 是怎么设计的',
+        wikipedia:        '维基百科查一下 Python 编程语言',
+        web_search:       '搜一下 OpenAI o1 模型',
+        http_get:         '抓取 https://example.com 的首页',
+        http_request:     '抓取 https://example.com 的首页',
+        document_read:    '读一下文档 doc_xxx 的全文',
+        file_write:       '把 "Hello World" 写到 /tmp/test.txt',
+        shell_exec:       '执行 ls /tmp',
+        py_sandbox:       '运行 Python: print(sum(range(100)))',
+        llm_generate:     '写一首关于秋天的五言诗',
+        image_describe:   '描述一下上传的图片',
+        spawn_subagent:   '派一个 subagent 总结 README.md',
+        regex_extract:    '从 "phone: 13800138000" 抽出手机号',
+        text_stats:       '统计这段文字的字数: "The quick brown fox"',
+        json_query:       '从 {"users":[{"name":"a"},{"name":"b"}]} 抽 users[*].name',
+        code_lint:        '检查这段 Python: x=1+',
+    };
+
     async function _loadAgentTools() {
         const grid = document.getElementById('agent-tools-grid');
         if (!grid) return;
@@ -2319,12 +2362,18 @@
                 external: '🌐 外部 API', other: '🧰 其他',
             };
             const html = cats.map(cat => {
-                const items = (by_category[cat] || []).map(t => `
-                    <div class="agent-tool-card" title="${escapeHtml(t.description || '')}">
+                const items = (by_category[cat] || []).map(t => {
+                    const example = _AGENT_TOOL_EXAMPLES[t.name] || '';
+                    const clickable = example ? ' clickable' : '';
+                    const hint = example ? `点击试: "${example.slice(0, 30)}…"` : (t.description || '');
+                    return `<div class="agent-tool-card${clickable}"
+                              data-tool="${escapeHtml(t.name)}"
+                              data-example="${escapeHtml(example)}"
+                              title="${escapeHtml(hint)}">
                         <code>${escapeHtml(t.name)}</code>
                         <div class="agent-tool-desc">${escapeHtml((t.description || '').slice(0, 100))}</div>
-                    </div>
-                `).join('');
+                    </div>`;
+                }).join('');
                 return `<div class="agent-tools-cat">
                     <h5>${cat_label[cat] || cat}</h5>
                     ${items}
