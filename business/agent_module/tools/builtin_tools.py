@@ -33,6 +33,7 @@ from .tools_impl import (
     image_generate_tool,          # Task TTTT-6 (#143)
     pdf_read,                     # Task TTTT-4 (#141)
     excel_read,                   # Task TTTT-4 (#141)
+    sql_query,                    # Task TTTT-3 (#140)
     TOOL_DESCRIPTIONS,
 )
 
@@ -57,5 +58,6 @@ __all__ = [
     "image_generate_tool",         # Task TTTT-6 (#143)
     "pdf_read",                    # Task TTTT-4 (#141)
     "excel_read",                  # Task TTTT-4 (#141)
+    "sql_query",                   # Task TTTT-3 (#140)
     "TOOL_DESCRIPTIONS",
 ]

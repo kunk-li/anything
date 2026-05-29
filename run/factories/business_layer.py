@@ -187,6 +187,11 @@ def build_business_layer(
     tool_registry.register("pdf_read", _pdf_read, description=_PDF_DESC)
     tool_registry.register("excel_read", _excel_read, description=_XLS_DESC)
 
+    # Task TTTT-3 (#140): SQL 查询 (sqlite/postgres/mysql; 没配 conn 用 demo 内存表)
+    from agent_module.tools import sql_query as _sql_query
+    from agent_module.tools.tools_impl.sql_query import SQL_QUERY_DESCRIPTION as _SQL_DESC
+    tool_registry.register("sql_query", _sql_query, description=_SQL_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(

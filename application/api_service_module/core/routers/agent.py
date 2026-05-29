@@ -40,6 +40,7 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     "file_write": "file",
     "pdf_read": "file",
     "excel_read": "file",
+    "sql_query": "knowledge",
     "shell_exec": "system",
     "py_sandbox": "system",
     # LLM / Agent
