@@ -16,6 +16,7 @@ Anything 是一个 Python 3.12 的 RAG + Agent 平台:
 
 ```
 basic_support/   配置 / 日志 / 异常 / 依赖 / 通用工具 / observability / schema
+                 + (v2.x) hooks / skills / quota / audit / project_memory / state_backend
 data_layer/      向量库 (FAISS) / LLM 适配器 / 文档存储 / 文档解析 / Embedding / 会话存储
 business/        RAG / Agent / Orchestrator / Embedding 业务
 interface/       RequestHandler — 边界标准化 + 异常包装
@@ -23,6 +24,9 @@ application/     ApiService (FastAPI) / ConsoleApp
 ```
 
 调用方向: application → interface → business → data_layer → basic_support
+
+**v2.x 架构变更**: KK→YY 共 14 项重构 (god class 拆 mixin / cross-cutting 提模块 /
+DI 字段扩展 / API 加 /v1 alias / StateBackend 跨进程抽象). 详见 `CHANGELOG.md`.
 
 ## 关键约定
 
@@ -34,6 +38,10 @@ application/     ApiService (FastAPI) / ConsoleApp
 
 3. **DI 优先**: 所有 module 接受 `deps: BasicDeps` 参数, 通过 `build_basic_deps()` 注入.
    不要在 module 内部 new 配置/日志/异常处理器.
+   - v2.x (PP #76): `BasicDeps` 现在也带 7 个 cross-cutting registry —
+     `hook_registry` / `skill_registry` / `quota_guard` / `audit_logger` /
+     `project_memory` / `usage_tracker` / `health_tracker`. 优先走 `deps.X`,
+     fallback `get_X()` 全局单例 (back-compat 路径).
 
 4. **trace_id / session_id 单点生成**:
    - `trace_id` 由 ApiService middleware (或 ConsoleApp 入口) 生成
@@ -41,6 +49,17 @@ application/     ApiService (FastAPI) / ConsoleApp
    - business 层只透传, 不重新生成 (除非检测到上游漏传, 走 WARN)
 
 5. **DEV_MODE**: 设 `ANYTHING_DEV_MODE=1` 让 secrets 缺失不挂, 适合本地. 生产部署不设.
+
+6. **API 版本化** (VV #82): 所有 API 路由除了老 path, 都有 `/v1/<path>` 镜像别名.
+   新调用方推荐用 `/v1/<path>`. 老 path 无限期保留. 排除清单: `/`, `/ui`,
+   `/health`, `/healthz`, `/openapi.json`, `/docs`, `/redoc`.
+
+7. **JSON 日志** (UU #81): 设 `ANYTHING_LOG_FORMAT=json` 让 SystemLogger 输出
+   每行一个 JSON object (含 ts / level / message + extras + 自动注入 tenant_id /
+   trace_id), 适合 ELK / Datadog ingest.
+
+8. **跨进程 state** (TT #80, XX #84): UsageTracker 接 `backend=SqliteBackend(path)`
+   让 gunicorn 多 worker 跨进程共享 token 计数. 其他 tracker 待 Phase 3 接入.
 
 ## 术语速查
 
@@ -69,7 +88,8 @@ application/     ApiService (FastAPI) / ConsoleApp
 
 ## 当前已实现的能力快照
 
-- ✅ Tasks #1-#54 全部完成 (含 RAG / Agent / 流式 / 混合检索 / 多租户 / 评测 / Docker 等)
+- ✅ Tasks #1-#85 全部完成 (含 RAG / Agent / 流式 / 混合检索 / 多租户 / 评测 / Docker;
+  v2.x 架构优化 KK-YY 14 项 — 见 `CHANGELOG.md`)
 - ✅ 14 个 Agent 工具: rag_search, llm_generate, web_search, calculator, code_lint,
   email_send, image_describe, weather, currency, py_sandbox, file_read, file_write,
   http_request, json_query

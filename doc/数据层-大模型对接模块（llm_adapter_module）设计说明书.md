@@ -1,12 +1,19 @@
 # 数据层-大模型对接模块（llm_adapter_module）设计说明书
 
-| 文档版本 | v1.1 |
+| 文档版本 | v2.1 |
 | :--- | :--- |
-| 最后更新 | 2026-03-19 |
+| 最后更新 | 2026-05-29 |
 | 维护责任人 | 大模型对接模块开发负责人 |
 | 状态 | 修订版 |
 
 > 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1、RAG 模块修订版、Embedding 模块修订版、接口层与应用层修订版，重点修正统一请求/响应模型、Chat / Embedding / Multimodal 能力分层、provider 抽象边界、trace_id 透传、配置治理与统一错误码。
+
+> **v2.1 (2026-05-29) 架构变更**:
+> - **NN (#74)**: `core/impl.py` 1261 行 (5 adapter + HTTP mixin + LLMService) 拆为
+>   `core/adapters/`: `_http_mixin.py` (POST + 3 家 SSE/NDJSON 流式) + 5 个 adapter 文件
+>   (`openai_vector` / `openai_chat` / `openai_multimodal` / `anthropic_chat` /
+>   `ollama_chat`). `impl.py` 缩到 578 行 (-55%), 保留所有类 re-export.
+> - **HH (#68)** (已落) call_llm 加 fallback chain + ModelHealthTracker. 详见 `CHANGELOG.md`.
 
 # 1. 文档概述
 

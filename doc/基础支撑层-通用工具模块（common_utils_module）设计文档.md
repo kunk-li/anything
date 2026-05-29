@@ -1,5 +1,19 @@
 # 基础支撑层 - 通用工具模块（common_utils_module）设计文档
 
+> **v2.1 (2026-05-29) 架构变更 — OO (#75) 5 个 cross-cutting 已提到独立 module**:
+> - `hooks_module/` ← 原 `common_utils/utils/hooks.py` (Task Z #60 Hooks 系统)
+> - `skills_module/` ← 原 `common_utils/utils/skills.py` (Task AA #61 Skill 系统)
+> - `quota_module/` ← 原 `common_utils/utils/quota.py` (Task BB #62 配额/限流)
+> - `audit_module/` ← 原 `common_utils/utils/audit_log.py` (Task CC #63 审计日志)
+> - `project_memory_module/` ← 原 `common_utils/utils/project_memory.py` (Task U #55 项目记忆)
+>
+> `common_utils_module/__init__.py` 仍 re-export 这 5 个 module 的公共 API,
+> 老 import `from common_utils_module import HookRegistry, ...` 仍可用 (identity 保留).
+> `common_utils_module/utils/<name>.py` 也降级为 thin re-export shim, 让深度 import
+> `from common_utils_module.utils.skills import parse_skill_file` 仍可用.
+>
+> 新调用方推荐直接 import 新 module: `from hooks_module import HookRegistry`. 详见 `CHANGELOG.md`.
+
 # 1. 模块概述
 
 ## 1.1 模块目的

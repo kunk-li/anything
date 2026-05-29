@@ -1,12 +1,21 @@
 # 核心业务层-Agent模块（agent_module）设计说明书
 
-| 文档版本 | v1.1 |
+| 文档版本 | v2.1 |
 | :--- | :--- |
-| 最后更新 | 2026-03-19 |
+| 最后更新 | 2026-05-29 |
 | 维护责任人 | Agent模块开发负责人 |
 | 状态 | 修订版 |
 
 > 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1、接口层-请求响应处理模块修订版、应用层-API服务模块修订版、协同调度模块修订版，重点修正 session_id / trace_id 透传规则、Hybrid 模式协作定义、工具调用边界、请求级配置覆盖、统一响应结构与状态存储链路。
+
+> **v2.1 (2026-05-29) 架构变更**:
+> - **KK (#71)**: `SimpleAgent` god class (1764 行) → 多继承 4 mixin (`core/components/`):
+>   `ReActEngineMixin` / `ToolExecutorMixin` / `StreamingMixin` / `PromptBuilderMixin`.
+>   `impl.py` 缩到 723 行 (-59%). `SimpleAgent` 公共 API 不变.
+> - **MM (#73)**: 16 个 builtin tools 从单文件 `tools/builtin_tools.py` (1655 行) 拆到
+>   `tools/tools_impl/<tool>.py`. 老 import 通过 re-export shim 保留.
+> - **YY (#85)**: `ReActEngineMixin` 走 `self.deps.hook_registry` DI (PP #76 落地),
+>   支持单测注入隔离 HookRegistry. 详见 `CHANGELOG.md`.
 
 # 1. 文档概述
 

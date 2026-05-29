@@ -1,13 +1,21 @@
 
 # 应用层-API服务模块（api_service_module）设计说明书
 
-| 文档版本 | v1.1 |
+| 文档版本 | v2.1 |
 | :--- | :--- |
-| 最后更新 | 2026-03-19 |
+| 最后更新 | 2026-05-29 |
 | 维护责任人 | API服务模块开发负责人 |
 | 状态 | 修订版 |
 
 > 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1 及接口层修订版，重点修正 API 边界、trace_id 来源、统一业务入口职责、索引与上传接口职责分层。
+
+> **v2.1 (2026-05-29) 架构变更**:
+> - **LL (#72)**: `ApiService` 21 路由 god class (1788 行) → 6 个域 mixin
+>   (`core/routers/`): InvokeRoutesMixin / DocumentsRoutesMixin / IndexRoutesMixin /
+>   AdminRoutesMixin / ConfigRoutesMixin / FrontendRoutesMixin. `impl.py` 缩到 590 行 (-67%).
+> - **VV (#82)**: 14 个 API 路由加 `/v1/<path>` 镜像别名 (`_register_v1_aliases()`).
+>   老 path 无限期保留. 排除清单: `/`, `/ui`, `/health`, `/healthz`, `/openapi.json`,
+>   `/docs`, `/redoc`. 详见 `CHANGELOG.md`.
 ---
 
 ## 1. 文档概述
