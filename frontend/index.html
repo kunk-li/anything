@@ -27,6 +27,9 @@
             <button class="icon-btn lang-btn" id="lang-btn"
                     data-i18n-attr="title:header.lang"
                     aria-label="language">中/EN</button>
+            <!-- Task VVVV (#108): 左侧 sessions sidebar 在窄屏的开关 -->
+            <button class="icon-btn sidebar-toggle" id="sessions-sidebar-toggle"
+                    aria-label="toggle sessions sidebar" title="会话列表 / Sessions">💬</button>
             <button class="icon-btn sidebar-toggle" id="sidebar-toggle"
                     aria-label="toggle sidebar" title="侧栏 / Sidebar">≡</button>
             <button class="icon-btn" id="settings-btn"
@@ -37,7 +40,28 @@
 
     <!-- ============== Main Layout ============== -->
     <div class="app-main">
-        <!-- 左:对话区 -->
+        <!-- 左:会话列表 sidebar (Task VVVV #108: ChatGPT 风格, 取代 SSS 的 settings drawer 下拉) -->
+        <aside class="sessions-sidebar" id="sessions-sidebar">
+            <div class="sessions-sidebar-header">
+                <button type="button" class="new-session-btn" id="sessions-new-btn"
+                        data-i18n="sessions.new" title="新建会话 / New chat">+ 新会话</button>
+            </div>
+            <div class="sessions-sidebar-toolbar">
+                <button type="button" class="small-btn ghost" id="sessions-refresh-btn"
+                        data-i18n="sessions.refresh" title="刷新列表">🔁 刷新</button>
+                <span class="sessions-count" id="sessions-count">0</span>
+            </div>
+            <ul class="session-list" id="session-list" aria-label="会话列表">
+                <li class="empty-state" data-i18n="sessions.empty">无会话</li>
+            </ul>
+            <!-- 保留旧 select / delete btn 隐藏,兼容 app.js 旧引用 (下次清理) -->
+            <select id="sessions-select" hidden aria-hidden="true">
+                <option value="">(占位)</option>
+            </select>
+            <button type="button" id="sessions-delete-btn" hidden aria-hidden="true">✕</button>
+        </aside>
+
+        <!-- 中:对话区 -->
         <section class="chat-pane">
             <div class="messages" id="messages" aria-live="polite">
                 <div class="welcome">
@@ -239,19 +263,9 @@
                     <p class="hint" data-i18n="settings.session.hint">用于跨请求关联,留空自动生成</p>
                 </div>
 
-                <!-- Task SSS (#105): 多会话管理 -->
-                <div class="form-row">
-                    <label data-i18n="sessions.title">会话切换 (Sessions)</label>
-                    <div class="sessions-toolbar">
-                        <select id="sessions-select" class="full-row">
-                            <option value="">(选择已存在会话)</option>
-                        </select>
-                        <button type="button" class="small-btn" id="sessions-refresh-btn" data-i18n="sessions.refresh">🔁 刷新</button>
-                        <button type="button" class="small-btn primary" id="sessions-new-btn" data-i18n="sessions.new">+ 新会话</button>
-                        <button type="button" class="small-btn danger" id="sessions-delete-btn" data-i18n="sessions.delete">✕ 删除</button>
-                    </div>
-                    <p class="hint" data-i18n="sessions.hint">每个 session 独立的 Agent 状态 + RAG 对话历史. 切换后输入框还在, 但 Agent 会从新 session 开始记忆.</p>
-                </div>
+                <!-- Task SSS / VVVV (#105/#108): 多会话管理已迁移到左侧 sidebar.
+                     这里留空, 不再放下拉. -->
+
                 <div class="form-row">
                     <label data-i18n="settings.locale">界面语言</label>
                     <div class="lang-switch">

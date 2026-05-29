@@ -115,11 +115,15 @@
         traceModeChip: $('trace-mode-chip'),
         traceTimeline: $('trace-timeline'),
         traceRaw: $('trace-raw'),
-        // Task SSS (#105): 多会话切换 (settings drawer 内)
-        sessionsSelect: $('sessions-select'),
+        // Task SSS (#105) + VVVV (#108): 多会话切换 (左侧 sidebar)
+        sessionsSelect: $('sessions-select'),       // 隐藏兼容
         sessionsRefreshBtn: $('sessions-refresh-btn'),
         sessionsNewBtn: $('sessions-new-btn'),
-        sessionsDeleteBtn: $('sessions-delete-btn'),
+        sessionsDeleteBtn: $('sessions-delete-btn'),  // 隐藏兼容
+        sessionList: $('session-list'),              // VVVV: 新 <ul> 列表渲染
+        sessionsCount: $('sessions-count'),          // VVVV: 数量徽章
+        sessionsSidebar: $('sessions-sidebar'),      // VVVV: 整个 aside
+        sessionsSidebarToggle: $('sessions-sidebar-toggle'),  // VVVV: 移动端开关
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -178,54 +182,87 @@
             window.AnythingApp._adminPanel = adminPanel;
         }
 
-        // Task SSS (#105): 多会话切换 bindEvents
+        // Task SSS (#105) + VVVV (#108): 多会话切换 bindEvents (左侧 sidebar)
         if (els.sessionsRefreshBtn) els.sessionsRefreshBtn.addEventListener('click', refreshSessions);
         if (els.sessionsNewBtn) els.sessionsNewBtn.addEventListener('click', createNewSession);
         if (els.sessionsDeleteBtn) els.sessionsDeleteBtn.addEventListener('click', deleteSelectedSession);
-        if (els.sessionsSelect) els.sessionsSelect.addEventListener('change', switchSession);
-        // 打开 settings 抽屉时自动刷新一次 session 列表
-        if (els.settingsBtn) {
-            els.settingsBtn.addEventListener('click', () => {
-                setTimeout(refreshSessions, 100);
+        // 列表 <ul> 上用事件委托处理 item click / delete click
+        if (els.sessionList) {
+            els.sessionList.addEventListener('click', (e) => {
+                const delBtn = e.target.closest('.session-item-delete');
+                if (delBtn) {
+                    e.stopPropagation();
+                    const sid = delBtn.dataset.sid;
+                    if (sid) deleteSessionById(sid);
+                    return;
+                }
+                const item = e.target.closest('.session-item');
+                if (item) {
+                    const sid = item.dataset.sid;
+                    if (sid) switchSessionTo(sid);
+                }
             });
         }
+        // 移动端开关
+        if (els.sessionsSidebarToggle && els.sessionsSidebar) {
+            els.sessionsSidebarToggle.addEventListener('click', () => {
+                els.sessionsSidebar.classList.toggle('open');
+            });
+        }
+        // VVVV: 启动就拉一次 — 用户看到 sidebar 已经有内容, 不用点
+        setTimeout(refreshSessions, 200);
     }
 
-    // ---------- Task SSS (#105): 多会话管理 ----------
+    // ---------- Task SSS (#105) + VVVV (#108): 多会话管理 (ChatGPT 风格左栏) ----------
+    function _renderSessionList(sessions) {
+        if (!els.sessionList) return;
+        const current = state.settings.sessionId;
+        if (els.sessionsCount) els.sessionsCount.textContent = String(sessions.length);
+        if (!sessions.length) {
+            els.sessionList.innerHTML = '<li class="empty-state">无会话, 点 + 新建</li>';
+            return;
+        }
+        const items = [];
+        for (const s of sessions) {
+            const sid = s.session_id;
+            const when = s.last_modified
+                ? new Date(s.last_modified * 1000).toLocaleString()
+                : '';
+            const flag = s.has_history ? '💬' : '○';
+            const active = sid === current ? ' active' : '';
+            items.push(`<li class="session-item${active}" data-sid="${escapeHtml(sid)}" title="${escapeHtml(sid)}">
+                <div class="session-item-main">
+                    <span class="session-item-name">${flag} ${escapeHtml(sid)}</span>
+                    <span class="session-item-meta">${escapeHtml(when)}</span>
+                </div>
+                <button class="session-item-delete" data-sid="${escapeHtml(sid)}" title="删除会话" aria-label="删除">✕</button>
+            </li>`);
+        }
+        els.sessionList.innerHTML = items.join('');
+    }
+
     async function refreshSessions() {
-        if (!els.sessionsSelect) return;
+        if (!els.sessionList) return;
         try {
             const { payload, status } = await ApiClient.listSessions(50);
             if (status === 501) {
-                els.sessionsSelect.innerHTML = '<option value="">(state_store 未注入)</option>';
+                els.sessionList.innerHTML = '<li class="empty-state">(state_store 未注入)</li>';
+                if (els.sessionsCount) els.sessionsCount.textContent = '0';
                 return;
             }
             if (status !== 200 || payload?.code !== 'SUCCESS') {
-                els.sessionsSelect.innerHTML = `<option value="">(${payload?.code || status})</option>`;
+                els.sessionList.innerHTML = `<li class="empty-state error">× ${payload?.code || status}</li>`;
+                if (els.sessionsCount) els.sessionsCount.textContent = '?';
                 return;
             }
             const sessions = (payload.data || {}).sessions || [];
-            const current = state.settings.sessionId;
-            const opts = ['<option value="">(选择会话)</option>'];
-            for (const s of sessions) {
-                const sid = s.session_id;
-                const when = s.last_modified
-                    ? new Date(s.last_modified * 1000).toLocaleString()
-                    : '';
-                const flag = s.has_history ? '💬 ' : '   ';
-                const selected = sid === current ? ' selected' : '';
-                const label = `${flag}${sid.slice(0, 30)} · ${when}`;
-                opts.push(`<option value="${escapeHtml(sid)}"${selected}>${escapeHtml(label)}</option>`);
-            }
-            els.sessionsSelect.innerHTML = opts.join('');
+            _renderSessionList(sessions);
         } catch (e) {
-            els.sessionsSelect.innerHTML = `<option value="">(${escapeHtml(e.message)})</option>`;
+            els.sessionList.innerHTML = `<li class="empty-state error">× ${escapeHtml(e.message)}</li>`;
         }
     }
 
     async function createNewSession() {
-        // 关键: 不能调 saveSettings() — 它会关抽屉 + 弹 "settings saved" toast,
-        // 用户感觉啥都没发生. 自己手动写 localStorage + reconfigure ApiClient 即可.
         try {
             const { payload, status } = await ApiClient.createSession();
             if (status !== 200 || payload?.code !== 'SUCCESS') {
@@ -237,27 +274,19 @@
                 toast('error', '创建会话失败', '后端未返 session_id');
                 return;
             }
-            // 1. state + sessionInput UI 同步新 id
+            // 1. state + sessionInput 同步
             state.settings.sessionId = newId;
             if (els.sessionInput) els.sessionInput.value = newId;
-            // 2. localStorage + ApiClient reconfigure, 不关抽屉
+            // 2. localStorage + ApiClient
             try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
             ApiClient.configure(state.settings);
-            // 3. 刷下拉, 兜底插一条 option 让用户立马能看见新会话被选中
+            // 3. 刷新列表 (新 session 自动 active 高亮)
             await refreshSessions();
-            if (els.sessionsSelect) {
-                const has = Array.from(els.sessionsSelect.options).some(o => o.value === newId);
-                if (!has) {
-                    const opt = document.createElement('option');
-                    opt.value = newId;
-                    opt.textContent = `💬 ${newId} · (新建)`;
-                    opt.selected = true;
-                    const firstReal = els.sessionsSelect.firstElementChild
-                        && els.sessionsSelect.firstElementChild.nextSibling;
-                    els.sessionsSelect.insertBefore(opt, firstReal);
-                } else {
-                    els.sessionsSelect.value = newId;
-                }
+            // 4. 清空主聊天区(新会话 = 新对话)
+            if (els.messages) {
+                const welcome = els.messages.querySelector('.welcome');
+                els.messages.innerHTML = '';
+                if (welcome) els.messages.appendChild(welcome);
             }
             toast('success', '新会话已创建', newId);
         } catch (e) {
@@ -265,18 +294,13 @@
         }
     }
 
-    async function deleteSelectedSession() {
-        if (!els.sessionsSelect || !els.sessionsSelect.value) {
-            toast('warn', '请先选择一个会话', '');
-            return;
-        }
-        const sid = els.sessionsSelect.value;
+    async function deleteSessionById(sid) {
+        if (!sid) return;
         if (!confirm(`确认删除会话 ${sid}? 不可恢复.`)) return;
         try {
             const { payload, status } = await ApiClient.deleteSession(sid);
             if (status === 200 && payload?.code === 'SUCCESS') {
                 toast('success', '会话已删除', sid);
-                // 删的是当前会话 → 重生一个新 id 避免下次发送指向已删 session
                 if (state.settings.sessionId === sid) {
                     const newId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
                     state.settings.sessionId = newId;
@@ -293,14 +317,24 @@
         }
     }
 
-    function switchSession() {
-        if (!els.sessionsSelect) return;
-        const sid = els.sessionsSelect.value;
-        if (!sid) return;
+    // 兼容旧名 (settings drawer 还可能调)
+    async function deleteSelectedSession() {
+        const sid = state.settings.sessionId;
+        if (!sid) {
+            toast('warn', '当前没有选中会话', '');
+            return;
+        }
+        return deleteSessionById(sid);
+    }
+
+    function switchSessionTo(sid) {
+        if (!sid || sid === state.settings.sessionId) return;
         state.settings.sessionId = sid;
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
         ApiClient.configure(state.settings);
+        // 重新渲列表 active 状态
+        refreshSessions();
         toast('info', '已切换会话', sid);
     }
 

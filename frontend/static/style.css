@@ -96,18 +96,151 @@ body {
 .app-main {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 360px;
+    /* Task VVVV (#108): 三列 — 左 sessions 260 | 中 chat 弹性 | 右 tabs 360 */
+    grid-template-columns: 260px 1fr 360px;
     min-height: 0;
 }
 
+/* ===== Task VVVV (#108): 左侧 sessions sidebar ===== */
+.sessions-sidebar {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+}
+.sessions-sidebar-header {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+}
+.new-session-btn {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--primary, #4f8cff);
+    color: white;
+    border: 0;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms;
+    box-shadow: var(--shadow-sm);
+}
+.new-session-btn:hover {
+    background: var(--primary-hover, #3a78ed);
+}
+.sessions-sidebar-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-faint, #888);
+}
+.sessions-count {
+    background: var(--bg-soft, rgba(127,127,127,0.15));
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.session-list {
+    flex: 1;
+    overflow-y: auto;
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+}
+.session-list .empty-state {
+    padding: 24px 12px;
+    text-align: center;
+    color: var(--text-faint, #888);
+    font-size: 12px;
+}
+.session-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 8px 10px;
+    margin-bottom: 3px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 80ms;
+    color: var(--text, #d4d4d4);
+    font-size: 13px;
+}
+.session-item:hover {
+    background: var(--bg-soft, rgba(127,127,127,0.12));
+}
+.session-item.active {
+    background: var(--primary-soft, rgba(79, 140, 255, 0.18));
+    color: var(--text-strong, #fff);
+    font-weight: 500;
+}
+.session-item-main {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+.session-item-name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--mono, monospace);
+    font-size: 12px;
+}
+.session-item-meta {
+    display: block;
+    font-size: 10px;
+    color: var(--text-faint, #888);
+    margin-top: 2px;
+}
+.session-item-delete {
+    background: transparent;
+    border: 0;
+    color: var(--text-faint, #888);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 120ms;
+    font-size: 13px;
+}
+.session-item:hover .session-item-delete,
+.session-item.active .session-item-delete {
+    opacity: 1;
+}
+.session-item-delete:hover {
+    background: var(--danger-soft, rgba(239,68,68,0.18));
+    color: var(--danger, #ef4444);
+}
+
 /* ===== 桌面/平板分界: 1100px ===== */
-/* >= 1100px: 双栏 (chat | sidebar 360px) */
-/* < 1100px: 单栏, sidebar 变成可切换的覆盖层 */
+/* >= 1100px: 三栏 (sessions 260 | chat | tabs 360) */
+/* < 1100px: 单栏, 两 sidebar 都变成可切换覆盖层 */
 
 @media (max-width: 1100px) {
     .app-main {
         grid-template-columns: 1fr;
         position: relative;
+    }
+    .sessions-sidebar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 260px;
+        max-width: 85vw;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform var(--transition);
+        box-shadow: var(--shadow-lg);
+    }
+    .sessions-sidebar.open {
+        transform: translateX(0);
     }
     .sidebar {
         position: absolute;
