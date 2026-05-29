@@ -522,19 +522,29 @@
         }
         if (out.length > 0) return out;
         // 路径 3: 状态顶层 task — 兜底, react agent 执行完后 events 可能被清空只留 task
-        const topTask = state_data.task;
+        let topTask = state_data.task;
         if (topTask) {
+            // Task PPPP: 后端 Agent 会把"长期记忆注入 + 原 task"合成一个 augmented prompt
+            // 存到 state.task. 前端展示只要原句, 把记忆 prefix 切掉.
+            const taskStr = String(topTask);
+            const cur = taskStr.indexOf('[当前任务]');
+            if (cur >= 0) {
+                // 取 "[当前任务]\n" 之后的内容
+                const after = taskStr.slice(cur + '[当前任务]'.length).replace(/^\s+/, '');
+                if (after) topTask = after;
+            }
+            const preview = String(topTask).length > 60
+                ? String(topTask).slice(0, 60) + '…' : String(topTask);
             out.push({
                 id: 'hist_top_task',
                 role: 'user', content: String(topTask),
                 type: state_data.execution_mode || 'agent',
             });
-            // 状态是 completed 但没 final_answer_preview, 给个占位
             if (state_data.status === 'completed') {
                 out.push({
                     id: 'hist_top_done',
                     role: 'assistant',
-                    content: `_（此会话已完成, 但未保留完整回答内容. 仅显示任务: "${topTask}"）_`,
+                    content: `_（此会话已完成, 但未保留完整回答内容. 任务概要: "${preview}"）_`,
                     type: state_data.execution_mode || 'agent',
                 });
             }

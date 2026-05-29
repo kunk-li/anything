@@ -299,7 +299,14 @@ class LocalStateStore(BaseStateStore):
                                         title = str(cand)
                                         break
                         if title:
-                            title = str(title).strip().replace("\n", " ")[:30]
+                            # Task PPPP: state.task 可能是 Agent 注入了长期记忆的
+                            # augmented prompt (开头 "[长期记忆 — 已知...]" + ... +
+                            # "[当前任务]" + 原 task). 取原 task 当 title.
+                            title_str = str(title)
+                            cur_idx = title_str.find("[当前任务]")
+                            if cur_idx >= 0:
+                                title_str = title_str[cur_idx + len("[当前任务]"):].lstrip()
+                            title = title_str.strip().replace("\n", " ")[:30]
                 except Exception:
                     pass
                 out.append({
