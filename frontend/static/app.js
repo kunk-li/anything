@@ -216,37 +216,42 @@
     }
 
     async function createNewSession() {
+        // 关键: 不能调 saveSettings() — 它会关抽屉 + 弹 "settings saved" toast,
+        // 用户感觉啥都没发生. 自己手动写 localStorage + reconfigure ApiClient 即可.
         try {
             const { payload, status } = await ApiClient.createSession();
-            if (status === 200 && payload?.code === 'SUCCESS') {
-                const newId = payload.data?.session_id;
-                if (newId) {
-                    state.settings.sessionId = newId;
-                    if (els.sessionInput) els.sessionInput.value = newId;
-                    saveSettings();  // 顺手存 localStorage
-                    // 等 listing IO 同步, 再 refresh; 即使 backend 漏写 stub state,
-                    // 也把新 id 兜底塞到 select 里让用户看见
-                    await refreshSessions();
-                    if (els.sessionsSelect) {
-                        const has = Array.from(els.sessionsSelect.options).some(o => o.value === newId);
-                        if (!has) {
-                            const opt = document.createElement('option');
-                            opt.value = newId;
-                            opt.textContent = `💬 ${newId} · (新建, 待落盘)`;
-                            opt.selected = true;
-                            // 插到 placeholder option 之后
-                            const firstReal = els.sessionsSelect.firstElementChild
-                                && els.sessionsSelect.firstElementChild.nextSibling;
-                            els.sessionsSelect.insertBefore(opt, firstReal);
-                        } else {
-                            els.sessionsSelect.value = newId;
-                        }
-                    }
-                    toast('success', '新会话已创建', newId);
-                }
-            } else {
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
                 toast('error', payload?.code || status, payload?.message || '');
+                return;
             }
+            const newId = payload.data?.session_id;
+            if (!newId) {
+                toast('error', '创建会话失败', '后端未返 session_id');
+                return;
+            }
+            // 1. state + sessionInput UI 同步新 id
+            state.settings.sessionId = newId;
+            if (els.sessionInput) els.sessionInput.value = newId;
+            // 2. localStorage + ApiClient reconfigure, 不关抽屉
+            try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+            ApiClient.configure(state.settings);
+            // 3. 刷下拉, 兜底插一条 option 让用户立马能看见新会话被选中
+            await refreshSessions();
+            if (els.sessionsSelect) {
+                const has = Array.from(els.sessionsSelect.options).some(o => o.value === newId);
+                if (!has) {
+                    const opt = document.createElement('option');
+                    opt.value = newId;
+                    opt.textContent = `💬 ${newId} · (新建)`;
+                    opt.selected = true;
+                    const firstReal = els.sessionsSelect.firstElementChild
+                        && els.sessionsSelect.firstElementChild.nextSibling;
+                    els.sessionsSelect.insertBefore(opt, firstReal);
+                } else {
+                    els.sessionsSelect.value = newId;
+                }
+            }
+            toast('success', '新会话已创建', newId);
         } catch (e) {
             toast('error', '新建会话失败', e.message);
         }
@@ -263,6 +268,14 @@
             const { payload, status } = await ApiClient.deleteSession(sid);
             if (status === 200 && payload?.code === 'SUCCESS') {
                 toast('success', '会话已删除', sid);
+                // 删的是当前会话 → 重生一个新 id 避免下次发送指向已删 session
+                if (state.settings.sessionId === sid) {
+                    const newId = 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+                    state.settings.sessionId = newId;
+                    if (els.sessionInput) els.sessionInput.value = newId;
+                    try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+                    ApiClient.configure(state.settings);
+                }
                 refreshSessions();
             } else {
                 toast('error', payload?.code || status, payload?.message || '');

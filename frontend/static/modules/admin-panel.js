@@ -298,7 +298,7 @@
                 </div>`);
             }
 
-            // Task PPP (#102): Scheduler (II) — cron 任务列表
+            // Task PPP (#102): Scheduler (II) — cron 任务列表 + 触发/取消按钮
             if (d.scheduler) {
                 const tasks = d.scheduler.tasks || [];
                 const taskRows = tasks.length
@@ -309,6 +309,9 @@
                             <br/>next: ${escapeHtml(t.next_run || '-')}
                             · runs: ${t.runs || 0}
                             ${t.last_error ? '<br/><span style="color:var(--danger);font-size:10px;">err: ' + escapeHtml(String(t.last_error).slice(0, 80)) + '</span>' : ''}
+                            <br/>
+                            <button class="small-btn ghost sched-trigger-btn" data-task-id="${escapeHtml(t.id)}" title="立刻触发一次">▶ 触发</button>
+                            <button class="small-btn ghost danger sched-cancel-btn" data-task-id="${escapeHtml(t.id)}" title="取消任务">✕ 取消</button>
                         </dd>
                     `).join('')
                     : '<dt>(空)</dt><dd>无已注册任务</dd>';
@@ -340,6 +343,55 @@
             }
 
             els.adminGrid.innerHTML = html.join('');
+        }
+
+        // Task PPP (#102): event delegation 给调度任务的 trigger/cancel 按钮
+        // (renderAdminStatus 重渲染会替换整个 innerHTML, 不能直接 addEventListener
+        // 到每个 button — 用 click delegation 一次性绑.)
+        if (els.adminGrid && !els.adminGrid._schedulerClickBound) {
+            els.adminGrid._schedulerClickBound = true;
+            els.adminGrid.addEventListener('click', async (e) => {
+                const trig = e.target.closest('.sched-trigger-btn');
+                if (trig) {
+                    const taskId = trig.dataset.taskId;
+                    if (!confirm(`立刻触发任务 ${taskId}?`)) return;
+                    trig.disabled = true;
+                    try {
+                        const { payload, status } = await ApiClient.triggerSchedulerTask(taskId);
+                        if (status === 200 && payload?.code === 'SUCCESS') {
+                            toast('success', '任务已触发', taskId);
+                            refreshAdminStatus();
+                        } else {
+                            toast('error', payload?.code || status, payload?.message || '');
+                            trig.disabled = false;
+                        }
+                    } catch (err) {
+                        toast('error', '触发失败', err.message);
+                        trig.disabled = false;
+                    }
+                    return;
+                }
+                const cancel = e.target.closest('.sched-cancel-btn');
+                if (cancel) {
+                    const taskId = cancel.dataset.taskId;
+                    if (!confirm(`取消任务 ${taskId}? 不可恢复.`)) return;
+                    cancel.disabled = true;
+                    try {
+                        const { payload, status } = await ApiClient.cancelSchedulerTask(taskId);
+                        if (status === 200 && payload?.code === 'SUCCESS') {
+                            toast('success', '任务已取消', taskId);
+                            refreshAdminStatus();
+                        } else {
+                            toast('error', payload?.code || status, payload?.message || '');
+                            cancel.disabled = false;
+                        }
+                    } catch (err) {
+                        toast('error', '取消失败', err.message);
+                        cancel.disabled = false;
+                    }
+                    return;
+                }
+            });
         }
 
         return { refreshDocsList, refreshAdminStatus, renderAdminStatus };

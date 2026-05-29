@@ -248,6 +248,17 @@ const ApiClient = (() => {
         );
     }
 
+    // ============== Task PPP (#102) — Scheduler APIs ==============
+    async function listSchedulerTasks() {
+        return _doFetch('GET', '/scheduler/list');
+    }
+    async function triggerSchedulerTask(taskId) {
+        return _doFetch('POST', `/scheduler/${encodeURIComponent(taskId)}/trigger`, {});
+    }
+    async function cancelSchedulerTask(taskId) {
+        return _doFetch('DELETE', `/scheduler/${encodeURIComponent(taskId)}`);
+    }
+
     // ============== Task SSS (#105) — Sessions APIs ==============
     async function listSessions(limit = 50) {
         return _doFetch('GET', `/sessions/list?limit=${limit}`);
@@ -374,6 +385,10 @@ const ApiClient = (() => {
         deleteMemoryFact,
         pinMemoryFact,
         searchMemory,
+        // Task PPP (#102) — Scheduler
+        listSchedulerTasks,
+        triggerSchedulerTask,
+        cancelSchedulerTask,
         // Task SSS (#105) — Sessions
         listSessions,
         deleteSession,
