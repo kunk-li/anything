@@ -8,13 +8,23 @@ similarity 计算的策略, ABC 只钉签名.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from long_term_memory_module.model import Fact, MemoryHit, MemoryQuery
 
 
 class BaseLongTermMemory(ABC):
     """Long-term memory 抽象层."""
+
+    # Task EEE (#91): LLM 抽取 — 不强制实现 (没 llm_client 时 fallback no-op).
+    def extract_facts(
+        self,
+        messages: List[Dict[str, str]],
+        tenant_id: str = "default",
+        session_id: Optional[str] = None,
+    ) -> List[Fact]:
+        """从对话消息抽事实. 默认实现 raise NotImplementedError, impl 可 override."""
+        raise NotImplementedError("extract_facts 需要 impl 注入 llm_client")
 
     @abstractmethod
     def add_fact(self, fact: Fact) -> Fact:
