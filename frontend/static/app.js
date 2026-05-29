@@ -628,10 +628,22 @@
             // 持久化的 answer 优先; 没有才退回到 placeholder
             const finalAnswer = state_data.answer || '';
             if (finalAnswer) {
+                // Task WWWW: 历史消息也跑同样的 image 提取 — 扫 answer 里的图片 URL,
+                // 删掉裸 URL 文本 + append markdown image, 让 <img> 渲染 (跟新消息一致).
+                let answerStr = String(finalAnswer);
+                const urlRe = /https?:\/\/[^\s"'<>]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'<>]*)?/gi;
+                const urls = Array.from(new Set(answerStr.match(urlRe) || []));
+                if (urls.length > 0) {
+                    for (const u of urls) {
+                        answerStr = answerStr.split(u).join('');
+                    }
+                    answerStr = answerStr.replace(/\n{3,}/g, '\n\n').trim();
+                    answerStr += '\n\n' + urls.map(u => `![生成图](${u})`).join('\n\n');
+                }
                 out.push({
                     id: 'hist_top_answer',
                     role: 'assistant',
-                    content: String(finalAnswer),
+                    content: answerStr,
                     type: state_data.execution_mode || 'agent',
                 });
             } else if (state_data.status === 'completed') {
