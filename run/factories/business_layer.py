@@ -178,6 +178,15 @@ def build_business_layer(
     from agent_module.tools.tools_impl.image_generate import TOOL_DESCRIPTION as _IG_DESC
     tool_registry.register("image_generate", _image_generate, description=_IG_DESC)
 
+    # Task TTTT-4 (#141): PDF / Excel 读取 (pypdf + openpyxl)
+    from agent_module.tools import pdf_read as _pdf_read, excel_read as _excel_read
+    from agent_module.tools.tools_impl.pdf_excel_read import (
+        PDF_READ_DESCRIPTION as _PDF_DESC,
+        EXCEL_READ_DESCRIPTION as _XLS_DESC,
+    )
+    tool_registry.register("pdf_read", _pdf_read, description=_PDF_DESC)
+    tool_registry.register("excel_read", _excel_read, description=_XLS_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(

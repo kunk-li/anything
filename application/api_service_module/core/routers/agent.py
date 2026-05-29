@@ -38,6 +38,8 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     # 文件 / 系统
     "document_read": "file",
     "file_write": "file",
+    "pdf_read": "file",
+    "excel_read": "file",
     "shell_exec": "system",
     "py_sandbox": "system",
     # LLM / Agent

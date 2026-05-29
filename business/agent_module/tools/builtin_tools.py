@@ -31,6 +31,8 @@ from .tools_impl import (
     make_spawn_subagent_tool,
     web_search,                   # Task HHH (#94)
     image_generate_tool,          # Task TTTT-6 (#143)
+    pdf_read,                     # Task TTTT-4 (#141)
+    excel_read,                   # Task TTTT-4 (#141)
     TOOL_DESCRIPTIONS,
 )
 
@@ -53,5 +55,7 @@ __all__ = [
     "make_spawn_subagent_tool",
     "web_search",                  # Task HHH (#94)
     "image_generate_tool",         # Task TTTT-6 (#143)
+    "pdf_read",                    # Task TTTT-4 (#141)
+    "excel_read",                  # Task TTTT-4 (#141)
     "TOOL_DESCRIPTIONS",
 ]

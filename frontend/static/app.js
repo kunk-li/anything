@@ -2550,6 +2550,8 @@
         http_request:     '抓取 https://example.com 的首页',
         document_read:    '读一下文档 doc_xxx 的全文',
         file_write:       '把 "Hello World" 写到 /tmp/test.txt',
+        pdf_read:         '读 uploads/some.pdf 第 1-3 页',
+        excel_read:       '读 uploads/data.xlsx 第一个 sheet 的前 50 行',
         shell_exec:       '执行 ls /tmp',
         py_sandbox:       '运行 Python: print(sum(range(100)))',
         llm_generate:     '写一首关于秋天的五言诗',

@@ -22,6 +22,8 @@ from .builtin_tools import (
     make_spawn_subagent_tool,  # Task EE (#65)
     web_search,                # Task HHH (#94)
     image_generate_tool,       # Task TTTT-6 (#143)
+    pdf_read,                  # Task TTTT-4 (#141)
+    excel_read,                # Task TTTT-4 (#141)
     TOOL_DESCRIPTIONS,
 )
 
@@ -44,5 +46,7 @@ __all__ = [
     "make_spawn_subagent_tool",
     "web_search",
     "image_generate_tool",
+    "pdf_read",
+    "excel_read",
     "TOOL_DESCRIPTIONS",
 ]

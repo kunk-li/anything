@@ -46,6 +46,7 @@ from .python_sandbox import python_sandbox
 from .spawn_subagent import make_spawn_subagent_tool
 from .web_search import web_search   # Task HHH (#94)
 from .image_generate import image_generate_tool  # Task TTTT-6 (#143)
+from .pdf_excel_read import pdf_read, excel_read  # Task TTTT-4 (#141)
 from ._descriptions import TOOL_DESCRIPTIONS
 
 __all__ = [
@@ -67,5 +68,7 @@ __all__ = [
     "make_spawn_subagent_tool",
     "web_search",                   # Task HHH (#94)
     "image_generate_tool",          # Task TTTT-6 (#143)
+    "pdf_read",                     # Task TTTT-4 (#141)
+    "excel_read",                   # Task TTTT-4 (#141)
     "TOOL_DESCRIPTIONS",
 ]
