@@ -253,6 +253,66 @@
                 </div>`);
             }
 
+            // Task OOO (#101): Hooks (Z) — 显示装了哪些 hook (per event)
+            if (d.hooks) {
+                const cnt = d.hooks.count || {};
+                const list = d.hooks.list || {};
+                const totalHooks = Object.values(cnt).reduce((a, b) => a + b, 0);
+                const hookRows = Object.entries(list).map(([event, fns]) => {
+                    const fnsHtml = (fns || []).length
+                        ? (fns || []).map(n => `<code style="font-size:10px;">${escapeHtml(n)}</code>`).join(', ')
+                        : '<span style="color:var(--text-faint)">(无)</span>';
+                    return `<dt class="path">${escapeHtml(event)} (${(fns || []).length})</dt><dd>${fnsHtml}</dd>`;
+                }).join('') || '<dt>无</dt><dd>-</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>🪝 Hooks (Z)</h4>
+                    <dl>
+                        <dt>total hooks</dt><dd><strong>${totalHooks}</strong></dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>By event:</strong>
+                        <dl>${hookRows}</dl>
+                    </div>
+                </div>`);
+            }
+
+            // Task OOO (#101): Skills (AA)
+            if (d.skills) {
+                const items = d.skills.items || [];
+                const itemRows = items.length
+                    ? items.slice(0, 10).map(s => `
+                        <dt class="path">${escapeHtml(s.name)}</dt>
+                        <dd>${escapeHtml(s.description || '')}${(s.tags || []).map(tag => ` <span class="memory-tag">${escapeHtml(tag)}</span>`).join('')}</dd>
+                    `).join('')
+                    : '<dt>(空)</dt><dd>没有加载到 skill</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>📜 Skills (AA)</h4>
+                    <dl>
+                        <dt>loaded from</dt><dd class="path">${escapeHtml(d.skills.loaded_from || '(未加载)')}</dd>
+                        <dt>count</dt><dd><strong>${d.skills.count}</strong></dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>Skills (top 10):</strong>
+                        <dl>${itemRows}</dl>
+                    </div>
+                </div>`);
+            }
+
+            // Task OOO (#101): Audit log (CC) — 元数据 (不展示完整事件)
+            if (d.audit) {
+                const sizeKB = ((d.audit.current_size_bytes || 0) / 1024).toFixed(1);
+                const maxKB = ((d.audit.max_bytes || 0) / 1024).toFixed(0);
+                html.push(`<div class="admin-card">
+                    <h4>📋 Audit log (CC)</h4>
+                    <dl>
+                        <dt>path</dt><dd class="path">${escapeHtml(d.audit.path || '-')}</dd>
+                        <dt>size</dt><dd>${sizeKB} KB / ${maxKB} KB</dd>
+                        <dt>rotates kept</dt><dd>${d.audit.backup_count}</dd>
+                        <dt>writes (this proc)</dt><dd>${d.audit.writes_this_process || 0}</dd>
+                    </dl>
+                </div>`);
+            }
+
             els.adminGrid.innerHTML = html.join('');
         }
 

@@ -197,6 +197,48 @@ class AdminRoutesMixin:
                 self.logger.warning(f"[admin] 加载 quota guard 失败: {e}")
                 data["quota"] = None
 
+            # 9. Task OOO (#101): Hooks 注册表 (Z)
+            try:
+                from hooks_module import get_hook_registry
+                reg = get_hook_registry()
+                data["hooks"] = {
+                    "count": reg.count(),
+                    "list": reg.list(),
+                }
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 hook registry 失败: {e}")
+                data["hooks"] = None
+
+            # 10. Task OOO (#101): Skills 注册表 (AA)
+            try:
+                from skills_module import get_skill_registry
+                sreg = get_skill_registry()
+                skills = sreg.all_skills()
+                data["skills"] = {
+                    "loaded_from": getattr(sreg, "_loaded_from", None),
+                    "count": len(skills),
+                    "items": [
+                        {
+                            "name": s.name,
+                            "description": s.description,
+                            "tags": getattr(s, "tags", []) or [],
+                            "content_preview": (getattr(s, "content", "") or "")[:200],
+                        }
+                        for s in skills[:50]  # 顶 50 条防 admin 面板被巨量 skills 撑爆
+                    ],
+                }
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 skill registry 失败: {e}")
+                data["skills"] = None
+
+            # 11. Task OOO (#101): Audit log 元数据 (CC) — 不读完整事件 (太大)
+            try:
+                from audit_module import get_audit_logger
+                data["audit"] = get_audit_logger().snapshot()
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 audit logger 失败: {e}")
+                data["audit"] = None
+
             return JSONResponse(
                 status_code=200,
                 content={
