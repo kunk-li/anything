@@ -141,7 +141,9 @@
     const state = {
         mode: 'rag',              // rag / agent / hybrid
         history: [],
-        sending: false,
+        sending: false,           // 兼容旧引用; 实际并发逻辑用 inflight Map
+        // Task RRRR (#135): per-session 并发跟踪 — sid → { placeholderId, startedAt }
+        inflight: new Map(),
         // 待发送的图片附件 [{id, file, previewUrl, status: 'pending'|'uploading'|'ready'|'failed', storedPath?}]
         pendingAttachments: [],
         settings: {
@@ -362,6 +364,8 @@
             </li>`);
         }
         els.sessionList.innerHTML = items.join('');
+        // Task RRRR: 渲完后给 inflight session 打 thinking 标记
+        _updateSessionInflightUI();
     }
 
     // YYYY-H: 按搜索词过滤 + 重渲
@@ -630,10 +634,8 @@
 
     function switchSessionTo(sid) {
         if (!sid || sid === state.settings.sessionId) return;
-        // 切前停掉正在跑的 stream, 避免到错 session
-        try {
-            if (typeof stopSending === 'function') stopSending();
-        } catch (_) {}
+        // Task RRRR (#135): 不再 stopSending — 多会话并行, 旧 session 的 inflight 让它跑完,
+        // 响应回来时根据 capturedSid 自动找到 (或不显, 后端已 QQQQ 持久化, 切回能看到).
         state.settings.sessionId = sid;
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
@@ -751,9 +753,9 @@
             });
         });
 
-        // 发送 / 停止 (Task GG #67)
+        // 发送 / 停止 (Task GG #67 + Task RRRR #135: per-session 锁)
         els.sendBtn.addEventListener('click', () => {
-            if (state.sending) {
+            if (state.inflight.has(state.settings.sessionId)) {
                 stopSending();
             } else {
                 send();
@@ -1292,7 +1294,12 @@
     }
 
     async function send() {
-        if (state.sending) return;
+        // Task RRRR (#135): per-session 锁 — 当前会话有 inflight 才拒绝, 别的会话不受影响
+        const currentSid = state.settings.sessionId;
+        if (state.inflight.has(currentSid)) {
+            toast('warn', '当前会话有正在进行的请求', '请等待或切换到其他会话');
+            return;
+        }
         const text = els.inputText.value.trim();
         const hasAttachments = state.pendingAttachments.length > 0;
         if (!text && !hasAttachments) {
@@ -1370,7 +1377,11 @@
             role: 'assistant', mode, content: '', loading: true, ts: Date.now(),
         });
 
-        state.sending = true;
+        state.sending = true;  // 兼容旧引用
+        // Task RRRR (#135): 记录 inflight, 捕获 sid (本次发送目标会话)
+        const capturedSid = currentSid;
+        state.inflight.set(capturedSid, { placeholderId, startedAt: Date.now() });
+        _updateSessionInflightUI();
         // Task GG (#67): 发送中 send 按钮变 Stop, 点击中止流式
         state.activePlaceholderId = placeholderId;
         els.sendBtn.classList.add('sending');
@@ -1383,11 +1394,18 @@
 
         try {
             if (useStream) {
-                await sendStream(body, placeholderId, { tenant, mode });
+                await sendStream(body, placeholderId, { tenant, mode, capturedSid });
             } else {
-                await sendOnce(body, placeholderId, { tenant, mode });
+                await sendOnce(body, placeholderId, { tenant, mode, capturedSid });
             }
         } finally {
+            // Task RRRR: 释放 inflight 锁; UI 按钮只在 capturedSid 仍是 current 时复位
+            state.inflight.delete(capturedSid);
+            _updateSessionInflightUI();
+            if (state.settings.sessionId !== capturedSid) {
+                // 用户已经切走了, 通知一下
+                toast('info', '会话已回复', capturedSid);
+            }
             state.sending = false;
             state.activePlaceholderId = null;
             els.sendBtn.classList.remove('sending');
@@ -2439,6 +2457,16 @@
             els.jobResult.className = 'job-result error';
             els.jobResult.textContent = `× ${e.message}`;
         }
+    }
+
+    // ---------- Task RRRR (#135): per-session inflight UI ----------
+    function _updateSessionInflightUI() {
+        if (!els.sessionList) return;
+        const inflightSids = new Set(state.inflight.keys());
+        els.sessionList.querySelectorAll('.session-item').forEach(item => {
+            const sid = item.dataset.sid;
+            item.classList.toggle('inflight', inflightSids.has(sid));
+        });
     }
 
     // ---------- Task NNNN (#131): 主题切换 ----------

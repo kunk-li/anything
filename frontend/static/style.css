@@ -247,6 +247,27 @@ body {
     color: var(--text-strong, #fff);
     font-weight: 500;
 }
+/* Task RRRR (#135): session 有 inflight 请求时显闪烁圆点 */
+.session-item.inflight::before {
+    content: '';
+    position: absolute;
+    right: 32px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary, #4f8cff);
+    box-shadow: 0 0 6px var(--primary, #4f8cff);
+    animation: inflightPulse 1s ease-in-out infinite;
+}
+.session-item {
+    position: relative;
+}
+@keyframes inflightPulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+}
 .session-item-main {
     flex: 1;
     min-width: 0;
