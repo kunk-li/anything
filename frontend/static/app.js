@@ -640,6 +640,8 @@
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
         ApiClient.configure(state.settings);
+        // Task RRRR-2: 切了 session, send 按钮视觉同步 (新 session 没 inflight → 显"发送")
+        _updateSendButtonUI();
         // 重新渲列表 active 状态
         refreshSessions();
         // Task ZZZZ (#117): 拉新 session 的 events → 重建 message 区
@@ -1381,14 +1383,9 @@
         // Task RRRR (#135): 记录 inflight, 捕获 sid (本次发送目标会话)
         const capturedSid = currentSid;
         state.inflight.set(capturedSid, { placeholderId, startedAt: Date.now() });
+        // 同时刷左栏 inflight 标记 + 按钮视觉 (per-session)
         _updateSessionInflightUI();
-        // Task GG (#67): 发送中 send 按钮变 Stop, 点击中止流式
         state.activePlaceholderId = placeholderId;
-        els.sendBtn.classList.add('sending');
-        const sendLabel = els.sendBtn.querySelector('.send-label');
-        const sendIcon = els.sendBtn.querySelector('.send-icon');
-        if (sendLabel) sendLabel.textContent = t('composer.stop');
-        if (sendIcon) sendIcon.textContent = '⏹';
         els.inputText.value = '';
         els.inputText.focus();
 
@@ -1399,7 +1396,7 @@
                 await sendOnce(body, placeholderId, { tenant, mode, capturedSid });
             }
         } finally {
-            // Task RRRR: 释放 inflight 锁; UI 按钮只在 capturedSid 仍是 current 时复位
+            // Task RRRR: 释放 inflight 锁; 视觉由 _updateSessionInflightUI / _updateSendButtonUI 统一处理
             state.inflight.delete(capturedSid);
             _updateSessionInflightUI();
             if (state.settings.sessionId !== capturedSid) {
@@ -1408,9 +1405,6 @@
             }
             state.sending = false;
             state.activePlaceholderId = null;
-            els.sendBtn.classList.remove('sending');
-            if (sendLabel) sendLabel.textContent = t('composer.send');
-            if (sendIcon) sendIcon.textContent = '↵';
         }
 
         // 发送完成后清空附件 (无论成功失败都清, 失败的已经在 UI 上标红)
@@ -2467,6 +2461,26 @@
             const sid = item.dataset.sid;
             item.classList.toggle('inflight', inflightSids.has(sid));
         });
+        // 当前 session 的 send 按钮视觉也跟着切 — 不同 session 是独立状态
+        _updateSendButtonUI();
+    }
+
+    // Task RRRR-2: send 按钮视觉是 per-current-session 的, 不是全局
+    function _updateSendButtonUI() {
+        if (!els.sendBtn) return;
+        const currentSid = state.settings.sessionId;
+        const isInflight = state.inflight.has(currentSid);
+        const sendLabel = els.sendBtn.querySelector('.send-label');
+        const sendIcon = els.sendBtn.querySelector('.send-icon');
+        if (isInflight) {
+            els.sendBtn.classList.add('sending');
+            if (sendLabel) sendLabel.textContent = t('composer.stop');
+            if (sendIcon) sendIcon.textContent = '⏹';
+        } else {
+            els.sendBtn.classList.remove('sending');
+            if (sendLabel) sendLabel.textContent = t('composer.send');
+            if (sendIcon) sendIcon.textContent = '↵';
+        }
     }
 
     // ---------- Task NNNN (#131): 主题切换 ----------
