@@ -243,7 +243,25 @@ class ReActEngineMixin:
             observation = self._summarize_tool_output(tool_result.get("output"))
             last_observation = tool_result
 
-            history.append({"thought": thought, "action": {"tool": tool_name, "input": tool_input}, "observation": observation})
+            # Task MMM (#99): 保留结构化输出 (web_search 等返 results 数组的)
+            # 让前端渲染 link card. 兜底为 None 不影响老前端.
+            structured_output = None
+            try:
+                output = tool_result.get("output") or {}
+                if isinstance(output, dict):
+                    data = output.get("data")
+                    if isinstance(data, dict):
+                        structured_output = data
+            except Exception:
+                structured_output = None
+
+            history.append({
+                "thought": thought,
+                "action": {"tool": tool_name, "input": tool_input},
+                "observation": observation,
+                # 给前端 web_search / json_query 等结构化工具结果用
+                "observation_data": structured_output,
+            })
             self._append_state_event(
                 session_id=session_id, event_type="react_observation", trace_id=trace_id,
                 payload={"iteration": iteration, "tool_name": tool_name, "success": tool_result.get("success"), "obs": observation[:200]},
@@ -283,6 +301,8 @@ class ReActEngineMixin:
                         "thought": (h.get("thought") or "")[:200],
                         "action": h.get("action"),
                         "observation_preview": (h.get("observation") or "")[:200] if h.get("observation") else None,
+                        # Task MMM (#99): 透传结构化输出给前端 (web_search link card 等)
+                        "observation_data": h.get("observation_data"),
                         "final_answer": h.get("final_answer"),
                     }
                     for i, h in enumerate(history)

@@ -1503,6 +1503,34 @@
                 li.appendChild(o);
             }
 
+            // Task MMM (#99): web_search 工具结果渲染成 link card 栅格
+            const toolName = (row.action && row.action.tool_name) || (row.action && row.action.tool);
+            const obsData = row.observation_data;
+            if (toolName === 'web_search' && obsData && Array.isArray(obsData.results)) {
+                const cards = document.createElement('div');
+                cards.className = 'web-search-cards';
+                obsData.results.slice(0, 5).forEach(r => {
+                    const card = document.createElement('a');
+                    card.className = 'web-search-card';
+                    card.href = r.url || '#';
+                    card.target = '_blank';
+                    card.rel = 'noopener noreferrer';
+                    card.innerHTML = `
+                        <div class="web-search-title">${escapeHtml(r.title || '(无标题)')}</div>
+                        <div class="web-search-url">${escapeHtml((r.url || '').slice(0, 60))}</div>
+                        <div class="web-search-snippet">${escapeHtml((r.snippet || '').slice(0, 160))}</div>
+                    `;
+                    cards.appendChild(card);
+                });
+                if (obsData.source) {
+                    const src = document.createElement('div');
+                    src.className = 'web-search-source';
+                    src.textContent = `🌐 source: ${obsData.source}${obsData.fallback_reason ? ' (' + obsData.fallback_reason + ')' : ''}`;
+                    cards.appendChild(src);
+                }
+                li.appendChild(cards);
+            }
+
             els.stepList.appendChild(li);
         });
         // 自动滚动到最新一步

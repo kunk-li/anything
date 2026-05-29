@@ -1792,6 +1792,53 @@ body.has-drag .chat-pane::before {
 /* response 里的 memory_hits / reflection chip 用 message-meta 已有样式
    特殊颜色由 inline style 控制, 这里不重复. */
 
+/* Task MMM (#99): web_search 工具结果 link card 栅格 */
+.web-search-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+.web-search-card {
+    display: block;
+    text-decoration: none;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-soft, rgba(255,255,255,0.03));
+    transition: border-color .15s ease, transform .15s ease;
+}
+.web-search-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+}
+.web-search-title {
+    font-size: 12px;
+    color: var(--accent);
+    font-weight: 600;
+    word-break: break-word;
+}
+.web-search-url {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    margin-top: 1px;
+    word-break: break-all;
+}
+.web-search-snippet {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+    margin-top: 3px;
+    word-break: break-word;
+}
+.web-search-source {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--text-faint);
+    font-style: italic;
+}
+
 /* Task LLL (#98): admin tab 内子分组样式 */
 .admin-subsection {
     margin-top: 10px;
