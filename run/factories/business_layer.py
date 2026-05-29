@@ -169,6 +169,10 @@ def build_business_layer(
     tool_registry.register("currency_convert", currency_convert, description=TOOL_DESCRIPTIONS["currency_convert"])
     tool_registry.register("python_sandbox", python_sandbox, description=TOOL_DESCRIPTIONS["python_sandbox"])
 
+    # Task HHH (#94): Web 通用搜索 (DuckDuckGo HTML, 免 API key)
+    from agent_module.tools import web_search as _web_search
+    tool_registry.register("web_search", _web_search, description=TOOL_DESCRIPTIONS["web_search"])
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(

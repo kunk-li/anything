@@ -44,6 +44,7 @@ from .weather import weather
 from .currency_convert import currency_convert
 from .python_sandbox import python_sandbox
 from .spawn_subagent import make_spawn_subagent_tool
+from .web_search import web_search   # Task HHH (#94)
 from ._descriptions import TOOL_DESCRIPTIONS
 
 __all__ = [
@@ -63,5 +64,6 @@ __all__ = [
     "currency_convert",
     "python_sandbox",
     "make_spawn_subagent_tool",
+    "web_search",                   # Task HHH (#94)
     "TOOL_DESCRIPTIONS",
 ]

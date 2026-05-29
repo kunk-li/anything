@@ -100,4 +100,12 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
         " 跑完 ReAct 后只回报 final answer + 概要, 子 history 不污染父 react_history。"
         " 适合: 多步骤任务先分解再合并 (例: 子1 查资料 / 子2 算指标 / 主 agent 汇总)。"
     ),
+    "web_search": (
+        "通用 Web 搜索 — 查最新 / 跨多源信息汇总 (Claude web_search / OpenAI browse 风格)。"
+        ' input: {"query": str, "top_k": int=5, "lang": "zh"|"en", "fetch_snippet": bool=True}.'
+        " 走 DuckDuckGo HTML 端点免 API key, 失败时 fallback Wikipedia。"
+        " 返回: results 列表, 每条 {title, url, snippet}; source 标 duckduckgo 或 wikipedia_fallback。"
+        " 适合: 时事查询 / 多源对比 / wikipedia 找不到的小众主题。"
+        " 跟 wikipedia 互补 (wikipedia 是百科, web_search 是综合搜)。"
+    ),
 }
