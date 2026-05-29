@@ -1656,7 +1656,46 @@
             return `[${payload.code}] ${payload.message || ''}`;
         }
         const d = payload.data || {};
-        return d.answer || JSON.stringify(d, null, 2);
+        // Task TTTT-6 (#143): 扫 tool_results_summary 看有没有图片 URL
+        const imgs = _collectGeneratedImages(d);
+        const baseAnswer = d.answer || JSON.stringify(d, null, 2);
+        if (imgs.length > 0) {
+            // 用 markdown 图片语法, Markdown.render 会渲成 <img>
+            return baseAnswer + '\n\n' + imgs.map(u => `![生成图](${u})`).join('\n\n');
+        }
+        return baseAnswer;
+    }
+
+    // Task TTTT-6: 找出工具返回的图片 URL (image_generate 等)
+    function _collectGeneratedImages(d) {
+        const urls = new Set();
+        const summaries = d.tool_results_summary || [];
+        for (const s of summaries) {
+            if (!s || !s.summary) continue;
+            const text = String(s.summary);
+            // 抠 http(s)://...{png|jpg|jpeg|webp} URL
+            const m = text.match(/https?:\/\/[^\s"'<>]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'<>]*)?/gi);
+            if (m) m.forEach(u => urls.add(u));
+            // 抠 JSON 里 image_url / images 字段
+            try {
+                if (text.startsWith('{') || text.startsWith('[')) {
+                    const obj = JSON.parse(text);
+                    const _scan = (o) => {
+                        if (!o) return;
+                        if (typeof o === 'string' && /^https?:\/\/.*\.(png|jpe?g|webp|gif)/i.test(o)) urls.add(o);
+                        if (Array.isArray(o)) o.forEach(_scan);
+                        else if (typeof o === 'object') {
+                            if (o.image_url) _scan(o.image_url);
+                            if (o.images) _scan(o.images);
+                            if (o.url && typeof o.url === 'string') _scan(o.url);
+                            Object.values(o).forEach(_scan);
+                        }
+                    };
+                    _scan(obj);
+                }
+            } catch (_) {}
+        }
+        return Array.from(urls);
     }
 
     // ---------- 消息渲染 ----------
@@ -2515,6 +2554,7 @@
         py_sandbox:       '运行 Python: print(sum(range(100)))',
         llm_generate:     '写一首关于秋天的五言诗',
         image_describe:   '描述一下上传的图片',
+        image_generate:   '生成一张图: 一只橘猫在窗台上, 阳光透过百叶窗, 水彩风格',
         spawn_subagent:   '派一个 subagent 总结 README.md',
         regex_extract:    '从 "phone: 13800138000" 抽出手机号',
         text_stats:       '统计这段文字的字数: "The quick brown fox"',

@@ -21,6 +21,7 @@ from .builtin_tools import (
     python_sandbox,
     make_spawn_subagent_tool,  # Task EE (#65)
     web_search,                # Task HHH (#94)
+    image_generate_tool,       # Task TTTT-6 (#143)
     TOOL_DESCRIPTIONS,
 )
 
@@ -42,5 +43,6 @@ __all__ = [
     "python_sandbox",
     "make_spawn_subagent_tool",
     "web_search",
+    "image_generate_tool",
     "TOOL_DESCRIPTIONS",
 ]

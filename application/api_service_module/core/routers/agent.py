@@ -43,6 +43,7 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     # LLM / Agent
     "llm_generate": "llm",
     "image_describe": "llm",
+    "image_generate": "llm",
     "spawn_subagent": "llm",
     # 通讯 / 外部
     "email_send": "external",

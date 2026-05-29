@@ -45,6 +45,7 @@ from .currency_convert import currency_convert
 from .python_sandbox import python_sandbox
 from .spawn_subagent import make_spawn_subagent_tool
 from .web_search import web_search   # Task HHH (#94)
+from .image_generate import image_generate_tool  # Task TTTT-6 (#143)
 from ._descriptions import TOOL_DESCRIPTIONS
 
 __all__ = [
@@ -65,5 +66,6 @@ __all__ = [
     "python_sandbox",
     "make_spawn_subagent_tool",
     "web_search",                   # Task HHH (#94)
+    "image_generate_tool",          # Task TTTT-6 (#143)
     "TOOL_DESCRIPTIONS",
 ]

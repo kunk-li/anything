@@ -949,6 +949,15 @@ body.has-drag .chat-pane::before {
     word-wrap: break-word;
     white-space: pre-wrap;
 }
+/* Task TTTT-6 (#143): markdown 渲染的图片自适应 + 圆角 + 阴影 */
+.message-body img {
+    max-width: 100%;
+    max-height: 480px;
+    border-radius: 8px;
+    margin: 10px 0;
+    box-shadow: var(--shadow-sm);
+    display: block;
+}
 .message-user .message-body {
     background: var(--bg-elev2);
 }

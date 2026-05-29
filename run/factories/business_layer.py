@@ -173,6 +173,11 @@ def build_business_layer(
     from agent_module.tools import web_search as _web_search
     tool_registry.register("web_search", _web_search, description=TOOL_DESCRIPTIONS["web_search"])
 
+    # Task TTTT-6 (#143): 图片生成 (DashScope 万相 wanx-v1)
+    from agent_module.tools import image_generate_tool as _image_generate
+    from agent_module.tools.tools_impl.image_generate import TOOL_DESCRIPTION as _IG_DESC
+    tool_registry.register("image_generate", _image_generate, description=_IG_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(
