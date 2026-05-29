@@ -524,34 +524,50 @@
         // 路径 3: 状态顶层 task — 兜底, react agent 执行完后 events 可能被清空只留 task
         let topTask = state_data.task;
         if (topTask) {
-            // Task PPPP / PPPP-2: 后端 Agent 把"长期记忆 facts + 原 task"合成 augmented prompt
-            // 存到 state.task. 解析回:
+            // Task PPPP / PPPP-2: 后端 Agent 把"长期记忆 facts + 原 task"合成 augmented prompt.
+            // 解析回:
             //   1) 原 task 当 user content (不再把注入当用户的话)
             //   2) memory hits 挂到 message.meta.memoryHits, 让 UI 显 📚 N 徽章
+            // Task QQQQ: state 顶层 task 现在已经是原句 (后端持久化时存 original_task);
+            //   仅老格式 (含 [当前任务] 标记) 时才解析. answer 直接读 state.answer.
             const taskStr = String(topTask);
             const memHeader = '[长期记忆 — 已知关于用户/上下文的相关信息]';
             const curHeader = '[当前任务]';
             const memIdx = taskStr.indexOf(memHeader);
             const curIdx = taskStr.indexOf(curHeader);
             let memHits = [];
+            // 老 state 兼容: task 里仍含 augmented prompt 时解析
             if (memIdx >= 0 && curIdx > memIdx) {
-                // 抽 facts: 在 memHeader 和 curHeader 之间, 行以 "- " 开头
                 const block = taskStr.slice(memIdx + memHeader.length, curIdx);
                 memHits = block.split('\n')
                     .map(l => l.trim())
                     .filter(l => l.startsWith('- '))
                     .map((l, i) => ({
                         fact_id: 'hist_' + i,
-                        content: l.slice(2).trim(),  // 去 "- "
+                        content: l.slice(2).trim(),
                         score: null,
                         reason: 'session_history',
                     }));
-            }
-            if (curIdx >= 0) {
                 topTask = taskStr.slice(curIdx + curHeader.length).replace(/^\s+/, '');
             }
-            const preview = String(topTask).length > 60
-                ? String(topTask).slice(0, 60) + '…' : String(topTask);
+            // 新 state: 后端写 augmented_task 单独, task 已是原句
+            if (state_data.augmented_task && memHits.length === 0) {
+                const at = String(state_data.augmented_task);
+                const aMemIdx = at.indexOf(memHeader);
+                const aCurIdx = at.indexOf(curHeader);
+                if (aMemIdx >= 0 && aCurIdx > aMemIdx) {
+                    const block = at.slice(aMemIdx + memHeader.length, aCurIdx);
+                    memHits = block.split('\n')
+                        .map(l => l.trim())
+                        .filter(l => l.startsWith('- '))
+                        .map((l, i) => ({
+                            fact_id: 'hist_' + i,
+                            content: l.slice(2).trim(),
+                            score: null,
+                            reason: 'session_history',
+                        }));
+                }
+            }
             out.push({
                 id: 'hist_top_task',
                 role: 'user',
@@ -559,7 +575,18 @@
                 type: state_data.execution_mode || 'agent',
                 meta: memHits.length > 0 ? { memoryHits: memHits } : null,
             });
-            if (state_data.status === 'completed') {
+            // 持久化的 answer 优先; 没有才退回到 placeholder
+            const finalAnswer = state_data.answer || '';
+            if (finalAnswer) {
+                out.push({
+                    id: 'hist_top_answer',
+                    role: 'assistant',
+                    content: String(finalAnswer),
+                    type: state_data.execution_mode || 'agent',
+                });
+            } else if (state_data.status === 'completed') {
+                const preview = String(topTask).length > 60
+                    ? String(topTask).slice(0, 60) + '…' : String(topTask);
                 out.push({
                     id: 'hist_top_done',
                     role: 'assistant',

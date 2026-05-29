@@ -337,11 +337,17 @@ class SimpleAgent(
             )
 
             if self.state_store is not None:
+                # Task QQQQ: 持久化 final answer 到 state, 让"切历史会话"能拿到完整回答
+                # (之前只存 task + status, 历史展示只能给概要占位)
                 self._save_state_safe(
                     session_id=session_id,
                     state={
-                        "status": "completed", "task": task,
-                        "execution_mode": execution_mode, "updated_at": time.time(),
+                        "status": "completed",
+                        "task": original_task,  # 存原 task, 不带长期记忆 prefix
+                        "augmented_task": task if task != original_task else None,
+                        "answer": aggregated.get("answer", "") if isinstance(aggregated, dict) else "",
+                        "execution_mode": execution_mode,
+                        "updated_at": time.time(),
                     },
                     trace_id=trace_id,
                 )
