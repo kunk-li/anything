@@ -187,6 +187,67 @@ const ApiClient = (() => {
         if (opts.sessionId !== undefined) settings.sessionId = opts.sessionId;
     }
 
+    // ============== Task GGG (#93) — Long-term Memory APIs ==============
+
+    /**
+     * GET /memory/list — 列 facts (?tenant_id, ?tags, ?limit, ?offset)
+     */
+    async function listMemory(opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        if (opts.tags) params.set('tags', Array.isArray(opts.tags) ? opts.tags.join(',') : opts.tags);
+        if (opts.limit != null) params.set('limit', opts.limit);
+        if (opts.offset != null) params.set('offset', opts.offset);
+        const qs = params.toString();
+        return _doFetch('GET', `/memory/list${qs ? '?' + qs : ''}`);
+    }
+
+    /**
+     * GET /memory/{fact_id} — 单条 fact 详情
+     */
+    async function getMemoryFact(factId, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('GET', `/memory/${encodeURIComponent(factId)}${qs ? '?' + qs : ''}`);
+    }
+
+    /**
+     * DELETE /memory/{fact_id} — 硬删 fact
+     */
+    async function deleteMemoryFact(factId, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('DELETE', `/memory/${encodeURIComponent(factId)}${qs ? '?' + qs : ''}`);
+    }
+
+    /**
+     * POST /memory/{fact_id}/pin — pin/unpin fact
+     */
+    async function pinMemoryFact(factId, pinned, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch(
+            'POST', `/memory/${encodeURIComponent(factId)}/pin${qs ? '?' + qs : ''}`,
+            { pinned: !!pinned },
+        );
+    }
+
+    /**
+     * POST /memory/search — Agent 视角的 search_facts (debug)
+     */
+    async function searchMemory(query, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch(
+            'POST', `/memory/search${qs ? '?' + qs : ''}`,
+            { query, top_k: opts.top_k || 5, tags_filter: opts.tags_filter || null },
+        );
+    }
+
     function getSettings() { return { ...settings }; }
 
     /**
@@ -296,6 +357,12 @@ const ApiClient = (() => {
         openStream,
         configure,
         getSettings,
+        // Task GGG (#93) — Long-term Memory
+        listMemory,
+        getMemoryFact,
+        deleteMemoryFact,
+        pinMemoryFact,
+        searchMemory,
     };
 })();
 

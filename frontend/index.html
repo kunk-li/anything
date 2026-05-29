@@ -71,6 +71,13 @@
                             <input type="checkbox" id="plan-toggle" />
                             <span data-i18n="composer.plan">计划</span>
                         </label>
+                        <!-- Task III (#95): Reflection 反思环 toggle (Reflexion / o1 风格) -->
+                        <label class="stream-toggle"
+                               data-i18n-attr="title:composer.reflect.title"
+                               title="Reflection: 答案后 critique → revise 二阶段优化">
+                            <input type="checkbox" id="reflect-toggle" />
+                            <span data-i18n="composer.reflect">反思</span>
+                        </label>
                         <label class="topk-input">
                             <span data-i18n="composer.topk">top_k</span>
                             <input type="number" id="topk-input" min="1" max="50" value="5" />
@@ -110,6 +117,10 @@
                 <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false" data-i18n="sidebar.metrics">系统指标</button>
                 <button class="side-tab" data-tab="upload" role="tab" aria-selected="false" data-i18n="sidebar.upload">文档</button>
                 <button class="side-tab" data-tab="admin" role="tab" aria-selected="false" data-i18n="sidebar.admin">管理</button>
+                <!-- Task KKK (#97): 长期记忆面板 — list / search / pin / delete facts -->
+                <button class="side-tab" data-tab="memory" role="tab" aria-selected="false">
+                    <span data-i18n="sidebar.memory">记忆</span><span class="badge" id="memory-count">0</span>
+                </button>
             </nav>
             <div class="side-panels">
                 <!-- 检索结果 -->
@@ -171,6 +182,30 @@
                     <div class="admin-grid" id="admin-grid">
                         <div class="empty-state" data-i18n="admin.empty">点击刷新查看运行期状态</div>
                     </div>
+                </div>
+
+                <!-- Task KKK (#97): 长期记忆面板 -->
+                <div class="side-panel" data-panel="memory">
+                    <div class="metrics-controls">
+                        <button id="memory-refresh-btn" class="small-btn" data-i18n="memory.refresh">刷新</button>
+                        <input type="text" id="memory-search-input"
+                               placeholder="搜索 facts..."
+                               data-i18n-attr="placeholder:memory.search.placeholder" />
+                        <button id="memory-search-btn" class="small-btn" data-i18n="memory.search">搜索</button>
+                    </div>
+                    <div class="metrics-controls">
+                        <select id="memory-tag-filter">
+                            <option value="">全部 tag</option>
+                            <option value="preference">preference</option>
+                            <option value="fact">fact</option>
+                            <option value="decision">decision</option>
+                            <option value="context">context</option>
+                        </select>
+                        <span class="hint" id="memory-count-hint" data-i18n="memory.hint">长期记忆 fact 库</span>
+                    </div>
+                    <ul class="memory-list" id="memory-list">
+                        <li class="empty-state" data-i18n="memory.empty">点击刷新查看 facts</li>
+                    </ul>
                 </div>
             </div>
         </aside>
@@ -372,6 +407,8 @@
     <script src="/static/modules/upload-manager.js"></script>
     <script src="/static/modules/admin-panel.js"></script>
     <script src="/static/modules/models-admin.js"></script>
+    <!-- Task KKK (#97): 长期记忆面板 -->
+    <script src="/static/modules/memory-panel.js"></script>
 
     <script src="/static/app.js"></script>
 </body>

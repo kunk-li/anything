@@ -73,6 +73,7 @@
         exportJsonBtn: $('export-json-btn'),
         streamToggle: $('stream-toggle'),
         planToggle: $('plan-toggle'),               // Task X (#58): Plan mode
+        reflectToggle: $('reflect-toggle'),         // Task III/KKK: Reflection 反思环
         composerInputRow: $('composer-input-row'),
         composerAttachments: $('composer-attachments'),
         imageBtn: $('image-btn'),
@@ -89,6 +90,14 @@
         mfDefault: $('mf-default'),
         mfSubmit: $('mf-submit'),
         mfCancel: $('mf-cancel'),
+        // Task KKK (#97): 长期记忆面板
+        memoryList: $('memory-list'),
+        memoryCount: $('memory-count'),
+        memoryCountHint: $('memory-count-hint'),
+        memoryRefreshBtn: $('memory-refresh-btn'),
+        memorySearchInput: $('memory-search-input'),
+        memorySearchBtn: $('memory-search-btn'),
+        memoryTagFilter: $('memory-tag-filter'),
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -131,6 +140,13 @@
         bindEvents();
         pollHealth();
         setInterval(pollHealth, 30000);
+
+        // Task KKK (#97): 长期记忆面板 — 工厂注入 deps + bindEvents
+        if (window.AnythingApp && window.AnythingApp.memoryPanel) {
+            const memPanel = window.AnythingApp.memoryPanel({ els, t, toast, escapeHtml });
+            window.AnythingApp._memoryPanel = memPanel;
+            memPanel.bindEvents();
+        }
     }
 
     function updateLangButton() {
@@ -219,6 +235,10 @@
                     p.classList.toggle('active', p.dataset.panel === tab);
                 });
                 if (tab === 'metrics') loadMetrics();
+                // Task KKK (#97): 切到 memory tab 自动刷新
+                if (tab === 'memory' && window.AnythingApp && window.AnythingApp._memoryPanel) {
+                    window.AnythingApp._memoryPanel.refreshMemory();
+                }
             });
         });
 
@@ -731,6 +751,14 @@
             body.extra_params.plan_only = true;
         }
 
+        // Task KKK (#97) / III (#95): Reflection 开关注入 extra_params.enable_reflection
+        // Agent 拿到答案后会跑 critique → revise 二阶段优化
+        const reflectMode = !!(els.reflectToggle && els.reflectToggle.checked);
+        if (reflectMode) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.enable_reflection = true;
+        }
+
         // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
         let finalText = text;
         if (hasAttachments) {
@@ -854,6 +882,9 @@
                     costTime: costTime || (payload?.cost_time != null ? payload.cost_time.toFixed(3) : ''),
                     tenant,
                     mode,
+                    // Task KKK (#97): 把 details.memory_hits / details.reflection 透到 UI
+                    memoryHits: payload?.details?.memory_hits || null,
+                    reflection: payload?.details?.reflection || null,
                 },
                 data: payload?.data,
                 error: payload?.code && payload.code !== 'SUCCESS' ? payload : null,
@@ -1145,6 +1176,29 @@
                 c.className = 'chip';
                 c.textContent = msg.meta.costTime + 's';
                 meta.appendChild(c);
+            }
+            // Task KKK (#97): 长期记忆命中徽章 (FFF #92 注入的 details.memory_hits)
+            if (msg.meta.memoryHits && msg.meta.memoryHits.length > 0) {
+                const m = document.createElement('span');
+                m.className = 'chip memory-chip';
+                m.style.cssText = 'color:var(--accent);border-color:var(--accent);';
+                m.textContent = '📚 ' + msg.meta.memoryHits.length;
+                m.title = msg.meta.memoryHits
+                    .map(h => `[${(h.reason || '').padEnd(20)}] ${h.content || ''}`)
+                    .join('\n');
+                meta.appendChild(m);
+            }
+            // Task KKK (#97): Reflection 反思徽章 (III #95 注入的 details.reflection)
+            if (msg.meta.reflection) {
+                const r = document.createElement('span');
+                r.className = 'chip reflect-chip';
+                r.style.cssText = 'color:#22c55e;border-color:#22c55e;';
+                const refl = msg.meta.reflection;
+                const qStr = refl.overall_quality != null
+                    ? ` (q=${refl.overall_quality}→改进)` : '';
+                r.textContent = '✨ 反思已应用' + qStr;
+                r.title = JSON.stringify(refl.critique || refl, null, 2);
+                meta.appendChild(r);
             }
             if (msg.meta.traceId) {
                 const tr = document.createElement('span');

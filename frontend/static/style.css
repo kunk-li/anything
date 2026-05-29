@@ -1703,3 +1703,91 @@ body.has-drag .chat-pane::before {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--border-strong);
 }
+
+/* ============== Task KKK (#97): 长期记忆面板 ============== */
+.memory-list {
+    list-style: none;
+    margin: 8px 0 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.memory-item {
+    background: var(--bg-soft, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color .15s ease;
+}
+
+.memory-item:hover {
+    border-color: var(--border-strong);
+}
+
+.memory-item.pinned {
+    border-color: var(--accent);
+    border-left-width: 3px;
+}
+
+.memory-content {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text);
+    word-break: break-word;
+}
+
+.memory-meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.memory-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--accent-soft, rgba(99, 102, 241, 0.15));
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 10px;
+}
+
+.memory-stat { font-family: var(--mono); font-size: 11px; }
+.memory-time { margin-left: auto; font-size: 10px; opacity: .7; }
+
+.memory-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+#memory-search-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+}
+
+#memory-tag-filter {
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+}
+
+/* response 里的 memory_hits / reflection chip 用 message-meta 已有样式
+   特殊颜色由 inline style 控制, 这里不重复. */

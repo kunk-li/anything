@@ -20,6 +20,7 @@ from .builtin_tools import (
     currency_convert,
     python_sandbox,
     make_spawn_subagent_tool,  # Task EE (#65)
+    web_search,                # Task HHH (#94)
     TOOL_DESCRIPTIONS,
 )
 
@@ -40,5 +41,6 @@ __all__ = [
     "currency_convert",
     "python_sandbox",
     "make_spawn_subagent_tool",
+    "web_search",
     "TOOL_DESCRIPTIONS",
 ]

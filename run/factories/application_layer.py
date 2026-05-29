@@ -75,6 +75,8 @@ def build_application_layer(
         # Task S: 透传 rag + vector_db 让 /admin/status 能拿到运行期状态
         rag_for_admin = business_layer.get("rag") if business_layer else None
         vec_db_for_admin = data_layer.get("vector_db") if data_layer else None
+        # Task KKK (#97): 透传长期记忆给 /memory/* 5 路由
+        long_term_memory = business_layer.get("long_term_memory") if business_layer else None
 
         result["api_service"] = ApiService(
             handler=handler,
@@ -84,6 +86,7 @@ def build_application_layer(
             index_runner=index_runner,
             rag_runner=rag_for_admin,
             vector_db=vec_db_for_admin,
+            long_term_memory=long_term_memory,
         )
 
     if build_console:

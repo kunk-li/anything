@@ -190,6 +190,34 @@ def build_business_layer(
             description=TOOL_DESCRIPTIONS["image_describe"],
         )
 
+    # Task KKK (#97) / FFF (#92): 长期记忆 — 默认走 InMemoryBackend (单进程),
+    # 可通过 env ANYTHING_MEMORY_BACKEND=sqlite + ANYTHING_MEMORY_PATH=state/memory.db
+    # 切到 SqliteBackend 让多 worker 共享 fact 库, 重启不丢.
+    long_term_memory = None
+    try:
+        from long_term_memory_module import LongTermMemoryImpl
+        from state_backend_module import InMemoryBackend, SqliteBackend
+        import os as _os
+        backend_kind = (_os.environ.get("ANYTHING_MEMORY_BACKEND") or "memory").lower()
+        if backend_kind == "sqlite":
+            mem_path = _os.environ.get("ANYTHING_MEMORY_PATH") or "state/memory.db"
+            _os.makedirs(_os.path.dirname(mem_path) or ".", exist_ok=True)
+            mem_backend = SqliteBackend(path=mem_path)
+        else:
+            mem_backend = InMemoryBackend()
+        long_term_memory = LongTermMemoryImpl(
+            backend=mem_backend,
+            embedder=data_layer.get("embedding"),     # EEE: 语义查重 + cosine 搜索
+            llm_client=llm_client,                    # EEE: extract_facts + summarize
+        )
+        deps.logger.info(
+            f"[memory] long_term_memory 已启用 (backend={backend_kind}, "
+            f"embedder={'on' if data_layer.get('embedding') else 'off'}, "
+            f"llm={'on' if llm_client else 'off'})"
+        )
+    except Exception as _mem_err:
+        deps.logger.warning(f"[memory] long_term_memory 启用失败 (忽略): {_mem_err}")
+
     agent = SimpleAgent(
         state_store=data_layer.get("state_store"),
         tool_registry=tool_registry,
@@ -197,6 +225,7 @@ def build_business_layer(
         max_retries=2,
         session_prefix="session",
         deps=deps,
+        long_term_memory=long_term_memory,   # Task FFF (#92): 注入到 Agent
     )
 
     # Task EE (#65): spawn_subagent — 需要拿到 parent agent 引用, 所以在 new
@@ -226,4 +255,6 @@ def build_business_layer(
         # Task #49: 暴露给 index_build 阶段往里 add_chunks + save
         "bm25_retriever": bm25_retriever,
         "bm25_index_path": bm25_index_path,
+        # Task KKK (#97): 透传给 application_layer 让 ApiService /memory/* 路由可用
+        "long_term_memory": long_term_memory,
     }

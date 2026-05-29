@@ -29,6 +29,7 @@ from .tools_impl import (
     currency_convert,
     python_sandbox,
     make_spawn_subagent_tool,
+    web_search,                   # Task HHH (#94)
     TOOL_DESCRIPTIONS,
 )
 
@@ -49,5 +50,6 @@ __all__ = [
     "currency_convert",
     "python_sandbox",
     "make_spawn_subagent_tool",
+    "web_search",                  # Task HHH (#94)
     "TOOL_DESCRIPTIONS",
 ]
