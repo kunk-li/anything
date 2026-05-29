@@ -33,6 +33,7 @@ from .routers import (
     IndexRoutesMixin,
     AdminRoutesMixin,
     ConfigRoutesMixin,
+    MemoryRoutesMixin,
     FrontendRoutesMixin,
 )
 
@@ -43,12 +44,14 @@ class ApiService(
     IndexRoutesMixin,
     AdminRoutesMixin,
     ConfigRoutesMixin,
+    MemoryRoutesMixin,
     FrontendRoutesMixin,
 ):
     """标准 API 服务实现: 只负责 HTTP 协议层, 不承载业务语义校验.
 
     Task LL (#72): 21 个路由按域拆到 routers/ 下 6 个 mixin (Invoke/Documents/
         Index/Admin/Config/Frontend). 公共 API 不变, 测试 0 改动.
+    Task GGG (#93): 加 MemoryRoutesMixin /memory/* 5 个路由.
     """
 
     def __init__(
@@ -60,6 +63,7 @@ class ApiService(
         index_runner=None,
         rag_runner=None,           # Task S: 读 hybrid 开关 / bm25_retriever 状态
         vector_db=None,            # Task S: 读 ntotal
+        long_term_memory=None,     # Task GGG (#93): /memory/* 路由用
     ):
         """
         Args:
@@ -81,6 +85,8 @@ class ApiService(
         # Task S: 给 /admin/status 用 — 透出 hybrid 开关 / BM25 size / vector_db ntotal
         self.rag_runner = rag_runner
         self.vector_db = vector_db
+        # Task GGG (#93): /memory/* 路由用. None 时所有 memory 路由返 SERVICE_UNAVAILABLE.
+        self.long_term_memory = long_term_memory
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils
@@ -396,6 +402,7 @@ class ApiService(
         self._register_index_routes()
         self._register_admin_routes()
         self._register_config_routes()
+        self._register_memory_routes()  # Task GGG (#93): /memory/* 5 路由
         # Task VV (#82): 在前端路由之前, 把所有现有 API 路由复制一份到 /v1/<path>
         # 让客户端可逐步迁到带版本的 URL; 老 path 保留无限期 (打 deprecated 头).
         self._register_v1_aliases()
