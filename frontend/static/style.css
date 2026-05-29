@@ -159,6 +159,25 @@ body {
     border-radius: 10px;
     font-variant-numeric: tabular-nums;
 }
+/* Task YYYY-H (#114): session 搜索框 */
+.sessions-search {
+    padding: 6px 12px 8px;
+    border-bottom: 1px solid var(--border);
+}
+.sessions-search input {
+    width: 100%;
+    padding: 5px 10px;
+    background: var(--bg, #1a1a1a);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+    box-sizing: border-box;
+}
+.sessions-search input:focus {
+    outline: none;
+    border-color: var(--primary, #4f8cff);
+}
 .session-list {
     flex: 1;
     overflow-y: auto;
@@ -1270,6 +1289,32 @@ body.has-drag .chat-pane::before {
     font-family: var(--mono);
     font-size: 10px;
     word-break: break-word;
+}
+
+/* ============== Task YYYY-J (#115): 文档 tab 视觉分区 ============== */
+.docs-section {
+    padding: 8px 4px 12px;
+}
+.docs-section + .docs-section.docs-list-section {
+    border-top: 2px solid var(--border);
+    margin-top: 8px;
+    padding-top: 12px;
+}
+.docs-section-title {
+    margin: 0 0 8px 0;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.docs-section-title .hint {
+    font-weight: 400;
+    font-size: 10px;
+    color: var(--text-faint);
 }
 
 /* ============== Task S: Admin 面板 ============== */

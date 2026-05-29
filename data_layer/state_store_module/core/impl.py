@@ -263,6 +263,7 @@ class LocalStateStore(BaseStateStore):
             entries.sort(key=lambda x: x[0], reverse=True)
             for mtime, size, sid, p in entries[:limit]:
                 has_history = False
+                title = None  # Task YYYY-E (#116): 从首条 user msg 提取
                 # 尝试 peek state 看 history 是否非空 (不读完整文件浪费 IO 还是要读)
                 try:
                     import json as _json
@@ -271,6 +272,34 @@ class LocalStateStore(BaseStateStore):
                     if isinstance(st, dict):
                         events = st.get("events") or st.get("history") or []
                         has_history = bool(events)
+                        # YYYY-E: 优先级:
+                        #   1. state.title (显式存的)
+                        #   2. state.task (React agent 顶层 task 字段)
+                        #   3. events 里 react_started.payload.task
+                        #   4. events 里 role=user 的 content
+                        title = st.get("title") or st.get("task")
+                        if not title and events:
+                            for ev in events:
+                                if not isinstance(ev, dict):
+                                    continue
+                                # React agent: event_type=react_started, payload.task
+                                if ev.get("event_type") == "react_started":
+                                    pl = ev.get("payload") or {}
+                                    cand = pl.get("task")
+                                    if cand:
+                                        title = str(cand)
+                                        break
+                                # RAG 对话: role=user, content
+                                if ev.get("role") == "user":
+                                    cand = (ev.get("content")
+                                            or ev.get("query")
+                                            or ev.get("user_input")
+                                            or "")
+                                    if cand:
+                                        title = str(cand)
+                                        break
+                        if title:
+                            title = str(title).strip().replace("\n", " ")[:30]
                 except Exception:
                     pass
                 out.append({
@@ -278,6 +307,7 @@ class LocalStateStore(BaseStateStore):
                     "last_modified": mtime,
                     "size_bytes": size,
                     "has_history": has_history,
+                    "title": title,
                 })
         except Exception as e:
             self.logger.warning(

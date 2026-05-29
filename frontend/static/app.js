@@ -128,6 +128,7 @@
         sessionsCount: $('sessions-count'),          // VVVV: 数量徽章
         sessionsSidebar: $('sessions-sidebar'),      // VVVV: 整个 aside
         sessionsSidebarToggle: $('sessions-sidebar-toggle'),  // VVVV: 移动端开关
+        sessionsSearchInput: $('sessions-search-input'),  // YYYY-H: 搜索框
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -213,17 +214,24 @@
                 els.sessionsSidebar.classList.toggle('open');
             });
         }
+        // Task YYYY-H (#114): 搜索框 — 本地 filter, 不发请求
+        if (els.sessionsSearchInput) {
+            els.sessionsSearchInput.addEventListener('input', _filterAndRenderSessions);
+        }
         // VVVV: 启动就拉一次 — 用户看到 sidebar 已经有内容, 不用点
         setTimeout(refreshSessions, 200);
     }
 
-    // ---------- Task SSS (#105) + VVVV (#108): 多会话管理 (ChatGPT 风格左栏) ----------
+    // ---------- Task SSS (#105) + VVVV (#108) + YYYY-H (#114): 多会话管理 (含搜索过滤) ----------
+    // 缓存当前 session 列表 (供 search filter 用, 不发请求)
+    let _sessionsCache = [];
+
     function _renderSessionList(sessions) {
         if (!els.sessionList) return;
         const current = state.settings.sessionId;
         if (els.sessionsCount) els.sessionsCount.textContent = String(sessions.length);
         if (!sessions.length) {
-            els.sessionList.innerHTML = '<li class="empty-state">无会话, 点 + 新建</li>';
+            els.sessionList.innerHTML = '<li class="empty-state">无匹配会话</li>';
             return;
         }
         const items = [];
@@ -234,15 +242,31 @@
                 : '';
             const flag = s.has_history ? '💬' : '○';
             const active = sid === current ? ' active' : '';
+            // YYYY-E (#116): 优先用 title 字段, fallback id
+            const displayName = s.title || sid;
             items.push(`<li class="session-item${active}" data-sid="${escapeHtml(sid)}" title="${escapeHtml(sid)}">
                 <div class="session-item-main">
-                    <span class="session-item-name">${flag} ${escapeHtml(sid)}</span>
+                    <span class="session-item-name">${flag} ${escapeHtml(displayName)}</span>
                     <span class="session-item-meta">${escapeHtml(when)}</span>
                 </div>
                 <button class="session-item-delete" data-sid="${escapeHtml(sid)}" title="删除会话" aria-label="删除">✕</button>
             </li>`);
         }
         els.sessionList.innerHTML = items.join('');
+    }
+
+    // YYYY-H: 按搜索词过滤 + 重渲
+    function _filterAndRenderSessions() {
+        const q = (els.sessionsSearchInput?.value || '').trim().toLowerCase();
+        if (!q) {
+            _renderSessionList(_sessionsCache);
+            return;
+        }
+        const filtered = _sessionsCache.filter(s => {
+            const hay = `${s.session_id} ${s.title || ''}`.toLowerCase();
+            return hay.includes(q);
+        });
+        _renderSessionList(filtered);
     }
 
     async function refreshSessions() {
@@ -252,17 +276,20 @@
             if (status === 501) {
                 els.sessionList.innerHTML = '<li class="empty-state">(state_store 未注入)</li>';
                 if (els.sessionsCount) els.sessionsCount.textContent = '0';
+                _sessionsCache = [];
                 return;
             }
             if (status !== 200 || payload?.code !== 'SUCCESS') {
                 els.sessionList.innerHTML = `<li class="empty-state error">× ${payload?.code || status}</li>`;
                 if (els.sessionsCount) els.sessionsCount.textContent = '?';
+                _sessionsCache = [];
                 return;
             }
-            const sessions = (payload.data || {}).sessions || [];
-            _renderSessionList(sessions);
+            _sessionsCache = (payload.data || {}).sessions || [];
+            _filterAndRenderSessions();
         } catch (e) {
             els.sessionList.innerHTML = `<li class="empty-state error">× ${escapeHtml(e.message)}</li>`;
+            _sessionsCache = [];
         }
     }
 
@@ -862,17 +889,21 @@
         els.inputText.placeholder = t(key);
     }
 
-    // Task WWWW-C (#111): 根据 mode 显隐 composer 里 mode-specific 控件.
-    //   - 计划 / 反思 (plan / reflect toggle): 只在 Agent / Hybrid 有意义, RAG 隐.
-    //   - 顺带把这套机制留给未来 G (top_k 也该在 Agent 隐, 暂不动).
+    // Task WWWW-C (#111) + YYYY-G (#113): 根据 mode 显隐 composer 控件.
+    //   - 计划 / 反思 toggle: 只在 Agent / Hybrid (任何 agent 工作流) 有效, RAG 隐
+    //   - top_k input: RAG 检索参数, Agent 不用, Agent 模式隐
     function _applyModeAwareComposer() {
         const mode = state.mode || 'rag';
         const isAgent = (mode === 'agent' || mode === 'hybrid');
+        const isRag = (mode === 'rag' || mode === 'hybrid');  // Hybrid 也用 RAG → top_k 还需要
         const planLabel = document.getElementById('plan-toggle')?.closest('label');
         const reflectLabel = document.getElementById('reflect-toggle')?.closest('label');
+        const topkLabel = document.getElementById('topk-input')?.closest('label');
         if (planLabel) planLabel.style.display = isAgent ? '' : 'none';
         if (reflectLabel) reflectLabel.style.display = isAgent ? '' : 'none';
-        // 副作用: 隐起来时把 toggle 取消勾, 避免下一次切到 Agent 残留旧 state
+        // YYYY-G: top_k 只在 RAG / Hybrid 显 (Hybrid 也用 RAG retrieve 走 top_k)
+        if (topkLabel) topkLabel.style.display = isRag ? '' : 'none';
+        // 副作用: 隐时取消勾, 避免切回时旧 state 残留
         if (!isAgent) {
             const plan = document.getElementById('plan-toggle');
             const reflect = document.getElementById('reflect-toggle');

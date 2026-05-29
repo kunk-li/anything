@@ -58,6 +58,12 @@
                         data-i18n="sessions.refresh" title="刷新列表">🔁 刷新</button>
                 <span class="sessions-count" id="sessions-count">0</span>
             </div>
+            <!-- Task YYYY-H (#114): 搜索框 — 本地过滤, 不发请求 -->
+            <div class="sessions-search">
+                <input type="text" id="sessions-search-input"
+                       placeholder="🔍 搜索会话…"
+                       aria-label="搜索会话" />
+            </div>
             <ul class="session-list" id="session-list" aria-label="会话列表">
                 <li class="empty-state" data-i18n="sessions.empty">无会话</li>
             </ul>
@@ -173,29 +179,31 @@
                 <!-- Task WWWW-A (#109): metrics panel 移入 admin 卡, 但 #metrics-refresh / #metrics-text
                      仍需存在以兼容 app.js 的 loadMetrics() — 通过 admin-panel.js 渲染时直接复用 ID. -->
 
-                <!-- 文档上传 (Task P: 多文件批量队列) -->
+                <!-- 文档上传 (Task P: 多文件批量队列) | Task YYYY-J (#115): 视觉分区 -->
                 <div class="side-panel" data-panel="upload">
-                    <div class="upload-area" id="upload-area">
-                        <input type="file" id="file-input" multiple hidden />
-                        <label for="file-input" class="upload-label">
-                            <span class="upload-icon">📂</span>
-                            <span data-i18n="sidebar.upload.label">点击或拖拽多文件到此上传</span>
-                            <span class="upload-hint" data-i18n="sidebar.upload.hint">支持 md / txt / pdf / docx, 支持多选</span>
-                        </label>
-                    </div>
-                    <!-- Task P: 多文件队列 + 每文件状态 -->
-                    <ul class="upload-queue" id="upload-queue"></ul>
-                    <div class="upload-result" id="upload-result"></div>
-                    <button id="build-index-btn" class="small-btn block" data-i18n="sidebar.upload.build">触发索引构建</button>
-                    <div class="job-result" id="job-result"></div>
+                    <!-- 上传区 (顶部 section) -->
+                    <section class="docs-section">
+                        <h5 class="docs-section-title">📤 上传新文档</h5>
+                        <div class="upload-area" id="upload-area">
+                            <input type="file" id="file-input" multiple hidden />
+                            <label for="file-input" class="upload-label">
+                                <span class="upload-icon">📂</span>
+                                <span data-i18n="sidebar.upload.label">点击或拖拽多文件到此上传</span>
+                                <span class="upload-hint" data-i18n="sidebar.upload.hint">支持 md / txt / pdf / docx, 支持多选</span>
+                            </label>
+                        </div>
+                        <ul class="upload-queue" id="upload-queue"></ul>
+                        <div class="upload-result" id="upload-result"></div>
+                        <button id="build-index-btn" class="small-btn block" data-i18n="sidebar.upload.build">触发索引构建</button>
+                        <div class="job-result" id="job-result"></div>
+                    </section>
 
-                    <!-- Task JJ (#70): 已索引文档列表 -->
-                    <hr class="form-divider" />
-                    <div class="metrics-controls">
-                        <button id="docs-refresh-btn" class="small-btn" data-i18n="docs.refresh">已索引文档</button>
-                        <span class="hint" id="docs-count-hint" data-i18n="docs.hint">从 /documents 拉取</span>
-                    </div>
-                    <ul class="docs-list" id="docs-list"></ul>
+                    <!-- 已索引文档区 (底部 section, 视觉分割) -->
+                    <section class="docs-section docs-list-section">
+                        <h5 class="docs-section-title">📚 已索引文档 <span class="hint" id="docs-count-hint" data-i18n="docs.hint">从 /documents 拉取</span></h5>
+                        <button id="docs-refresh-btn" class="small-btn ghost" data-i18n="docs.refresh">🔁 刷新列表</button>
+                        <ul class="docs-list" id="docs-list"></ul>
+                    </section>
                 </div>
 
                 <!-- Task S: Admin / 运行期状态  (Task WWWW-B #110: 拆 4 sub-tab) -->
