@@ -138,7 +138,7 @@
                 <button class="side-tab" data-tab="steps" role="tab" aria-selected="false">
                     <span data-i18n="sidebar.steps">工具调用</span><span class="badge" id="steps-count">0</span>
                 </button>
-                <button class="side-tab" data-tab="metrics" role="tab" aria-selected="false" data-i18n="sidebar.metrics">系统指标</button>
+                <!-- Task WWWW-A (#109): 系统指标 tab 删除, 已并入 "管理"->"监控" sub-tab -->
                 <button class="side-tab" data-tab="upload" role="tab" aria-selected="false" data-i18n="sidebar.upload">文档</button>
                 <button class="side-tab" data-tab="admin" role="tab" aria-selected="false" data-i18n="sidebar.admin">管理</button>
                 <!-- Task KKK (#97): 长期记忆面板 — list / search / pin / delete facts -->
@@ -163,14 +163,8 @@
                     <ol class="step-list" id="step-list"></ol>
                 </div>
 
-                <!-- 系统指标 -->
-                <div class="side-panel" data-panel="metrics">
-                    <div class="metrics-controls">
-                        <button id="metrics-refresh" class="small-btn" data-i18n="sidebar.metrics.refresh">刷新</button>
-                        <span class="hint" data-i18n="sidebar.metrics.hint">来自 /metrics (Prometheus 文本)</span>
-                    </div>
-                    <pre class="metrics-text" id="metrics-text" data-i18n="sidebar.metrics.placeholder">点击刷新查看实时指标</pre>
-                </div>
+                <!-- Task WWWW-A (#109): metrics panel 移入 admin 卡, 但 #metrics-refresh / #metrics-text
+                     仍需存在以兼容 app.js 的 loadMetrics() — 通过 admin-panel.js 渲染时直接复用 ID. -->
 
                 <!-- 文档上传 (Task P: 多文件批量队列) -->
                 <div class="side-panel" data-panel="upload">
@@ -197,13 +191,20 @@
                     <ul class="docs-list" id="docs-list"></ul>
                 </div>
 
-                <!-- Task S: Admin / 运行期状态 -->
+                <!-- Task S: Admin / 运行期状态  (Task WWWW-B #110: 拆 4 sub-tab) -->
                 <div class="side-panel" data-panel="admin">
                     <div class="metrics-controls">
                         <button id="admin-refresh" class="small-btn" data-i18n="admin.refresh">刷新</button>
                         <span class="hint" data-i18n="admin.hint">来自 /admin/status (只读)</span>
                     </div>
-                    <div class="admin-grid" id="admin-grid">
+                    <!-- WWWW-B: 4 sub-tab 按类别过滤管理卡片 -->
+                    <nav class="admin-subnav" role="tablist" aria-label="管理分类">
+                        <button class="admin-subtab active" data-cat="monitoring" role="tab" aria-selected="true">📊 监控</button>
+                        <button class="admin-subtab" data-cat="config" role="tab" aria-selected="false">⚙️ 配置</button>
+                        <button class="admin-subtab" data-cat="resource" role="tab" aria-selected="false">📦 资源</button>
+                        <button class="admin-subtab" data-cat="task" role="tab" aria-selected="false">⏰ 任务</button>
+                    </nav>
+                    <div class="admin-grid" id="admin-grid" data-active-cat="monitoring">
                         <div class="empty-state" data-i18n="admin.empty">点击刷新查看运行期状态</div>
                     </div>
                 </div>

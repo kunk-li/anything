@@ -408,9 +408,11 @@
                     b.setAttribute('aria-selected', b === btn);
                 });
                 updateComposerPlaceholder();
+                _applyModeAwareComposer();  // WWWW-C: 控制 plan/reflect 显隐
             });
         });
         updateComposerPlaceholder();
+        _applyModeAwareComposer();  // WWWW-C: 启动时也跑一次
 
         // 侧栏 tab 切换
         $$('.side-tab').forEach(btn => {
@@ -771,8 +773,10 @@
             els.exportJsonBtn.addEventListener('click', () => exportConversation('json'));
         }
 
-        // 指标刷新
-        els.metricsRefresh.addEventListener('click', loadMetrics);
+        // Task WWWW-A (#109): metrics-refresh 从右栏独立 tab 移到 admin 卡内,
+        // 元素在 admin-panel.js renderAdminStatus 时才创建. 这里 init 不能直接绑,
+        // 改在 admin-panel.js 里 render 后绑 (通过 window.__loadMetrics).
+        if (els.metricsRefresh) els.metricsRefresh.addEventListener('click', loadMetrics);
 
         // 上传 (Task P: 多文件 + 队列)
         els.fileInput.addEventListener('change', () => {
@@ -820,6 +824,25 @@
     function updateComposerPlaceholder() {
         const key = `composer.placeholder.${state.mode || 'rag'}`;
         els.inputText.placeholder = t(key);
+    }
+
+    // Task WWWW-C (#111): 根据 mode 显隐 composer 里 mode-specific 控件.
+    //   - 计划 / 反思 (plan / reflect toggle): 只在 Agent / Hybrid 有意义, RAG 隐.
+    //   - 顺带把这套机制留给未来 G (top_k 也该在 Agent 隐, 暂不动).
+    function _applyModeAwareComposer() {
+        const mode = state.mode || 'rag';
+        const isAgent = (mode === 'agent' || mode === 'hybrid');
+        const planLabel = document.getElementById('plan-toggle')?.closest('label');
+        const reflectLabel = document.getElementById('reflect-toggle')?.closest('label');
+        if (planLabel) planLabel.style.display = isAgent ? '' : 'none';
+        if (reflectLabel) reflectLabel.style.display = isAgent ? '' : 'none';
+        // 副作用: 隐起来时把 toggle 取消勾, 避免下一次切到 Agent 残留旧 state
+        if (!isAgent) {
+            const plan = document.getElementById('plan-toggle');
+            const reflect = document.getElementById('reflect-toggle');
+            if (plan && plan.checked) plan.checked = false;
+            if (reflect && reflect.checked) reflect.checked = false;
+        }
     }
 
     // ---------- 发送 ----------
@@ -1825,20 +1848,25 @@
         });
     }
 
-    // ---------- 侧栏:指标 ----------
+    // ---------- 侧栏:指标 (Task WWWW-A #109: 移到 admin 卡内, 但函数保留) ----------
     async function loadMetrics() {
-        els.metricsText.textContent = '加载中...';
+        // 重新拿 textarea — admin 卡渲染后 ID 仍然是 #metrics-text
+        const txtEl = document.getElementById('metrics-text');
+        if (!txtEl) return;
+        txtEl.textContent = '加载中...';
         try {
             const { payload, status } = await ApiClient.metrics();
             if (status === 200 && typeof payload === 'string') {
-                els.metricsText.textContent = payload || '(空)';
+                txtEl.textContent = payload || '(空)';
             } else {
-                els.metricsText.textContent = `加载失败 HTTP ${status}\n${payload}`;
+                txtEl.textContent = `加载失败 HTTP ${status}\n${payload}`;
             }
         } catch (e) {
-            els.metricsText.textContent = '加载失败: ' + e.message;
+            txtEl.textContent = '加载失败: ' + e.message;
         }
     }
+    // WWWW-A: 让 admin-panel.js 渲染后能找到 loadMetrics 绑给新生成的 button
+    window.__loadMetrics = loadMetrics;
 
     // ---------- Task GG (#67): Stop 中止 + 对话导出 ----------
     function stopSending() {

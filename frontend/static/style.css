@@ -1234,11 +1234,49 @@ body.has-drag .chat-pane::before {
 }
 
 /* ============== Task S: Admin 面板 ============== */
+/* Task WWWW-B (#110): sub-tab 分类导航 */
+.admin-subnav {
+    display: flex;
+    gap: 4px;
+    padding: 6px 0 8px 0;
+    border-bottom: 1px solid var(--border);
+    margin-top: 8px;
+    overflow-x: auto;
+}
+.admin-subtab {
+    flex: 1;
+    min-width: 60px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim, #888);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 100ms;
+}
+.admin-subtab:hover {
+    background: var(--bg-soft, rgba(127,127,127,0.12));
+    color: var(--text, #d4d4d4);
+}
+.admin-subtab.active {
+    background: var(--primary-soft, rgba(79, 140, 255, 0.18));
+    color: var(--primary, #4f8cff);
+    border-color: var(--primary, #4f8cff);
+    font-weight: 600;
+}
 .admin-grid {
     display: grid;
     grid-template-columns: 1fr;
     gap: 10px;
     margin-top: 10px;
+}
+/* WWWW-B: 按 active-cat 过滤显示卡片 */
+.admin-grid[data-active-cat="monitoring"] .admin-card:not([data-cat="monitoring"]),
+.admin-grid[data-active-cat="config"]     .admin-card:not([data-cat="config"]),
+.admin-grid[data-active-cat="resource"]   .admin-card:not([data-cat="resource"]),
+.admin-grid[data-active-cat="task"]       .admin-card:not([data-cat="task"]) {
+    display: none;
 }
 .admin-card {
     background: var(--bg-elev2);

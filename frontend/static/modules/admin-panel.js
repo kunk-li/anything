@@ -90,11 +90,16 @@
         }
 
         function renderAdminStatus(d) {
+            // Task WWWW-B (#110): 每张卡打 data-cat, 让 sub-tab 切类型时控制 display.
+            //   monitoring: Token 用量 / Model Health / Quota / Audit / 系统指标
+            //   config:     RAG 设置 / 安全 / Hooks / Skills
+            //   resource:   LLM 模型 / BM25 / 向量库 / 上传
+            //   task:       Scheduler
             const html = [];
             const onOff = (b) => b ? `<span class="badge-on">${t('on')}</span>` : `<span class="badge-off">${t('off')}</span>`;
 
             if (d.rag) {
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="config">
                     <h4>${t('admin.section.rag')}</h4>
                     <dl>
                         <dt>${t('admin.kv.hybrid')}</dt><dd>${onOff(d.rag.enable_hybrid_search)}</dd>
@@ -108,7 +113,7 @@
                 </div>`);
             }
             if (d.bm25) {
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="resource">
                     <h4>${t('admin.section.bm25')}</h4>
                     <dl>
                         <dt>${t('admin.kv.bm25_size')}</dt><dd><strong>${d.bm25.size}</strong></dd>
@@ -117,7 +122,7 @@
                 </div>`);
             }
             if (d.vector_db) {
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="resource">
                     <h4>${t('admin.section.vector')}</h4>
                     <dl>
                         <dt>${t('admin.kv.vec_ntotal')}</dt><dd><strong>${d.vector_db.ntotal}</strong></dd>
@@ -128,7 +133,7 @@
                 const byType = d.llm_models.by_type || {};
                 const breakdown = Object.entries(byType)
                     .map(([k, v]) => `${k}: ${v}`).join(', ') || '-';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="resource">
                     <h4>${t('admin.section.llm')}</h4>
                     <dl>
                         <dt>${t('admin.kv.llm_count')}</dt><dd><strong>${d.llm_models.count}</strong></dd>
@@ -137,7 +142,7 @@
                 </div>`);
             }
             if (d.uploads) {
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="resource">
                     <h4>${t('admin.section.uploads')}</h4>
                     <dl>
                         <dt>${t('admin.kv.upload_count')}</dt><dd><strong>${d.uploads.count}</strong></dd>
@@ -147,7 +152,7 @@
             }
             if (d.security) {
                 const tenants = (d.security.registered_tenants || []).join(', ') || '-';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="config">
                     <h4>${t('admin.section.security')}</h4>
                     <dl>
                         <dt>${t('admin.kv.auth_enabled')}</dt><dd>${onOff(d.security.auth_enabled)}</dd>
@@ -177,7 +182,7 @@
                     .map(([name, b]) => `<dt class="path">${escapeHtml(name)}</dt>
                         <dd>$${(b.cost_usd || 0).toFixed(4)} · ${b.calls || 0}×</dd>`)
                     .join('') || '<dd>-</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="monitoring">
                     <h4>📊 Token 用量 (Y/XX)</h4>
                     <dl>
                         <dt>total cost</dt><dd><strong>$${cost}</strong></dd>
@@ -211,7 +216,7 @@
                                 cd > 0 ? ` · 冷却 ${cd}s` : ''
                             }</dd>`;
                     }).join('') || '<dt>无</dt><dd>(暂无调用记录)</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="monitoring">
                     <h4>❤️ 模型健康 (HH/BBB)</h4>
                     <dl>
                         <dt>threshold</dt><dd>${d.health.fail_threshold} 连失</dd>
@@ -235,7 +240,7 @@
                     .map(([tenant, n]) => `<dt class="path">${escapeHtml(tenant)}</dt>
                         <dd>${n} / ${q.rate_per_minute || '∞'} /min</dd>`)
                     .join('') || '<dt>无</dt><dd>-</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="monitoring">
                     <h4>🚦 配额 / 限流 (BB/AAA)</h4>
                     <dl>
                         <dt>daily USD limit</dt><dd>${q.daily_usd_limit ? '$' + q.daily_usd_limit : '不限'}</dd>
@@ -264,7 +269,7 @@
                         : '<span style="color:var(--text-faint)">(无)</span>';
                     return `<dt class="path">${escapeHtml(event)} (${(fns || []).length})</dt><dd>${fnsHtml}</dd>`;
                 }).join('') || '<dt>无</dt><dd>-</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="config">
                     <h4>🪝 Hooks (Z)</h4>
                     <dl>
                         <dt>total hooks</dt><dd><strong>${totalHooks}</strong></dd>
@@ -285,7 +290,7 @@
                         <dd>${escapeHtml(s.description || '')}${(s.tags || []).map(tag => ` <span class="memory-tag">${escapeHtml(tag)}</span>`).join('')}</dd>
                     `).join('')
                     : '<dt>(空)</dt><dd>没有加载到 skill</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="config">
                     <h4>📜 Skills (AA)</h4>
                     <dl>
                         <dt>loaded from</dt><dd class="path">${escapeHtml(d.skills.loaded_from || '(未加载)')}</dd>
@@ -315,7 +320,7 @@
                         </dd>
                     `).join('')
                     : '<dt>(空)</dt><dd>无已注册任务</dd>';
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="task">
                     <h4>⏰ 调度任务 (II)</h4>
                     <dl>
                         <dt>total tasks</dt><dd><strong>${tasks.length}</strong></dd>
@@ -331,7 +336,7 @@
             if (d.audit) {
                 const sizeKB = ((d.audit.current_size_bytes || 0) / 1024).toFixed(1);
                 const maxKB = ((d.audit.max_bytes || 0) / 1024).toFixed(0);
-                html.push(`<div class="admin-card">
+                html.push(`<div class="admin-card" data-cat="monitoring">
                     <h4>📋 Audit log (CC)</h4>
                     <dl>
                         <dt>path</dt><dd class="path">${escapeHtml(d.audit.path || '-')}</dd>
@@ -342,7 +347,54 @@
                 </div>`);
             }
 
+            // Task WWWW-A (#109): Prometheus metrics 卡 (从右栏独立 tab 移过来)
+            // 复用原 #metrics-refresh / #metrics-text 元素 ID, app.js 的 loadMetrics() 仍能找到.
+            html.push(`<div class="admin-card" data-cat="monitoring">
+                <h4>📈 系统指标 (Prometheus)</h4>
+                <div class="metrics-controls">
+                    <button id="metrics-refresh" class="small-btn">刷新</button>
+                    <span class="hint">来自 /metrics</span>
+                </div>
+                <pre class="metrics-text" id="metrics-text" style="max-height:200px;overflow:auto;">点击刷新查看实时指标</pre>
+            </div>`);
+
             els.adminGrid.innerHTML = html.join('');
+
+            // Task WWWW-B (#110): 渲完后按 active sub-tab 过滤显示
+            const activeCat = els.adminGrid.dataset.activeCat || 'monitoring';
+            _applyAdminCategoryFilter(activeCat);
+
+            // metrics-refresh 是新渲的, app.js 里的 bindEvents 已经在 init 时绑过了
+            // (els.metricsRefresh 那时指向原 HTML 里的 button, 现在该 button 不存在了).
+            // 重新绑一次 — 用全局 loadMetrics 函数 (在 app.js 顶层定义).
+            const mRefresh = document.getElementById('metrics-refresh');
+            if (mRefresh && typeof window.__loadMetrics === 'function' && !mRefresh._bound) {
+                mRefresh._bound = true;
+                mRefresh.addEventListener('click', window.__loadMetrics);
+            }
+        }
+
+        // Task WWWW-B (#110): sub-tab 切换 = 给 admin-grid 加 data-active-cat,
+        // CSS 控制 [data-active-cat=X] .admin-card:not([data-cat=X]) { display:none }
+        function _applyAdminCategoryFilter(cat) {
+            if (!els.adminGrid) return;
+            els.adminGrid.dataset.activeCat = cat;
+            // 同步 sub-tab aria-selected / active class
+            document.querySelectorAll('.admin-subtab').forEach(b => {
+                const isActive = b.dataset.cat === cat;
+                b.classList.toggle('active', isActive);
+                b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+        }
+
+        // sub-tab click delegation (绑一次)
+        const subnav = document.querySelector('.admin-subnav');
+        if (subnav && !subnav._bound) {
+            subnav._bound = true;
+            subnav.addEventListener('click', (e) => {
+                const btn = e.target.closest('.admin-subtab');
+                if (btn && btn.dataset.cat) _applyAdminCategoryFilter(btn.dataset.cat);
+            });
         }
 
         // Task PPP (#102): event delegation 给调度任务的 trigger/cancel 按钮
