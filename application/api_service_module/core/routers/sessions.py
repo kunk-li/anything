@@ -78,9 +78,25 @@ class SessionsRoutesMixin:
 
         @self.app.post("/sessions")
         async def sessions_create(request: Request):
-            """创建新 session: 返回 uuid (state_store 第一次 save 时才落盘)."""
+            """创建新 session: 生成 uuid 并立刻在 state_store 写一个 stub state,
+            让 /sessions/list 立马能扫到 (否则 UI 创建后看不到)."""
+            import time as _time
             trace_id = request.state.trace_id
             new_id = "sess_" + uuid.uuid4().hex[:12]
+            # 落盘 stub state — 让 list_sessions 立马能扫到这条记录
+            if getattr(self, "state_store", None):
+                try:
+                    self.state_store.save_state(new_id, {
+                        "session_id": new_id,
+                        "status": "new",
+                        "created_at": _time.time(),
+                        "events": [],
+                        "history": [],
+                    })
+                except Exception as e:
+                    self.logger.warning(
+                        f"[sessions] POST 写 stub state 失败 (仍返 id, 上游可重试): {e}"
+                    )
             return JSONResponse({
                 "code": "SUCCESS", "message": "ok",
                 "data": {"session_id": new_id},

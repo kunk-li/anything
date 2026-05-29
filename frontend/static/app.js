@@ -224,7 +224,24 @@
                     state.settings.sessionId = newId;
                     if (els.sessionInput) els.sessionInput.value = newId;
                     saveSettings();  // 顺手存 localStorage
-                    refreshSessions();
+                    // 等 listing IO 同步, 再 refresh; 即使 backend 漏写 stub state,
+                    // 也把新 id 兜底塞到 select 里让用户看见
+                    await refreshSessions();
+                    if (els.sessionsSelect) {
+                        const has = Array.from(els.sessionsSelect.options).some(o => o.value === newId);
+                        if (!has) {
+                            const opt = document.createElement('option');
+                            opt.value = newId;
+                            opt.textContent = `💬 ${newId} · (新建, 待落盘)`;
+                            opt.selected = true;
+                            // 插到 placeholder option 之后
+                            const firstReal = els.sessionsSelect.firstElementChild
+                                && els.sessionsSelect.firstElementChild.nextSibling;
+                            els.sessionsSelect.insertBefore(opt, firstReal);
+                        } else {
+                            els.sessionsSelect.value = newId;
+                        }
+                    }
                     toast('success', '新会话已创建', newId);
                 }
             } else {
