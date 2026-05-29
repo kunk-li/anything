@@ -621,6 +621,15 @@ class SimpleAgent(
                 success_summaries = [x["summary"] for x in summaries if not x["summary"].startswith("失败")]
                 final_answer = success_summaries[0] if success_summaries else "任务执行完成, 但未生成可展示内容."
 
+        # Task SSSS: 工具直接输出 raw JSON 时 (例如 datetime / calculator 都返 dict),
+        # 用一次 LLM 合成自然语言. 检测条件: final_answer 看起来是 JSON / dict 字面值.
+        if final_answer and self._looks_like_raw_json(final_answer):
+            synthesized = self._synthesize_natural_answer(
+                task=task, raw=final_answer, trace_id=trace_id,
+            )
+            if synthesized:
+                final_answer = synthesized
+
         return {
             "answer": final_answer,
             "session_id": session_id, "trace_id": trace_id,
@@ -629,6 +638,42 @@ class SimpleAgent(
             "citations": final_citations,
             "retrieved_chunks": final_retrieved_chunks,
         }
+
+    @staticmethod
+    def _looks_like_raw_json(s: str) -> bool:
+        """检测字符串是不是 raw JSON/dict 字面值 (开头 { 或 [ 且能 json.loads)."""
+        if not isinstance(s, str):
+            return False
+        s = s.strip()
+        if not (s.startswith("{") or s.startswith("[")):
+            return False
+        try:
+            import json as _j
+            _j.loads(s)
+            return True
+        except Exception:
+            return False
+
+    def _synthesize_natural_answer(
+        self, task: str, raw: str, trace_id: Optional[str],
+    ) -> str:
+        """让 LLM 把 raw 工具输出转成自然语言回答用户问题. 失败返空字符串."""
+        try:
+            planner = self._resolve_llm_planner(trace_id)
+            if planner is None:
+                return ""
+            prompt = (
+                "用户问题: " + str(task) + "\n\n"
+                "工具的原始输出 (JSON):\n" + str(raw)[:1500] + "\n\n"
+                "请基于上面的工具输出, 用中文自然语言简洁回答用户问题. "
+                "不要再贴 JSON 也不要解释字段名, 直接给答案."
+            )
+            ans = planner(prompt)
+            if isinstance(ans, str) and ans.strip():
+                return ans.strip()
+        except Exception as e:
+            self.logger.warning(f"[synthesize] LLM 合成自然语言失败, 回退 raw: {e}")
+        return ""
 
     # ============================================================
     # LLM / 工具 registry 辅助
