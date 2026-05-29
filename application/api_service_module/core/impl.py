@@ -122,17 +122,33 @@ class ApiService(
         # 兼容: 老代码若直接读 self.api_keys 看是否在列表内, 仍能工作
         self.api_keys = list(self._key_to_tenant.keys())
 
-        # Dev 友好: DEV_MODE 启动 + yaml 里全是未解析 ${ENV} 占位符时, 自动关掉认证
-        # 让浏览器 UI 直接能用, 不强迫新手第一次就去填 X-API-Key。
-        # 真实部署 (export API_KEY_1=xxx + 关 DEV_MODE) 不受影响。
+        # Dev 友好: DEV_MODE 启动 + 全部 api_keys 是占位/默认 sentinel 时, 自动关掉认证.
+        # 让新人 clone → run → 浏览器即用, 不强迫第一次配 key.
+        # 真实部署 (export API_KEY_1=xxx + 关 DEV_MODE) 不受影响.
+        #
+        # 关闭条件 (任一即关):
+        #   1. 没配 api_keys
+        #   2. 全是未解析 ${ENV} 占位符  (e.g. 用户没建 .env)
+        #   3. 全是 dev sentinel 默认值 (key 带 "_change_in_prod" 后缀, 跟 .env.example 一致)
+        #
+        # Task BBBB 续: 加 sentinel 检测 — .env 从 .env.example 复制后默认值就是 dev sentinel,
+        # 这种情况下应该和"没配"等价, 否则用户复制了 .env 就被强制 auth 不直观.
         dev_mode = os.environ.get("ANYTHING_DEV_MODE", "").lower() in ("1", "true", "yes")
         all_placeholders = bool(self._key_to_tenant) and all(
             k.startswith("${") and k.endswith("}") for k in self._key_to_tenant
         )
+        all_dev_sentinels = bool(self._key_to_tenant) and all(
+            "_change_in_prod" in k for k in self._key_to_tenant
+        )
         if dev_mode and self.auth_enabled and self.auth_type == "apikey" and (
-            not self._key_to_tenant or all_placeholders
+            not self._key_to_tenant or all_placeholders or all_dev_sentinels
         ):
-            reason = "未配置 api_keys" if not self._key_to_tenant else "api_keys 全是未解析 ${ENV} 占位符"
+            if not self._key_to_tenant:
+                reason = "未配置 api_keys"
+            elif all_placeholders:
+                reason = "api_keys 全是未解析 ${ENV} 占位符"
+            else:
+                reason = "api_keys 全是 dev sentinel 默认值 (含 _change_in_prod)"
             self.logger.warning(
                 f"[security] DEV_MODE 检测到 {reason}, 自动关闭 auth。"
                 f"生产部署请: (1) export 真实 API_KEY_1 环境变量 (2) 不要设 ANYTHING_DEV_MODE。"
