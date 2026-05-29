@@ -524,21 +524,40 @@
         // 路径 3: 状态顶层 task — 兜底, react agent 执行完后 events 可能被清空只留 task
         let topTask = state_data.task;
         if (topTask) {
-            // Task PPPP: 后端 Agent 会把"长期记忆注入 + 原 task"合成一个 augmented prompt
-            // 存到 state.task. 前端展示只要原句, 把记忆 prefix 切掉.
+            // Task PPPP / PPPP-2: 后端 Agent 把"长期记忆 facts + 原 task"合成 augmented prompt
+            // 存到 state.task. 解析回:
+            //   1) 原 task 当 user content (不再把注入当用户的话)
+            //   2) memory hits 挂到 message.meta.memoryHits, 让 UI 显 📚 N 徽章
             const taskStr = String(topTask);
-            const cur = taskStr.indexOf('[当前任务]');
-            if (cur >= 0) {
-                // 取 "[当前任务]\n" 之后的内容
-                const after = taskStr.slice(cur + '[当前任务]'.length).replace(/^\s+/, '');
-                if (after) topTask = after;
+            const memHeader = '[长期记忆 — 已知关于用户/上下文的相关信息]';
+            const curHeader = '[当前任务]';
+            const memIdx = taskStr.indexOf(memHeader);
+            const curIdx = taskStr.indexOf(curHeader);
+            let memHits = [];
+            if (memIdx >= 0 && curIdx > memIdx) {
+                // 抽 facts: 在 memHeader 和 curHeader 之间, 行以 "- " 开头
+                const block = taskStr.slice(memIdx + memHeader.length, curIdx);
+                memHits = block.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.startsWith('- '))
+                    .map((l, i) => ({
+                        fact_id: 'hist_' + i,
+                        content: l.slice(2).trim(),  // 去 "- "
+                        score: null,
+                        reason: 'session_history',
+                    }));
+            }
+            if (curIdx >= 0) {
+                topTask = taskStr.slice(curIdx + curHeader.length).replace(/^\s+/, '');
             }
             const preview = String(topTask).length > 60
                 ? String(topTask).slice(0, 60) + '…' : String(topTask);
             out.push({
                 id: 'hist_top_task',
-                role: 'user', content: String(topTask),
+                role: 'user',
+                content: String(topTask),
                 type: state_data.execution_mode || 'agent',
+                meta: memHits.length > 0 ? { memoryHits: memHits } : null,
             });
             if (state_data.status === 'completed') {
                 out.push({
