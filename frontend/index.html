@@ -15,12 +15,19 @@
             <span class="subtitle" data-i18n="app.subtitle">RAG & Agent</span>
         </div>
         <div class="header-controls">
-            <span class="tenant-chip">
-                <label for="tenant-input" data-i18n="header.tenant">tenant</label>
-                <input id="tenant-input" type="text" placeholder="default" maxlength="32" />
-            </span>
-            <span class="health-badge" id="health-badge"
-                  data-i18n-attr="title:health.checkAgain.title">
+            <!-- Task XXXX (#112): tenant chip 缩成只读小 chip, 点击跳 settings; 实际 input 在 drawer 内 -->
+            <button type="button" class="tenant-chip-mini" id="tenant-chip-mini"
+                    title="点击在设置里修改 tenant"
+                    data-i18n-attr="title:header.tenant.tooltip">
+                <span class="tenant-prefix">T:</span>
+                <span class="tenant-value" id="tenant-value">default</span>
+            </button>
+            <!-- 真实 input 隐藏放这里, 兼容现有 JS 引用 (settings drawer 也会出现) -->
+            <input id="tenant-input" type="text" placeholder="default" maxlength="32" hidden aria-hidden="true" />
+            <!-- Task XXXX (#112): health badge 缩成纯 dot, hover 显文字 -->
+            <span class="health-badge compact" id="health-badge"
+                  data-i18n-attr="title:health.checkAgain.title"
+                  title="点击重新检测">
                 <span class="health-dot" id="health-dot"></span>
                 <span id="health-text" data-i18n="header.health.checking">检测中</span>
             </span>
@@ -257,15 +264,18 @@
                            data-i18n-attr="placeholder:settings.apiKey.placeholder" />
                     <p class="hint" data-i18n="settings.apiKey.hint">配置 security.auth_enabled=true 时必填</p>
                 </div>
+                <!-- Task XXXX (#112): tenant 从 header 迁过来; 多租户授权用. -->
                 <div class="form-row">
-                    <label for="session-input" data-i18n="settings.session">Session ID</label>
-                    <input type="text" id="session-input"
-                           data-i18n-attr="placeholder:settings.session.placeholder" />
-                    <p class="hint" data-i18n="settings.session.hint">用于跨请求关联,留空自动生成</p>
+                    <label for="tenant-input-drawer">Tenant (多租户)</label>
+                    <input type="text" id="tenant-input-drawer" placeholder="default" maxlength="32" />
+                    <p class="hint">用于 per-tenant 配额隔离, 99% 用户保持 default 即可</p>
                 </div>
 
-                <!-- Task SSS / VVVV (#105/#108): 多会话管理已迁移到左侧 sidebar.
-                     这里留空, 不再放下拉. -->
+                <!-- Task XXXX (#112): Session ID 编辑框已删 — 现在左栏点击切换, 这里露编辑框
+                     反而让人困惑两边是不是同步. 保留隐藏 input 兼容 app.js 引用. -->
+                <input type="text" id="session-input" hidden aria-hidden="true" />
+
+                <!-- Task SSS / VVVV (#105/#108): 多会话管理已迁移到左侧 sidebar. -->
 
                 <div class="form-row">
                     <label data-i18n="settings.locale">界面语言</label>

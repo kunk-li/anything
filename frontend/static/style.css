@@ -116,12 +116,13 @@ body {
 }
 .new-session-btn {
     width: 100%;
-    padding: 10px 12px;
+    /* Task XXXX (#112): 从 10px 12px / 39px 高 → 7px 12px / 32px 高, 视觉减重 */
+    padding: 7px 12px;
     background: var(--primary, #4f8cff);
     color: white;
     border: 0;
-    border-radius: 8px;
-    font-size: 14px;
+    border-radius: 6px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     transition: background 120ms;
@@ -134,10 +135,23 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    /* XXXX (#112): 缩 padding, refresh 改图标按钮在下面用 .ghost.icon-only 改 */
+    padding: 6px 12px;
     border-bottom: 1px solid var(--border);
     font-size: 11px;
     color: var(--text-faint, #888);
+}
+/* XXXX (#112): toolbar 里 refresh button 改纯图标按钮, 不占大块 */
+.sessions-sidebar-toolbar #sessions-refresh-btn {
+    padding: 3px 7px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-faint, #888);
+    border-radius: 4px;
+}
+.sessions-sidebar-toolbar #sessions-refresh-btn:hover {
+    color: var(--text);
 }
 .sessions-count {
     background: var(--bg-soft, rgba(127,127,127,0.15));
@@ -150,7 +164,8 @@ body {
     overflow-y: auto;
     list-style: none;
     margin: 0;
-    padding: 6px;
+    /* XXXX (#112): 加左右 padding, 列表项不再贴边 */
+    padding: 6px 8px;
 }
 .session-list .empty-state {
     padding: 24px 12px;
@@ -397,28 +412,37 @@ body {
     gap: 12px;
 }
 
-.tenant-chip {
-    display: flex;
+/* Task XXXX (#112): tenant 编辑框移到 settings drawer; header 只留可点 mini chip */
+.tenant-chip-mini {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     background: var(--bg-elev2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 4px 8px;
+    padding: 3px 8px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    transition: border-color var(--transition);
+    max-width: 110px;
 }
-.tenant-chip label {
+.tenant-chip-mini:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+.tenant-chip-mini .tenant-prefix {
     color: var(--text-faint);
-    font-size: 12px;
-    font-family: var(--mono);
 }
-.tenant-chip input {
-    padding: 2px 4px;
-    width: 110px;
-    background: transparent;
-    border: none;
-    font-family: var(--mono);
-    font-size: 12px;
+.tenant-chip-mini .tenant-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 80px;
 }
+/* 兼容旧 class (页面其他地方可能用了) */
+.tenant-chip { display: none; }
 
 .health-badge {
     display: flex;
@@ -435,6 +459,14 @@ body {
 }
 .health-badge:hover {
     border-color: var(--border-strong);
+}
+/* Task XXXX (#112): compact 模式 — 只显圆点, 文字隐藏, hover 出 tooltip (用 title attr) */
+.health-badge.compact {
+    padding: 4px 6px;
+    gap: 0;
+}
+.health-badge.compact #health-text {
+    display: none;
 }
 .health-dot {
     width: 8px;
@@ -737,10 +769,11 @@ body.has-drag .chat-pane::before {
 }
 
 .composer-extras {
-    margin-left: auto;
+    /* Task XXXX (#112): 去掉 margin-left:auto, 不再把控件推到最右产生 273px 黑洞.
+       现在 extras 紧挨 mode-tabs, composer-row 用 flex gap. */
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
 }
 
 .stream-toggle {
@@ -913,11 +946,17 @@ body.has-drag .chat-pane::before {
     border: none;
     border-bottom: 2px solid transparent;
     color: var(--text-faint);
-    padding: 12px 8px;
-    font-size: 12px;
+    /* Task XXXX (#112): 从 12px 8px → 8px 6px, 整 nav 从 59px → 42px */
+    padding: 8px 6px;
+    font-size: 11px;
     font-weight: 500;
     transition: all var(--transition);
     position: relative;
+    /* badge 与文字之间空 4px (替代直接粘在一起) */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
 }
 .side-tab:hover {
     color: var(--text-dim);

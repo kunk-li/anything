@@ -19,6 +19,10 @@
         sendBtn: $('send-btn'),
         topkInput: $('topk-input'),
         tenantInput: $('tenant-input'),
+        // Task XXXX (#112): header 只剩 mini chip; settings drawer 有真正可编辑 input
+        tenantChipMini: $('tenant-chip-mini'),
+        tenantValue: $('tenant-value'),
+        tenantInputDrawer: $('tenant-input-drawer'),
         healthBadge: $('health-badge'),
         healthDot: $('health-dot'),
         healthText: $('health-text'),
@@ -367,6 +371,9 @@
         els.apiKeyInput.value = state.settings.apiKey;
         els.sessionInput.value = state.settings.sessionId;
         els.tenantInput.value = state.settings.tenant;
+        // Task XXXX (#112): tenant 双向同步 — drawer input + header mini chip
+        if (els.tenantInputDrawer) els.tenantInputDrawer.value = state.settings.tenant;
+        if (els.tenantValue) els.tenantValue.textContent = state.settings.tenant || 'default';
         if (els.streamToggle) els.streamToggle.checked = !!state.settings.useStream;
 
         ApiClient.configure({
@@ -380,7 +387,13 @@
         state.settings.baseUrl = els.apiBaseInput.value.trim();
         state.settings.apiKey = els.apiKeyInput.value.trim();
         state.settings.sessionId = els.sessionInput.value.trim();
-        state.settings.tenant = (els.tenantInput.value || '').trim() || 'default';
+        // Task XXXX (#112): tenant 主输入来源现在是 drawer input, 同步回 header chip + hidden input
+        const newTenant = ((els.tenantInputDrawer && els.tenantInputDrawer.value) ||
+                            (els.tenantInput && els.tenantInput.value) ||
+                            '').trim() || 'default';
+        state.settings.tenant = newTenant;
+        if (els.tenantInput) els.tenantInput.value = newTenant;
+        if (els.tenantValue) els.tenantValue.textContent = newTenant;
         try {
             localStorage.setItem('anything_settings', JSON.stringify(state.settings));
         } catch (_) {}
@@ -666,10 +679,33 @@
             });
         }
 
-        // tenant_id 失焦时同步到 settings (但不持久化, 持久化在 save 时)
-        els.tenantInput.addEventListener('change', () => {
-            state.settings.tenant = (els.tenantInput.value || '').trim() || 'default';
-        });
+        // Task XXXX (#112): tenant 主输入是 drawer input; header 只有可点 mini chip
+        if (els.tenantInputDrawer) {
+            els.tenantInputDrawer.addEventListener('change', () => {
+                const v = (els.tenantInputDrawer.value || '').trim() || 'default';
+                state.settings.tenant = v;
+                if (els.tenantInput) els.tenantInput.value = v;
+                if (els.tenantValue) els.tenantValue.textContent = v;
+            });
+        }
+        // 旧的 hidden tenantInput 也保留监听以防其他代码 dispatch change
+        if (els.tenantInput) {
+            els.tenantInput.addEventListener('change', () => {
+                state.settings.tenant = (els.tenantInput.value || '').trim() || 'default';
+            });
+        }
+        // 点 header tenant mini chip → 打开 settings drawer, 聚焦到 tenant 输入
+        if (els.tenantChipMini) {
+            els.tenantChipMini.addEventListener('click', () => {
+                if (els.settingsBtn) els.settingsBtn.click();
+                setTimeout(() => {
+                    if (els.tenantInputDrawer) {
+                        els.tenantInputDrawer.focus();
+                        els.tenantInputDrawer.select();
+                    }
+                }, 200);
+            });
+        }
 
         // 流式开关持久化
         if (els.streamToggle) {
