@@ -187,6 +187,45 @@
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
 
+        // Task LLLL (#129): shortcuts modal — button 点 / ? 键 / 全局快捷键
+        const sbtn = document.getElementById('shortcuts-btn');
+        if (sbtn) sbtn.addEventListener('click', () => openDrawer('shortcuts'));
+        document.querySelectorAll('[data-close="shortcuts"]').forEach(el =>
+            el.addEventListener('click', () => closeDrawer('shortcuts'))
+        );
+        document.addEventListener('keydown', (e) => {
+            // 输入框/textarea 里输 ? 不触发 (保证用户正常打字)
+            const inField = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+            // ?  → shortcuts
+            if (!inField && e.key === '?' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                openDrawer('shortcuts');
+                return;
+            }
+            // Ctrl+N → 新建会话
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+                e.preventDefault();
+                if (typeof createNewSession === 'function') createNewSession();
+                return;
+            }
+            // Ctrl+/ → 聚焦 session 搜索
+            if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+                e.preventDefault();
+                els.sessionsSearchInput?.focus();
+                return;
+            }
+            // Ctrl+, → 设置
+            if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+                e.preventDefault();
+                openDrawer('settings');
+                return;
+            }
+            // Esc → 关任意打开的 drawer
+            if (e.key === 'Escape') {
+                ['shortcuts', 'settings', 'preview', 'plan', 'reflect', 'trace'].forEach(closeDrawer);
+            }
+        });
+
         // Task GGGG (#124): 欢迎屏 example prompt 卡片 click → 切 mode + 填输入框
         // Task HHHH (#125): Agent 工具卡 (.agent-tool-card.clickable) → 切 Agent + 填 example
         document.addEventListener('click', (e) => {

@@ -640,6 +640,51 @@ body.has-drag .chat-pane::before {
     scroll-behavior: smooth;
 }
 
+/* Task LLLL (#129): 快捷键 panel */
+.shortcuts-panel {
+    width: 380px;
+    max-width: 90vw;
+}
+.shortcuts-table { padding: 12px; }
+.shortcuts-section {
+    margin-bottom: 18px;
+}
+.shortcuts-section h4 {
+    margin: 0 0 8px;
+    color: var(--text);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.kb-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.kb-row:last-child { border-bottom: none; }
+.kb-row kbd {
+    display: inline-block;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    min-width: 24px;
+    text-align: center;
+}
+.kb-desc {
+    margin-left: 8px;
+    color: var(--text-dim);
+    font-size: 12px;
+    flex: 1;
+}
+
 /* Task MMMM (#130): 切会话/新建会话时, messages 区淡入, 给视觉反馈 */
 .messages.session-switched {
     animation: messagesFadeIn 220ms ease-out;

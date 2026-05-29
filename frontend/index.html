@@ -39,11 +39,45 @@
                     aria-label="toggle sessions sidebar" title="会话列表 / Sessions">💬</button>
             <button class="icon-btn sidebar-toggle" id="sidebar-toggle"
                     aria-label="toggle sidebar" title="侧栏 / Sidebar">≡</button>
+            <!-- Task LLLL (#129): ? 显快捷键 -->
+            <button class="icon-btn has-tip" id="shortcuts-btn"
+                    data-tip="键盘快捷键 (?)" aria-label="shortcuts">?</button>
             <button class="icon-btn" id="settings-btn"
                     data-i18n-attr="title:header.settings"
                     aria-label="settings">⚙</button>
         </div>
     </header>
+
+    <!-- Task LLLL (#129): 快捷键帮助 modal -->
+    <div class="drawer" id="shortcuts-drawer" hidden>
+        <div class="drawer-backdrop" data-close="shortcuts"></div>
+        <div class="drawer-panel shortcuts-panel">
+            <div class="drawer-header">
+                <h3>键盘快捷键</h3>
+                <button class="icon-btn" data-close="shortcuts" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <div class="shortcuts-table">
+                    <div class="shortcuts-section">
+                        <h4>聊天</h4>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span class="kb-desc">发送消息</span></div>
+                        <div class="kb-row"><kbd>Esc</kbd><span class="kb-desc">关闭弹窗 / 停止生成</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h4>会话</h4>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>N</kbd><span class="kb-desc">新建会话</span></div>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>/</kbd><span class="kb-desc">聚焦会话搜索框</span></div>
+                    </div>
+                    <div class="shortcuts-section">
+                        <h4>界面</h4>
+                        <div class="kb-row"><kbd>?</kbd><span class="kb-desc">显示本帮助</span></div>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>,</kbd><span class="kb-desc">打开设置</span></div>
+                    </div>
+                    <p class="hint" style="margin-top:16px">提示: 这些快捷键不影响输入框内的正常打字</p>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- ============== Main Layout ============== -->
     <div class="app-main">
@@ -550,21 +584,21 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=130"></script>
-    <script src="/static/i18n.js?v=130"></script>
-    <script src="/static/markdown.js?v=130"></script>
+    <script src="/static/api.js?v=131"></script>
+    <script src="/static/i18n.js?v=131"></script>
+    <script src="/static/markdown.js?v=131"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=130"></script>
-    <script src="/static/modules/export.js?v=130"></script>
-    <script src="/static/modules/health.js?v=130"></script>
-    <script src="/static/modules/upload-manager.js?v=130"></script>
-    <script src="/static/modules/admin-panel.js?v=130"></script>
-    <script src="/static/modules/models-admin.js?v=130"></script>
+    <script src="/static/modules/ui-helpers.js?v=131"></script>
+    <script src="/static/modules/export.js?v=131"></script>
+    <script src="/static/modules/health.js?v=131"></script>
+    <script src="/static/modules/upload-manager.js?v=131"></script>
+    <script src="/static/modules/admin-panel.js?v=131"></script>
+    <script src="/static/modules/models-admin.js?v=131"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=130"></script>
+    <script src="/static/modules/memory-panel.js?v=131"></script>
 
-    <script src="/static/app.js?v=130"></script>
+    <script src="/static/app.js?v=131"></script>
 </body>
 </html>
