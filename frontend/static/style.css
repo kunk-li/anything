@@ -476,6 +476,55 @@ body {
     color: var(--text-dim);
     transition: border-color var(--transition);
 }
+
+/* Task AAAA-A (#118): LLM 全挂 banner (顶部全屏警告) */
+.llm-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: linear-gradient(90deg, rgba(239,68,68,0.20), rgba(239,68,68,0.12));
+    border-bottom: 2px solid var(--danger, #ef4444);
+    color: var(--text-strong, #fff);
+    font-size: 12px;
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    animation: slideDown 200ms ease-out;
+}
+@keyframes slideDown {
+    from { transform: translateY(-100%); }
+    to   { transform: translateY(0); }
+}
+.llm-banner-icon { font-size: 18px; }
+.llm-banner-text { flex: 1; }
+.llm-banner-text code {
+    background: rgba(0,0,0,0.30);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--mono, monospace);
+    font-size: 11px;
+}
+.llm-banner-close {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.25);
+    color: var(--text-strong, #fff);
+    padding: 3px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.llm-banner-close:hover {
+    background: rgba(255,255,255,0.15);
+}
+/* banner 显示时, app 顶部下推 */
+body:has(.llm-banner) .app-header {
+    margin-top: 44px;
+}
 .health-badge:hover {
     border-color: var(--border-strong);
 }

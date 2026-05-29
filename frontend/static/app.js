@@ -2269,6 +2269,48 @@
             els.healthDot.classList.add('down');
             els.healthText.textContent = t('header.health.down');
         }
+        // Task AAAA-A (#118): 检查 LLM 模型健康, 全挂 → 红 banner
+        try {
+            const adminRes = await ApiClient.getAdminStatus();
+            if (adminRes.status === 200 && adminRes.payload?.code === 'SUCCESS') {
+                const d = adminRes.payload?.data || {};
+                const models = (d.health || {}).models || {};
+                const registered = (d.llm_models || {}).count || 0;
+                _renderLLMBanner(registered, models);
+            }
+        } catch (_) {}
+    }
+
+    // Task AAAA-A (#118): 全挂时显红 banner; 一旦有 healthy model 则移除
+    function _renderLLMBanner(registeredCount, modelHealthMap) {
+        const existing = document.getElementById('llm-banner');
+        const names = Object.keys(modelHealthMap || {});
+        const unhealthy = names.filter(n => modelHealthMap[n].state === 'unhealthy');
+        // 警告条件: 一个模型都没注册 OR 注册了但所有曾被调用过的都 unhealthy
+        const showWarning = registeredCount === 0 ||
+                            (names.length > 0 && unhealthy.length === names.length);
+        if (!showWarning) {
+            if (existing) existing.remove();
+            return;
+        }
+        if (existing) return;
+        const banner = document.createElement('div');
+        banner.id = 'llm-banner';
+        banner.className = 'llm-banner';
+        const errSample = unhealthy.length > 0
+            ? (modelHealthMap[unhealthy[0]]?.last_error || '').slice(0, 100)
+            : (registeredCount === 0 ? '没有注册任何 LLM 模型' : '');
+        banner.innerHTML = `
+            <span class="llm-banner-icon">⚠️</span>
+            <span class="llm-banner-text">
+                <strong>LLM 不可用</strong> — 所有回答都是 stub 占位.
+                ${errSample ? '<br/><small>原因: ' + escapeHtml(errSample) + '…</small>' : ''}
+                请配 <code>DASHSCOPE_API_KEY</code> 或 <code>OPENAI_API_KEY</code> 然后重启服务.
+            </span>
+            <button class="llm-banner-close" aria-label="关闭" title="关闭">✕</button>
+        `;
+        banner.querySelector('.llm-banner-close').addEventListener('click', () => banner.remove());
+        document.body.appendChild(banner);
     }
 
     // ---------- 模型管理 ----------
