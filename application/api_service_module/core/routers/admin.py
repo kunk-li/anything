@@ -239,6 +239,16 @@ class AdminRoutesMixin:
                 self.logger.warning(f"[admin] 加载 audit logger 失败: {e}")
                 data["audit"] = None
 
+            # 12. Task PPP (#102): Scheduler (II) — 已注册 cron 任务列表
+            if self.scheduler is not None:
+                try:
+                    data["scheduler"] = self.scheduler.snapshot()
+                except Exception as e:
+                    self.logger.warning(f"[admin] 加载 scheduler 失败: {e}")
+                    data["scheduler"] = None
+            else:
+                data["scheduler"] = None
+
             return JSONResponse(
                 status_code=200,
                 content={

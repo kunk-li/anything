@@ -298,6 +298,32 @@
                 </div>`);
             }
 
+            // Task PPP (#102): Scheduler (II) — cron 任务列表
+            if (d.scheduler) {
+                const tasks = d.scheduler.tasks || [];
+                const taskRows = tasks.length
+                    ? tasks.slice(0, 10).map(t => `
+                        <dt class="path">${escapeHtml(t.id)}</dt>
+                        <dd>
+                            ${onOff(t.enabled)} · <span style="font-family:var(--mono);font-size:10px;">${escapeHtml(JSON.stringify(t.schedule || {}))}</span>
+                            <br/>next: ${escapeHtml(t.next_run || '-')}
+                            · runs: ${t.runs || 0}
+                            ${t.last_error ? '<br/><span style="color:var(--danger);font-size:10px;">err: ' + escapeHtml(String(t.last_error).slice(0, 80)) + '</span>' : ''}
+                        </dd>
+                    `).join('')
+                    : '<dt>(空)</dt><dd>无已注册任务</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>⏰ 调度任务 (II)</h4>
+                    <dl>
+                        <dt>total tasks</dt><dd><strong>${tasks.length}</strong></dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>Tasks:</strong>
+                        <dl>${taskRows}</dl>
+                    </div>
+                </div>`);
+            }
+
             // Task OOO (#101): Audit log (CC) — 元数据 (不展示完整事件)
             if (d.audit) {
                 const sizeKB = ((d.audit.current_size_bytes || 0) / 1024).toFixed(1);
