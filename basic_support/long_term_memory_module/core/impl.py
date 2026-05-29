@@ -475,6 +475,107 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             out.append(f)
         return out
 
+    # ------------------------------------------------------------------
+    # Task JJJ (#96): 对话上下文压缩 — MemGPT working / archival 分层
+    # ------------------------------------------------------------------
+
+    def compress_history(
+        self,
+        messages: List[Dict[str, str]],
+        keep_recent: int = 5,
+        max_total_chars: int = 8000,
+        tenant_id: str = "default",
+        session_id: Optional[str] = None,
+        archive_facts: bool = True,
+    ) -> tuple:
+        """把超长对话历史压缩成 [summary + 最近 K 轮].
+
+        触发条件 (任一满足):
+            len(messages) > keep_recent + 2  (至少有 3 轮可被总结才有意义)
+            OR  sum(len(m.content)) > max_total_chars
+
+        步骤:
+            1. 切分 messages 为 (old = 老的, recent = 最近 keep_recent 条)
+            2. archive_facts=True 时 extract_facts(old) 把可保留的事实持久化
+            3. LLM 总结 old → "[历史对话摘要] ..."
+            4. 返回 [{role:system, content:summary}, ...recent], summary_text
+
+        失败 (LLM 不可用 / 抽取失败) → 退化截断, 返 (messages[-keep_recent:], None).
+
+        返回:
+            (compressed_messages, summary_or_None)
+        """
+        if not messages:
+            return messages, None
+
+        total_chars = sum(len(m.get("content", "") or "") for m in messages)
+        need_compress = (
+            len(messages) > keep_recent + 2
+            or total_chars > max_total_chars
+        )
+        if not need_compress:
+            return messages, None
+
+        # 1. split
+        if len(messages) <= keep_recent:
+            return messages, None
+        old = messages[:-keep_recent]
+        recent = messages[-keep_recent:]
+        if not old:
+            return messages, None
+
+        # 2. archive_facts — 抽老对话的事实, 不阻断主路径
+        if archive_facts and self._llm_client is not None:
+            try:
+                facts = self.extract_facts(
+                    messages=old, tenant_id=tenant_id, session_id=session_id,
+                )
+                for f in facts:
+                    try:
+                        self.add_fact(f)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # 3. LLM 总结 old
+        summary = self._summarize_for_compression(old)
+        if not summary:
+            # LLM 不可用 → 退化截断
+            return recent, None
+
+        system_msg = {
+            "role": "system",
+            "content": f"[历史对话摘要 (老 {len(old)} 轮已压缩)]\n{summary}",
+        }
+        return [system_msg, *recent], summary
+
+    def _summarize_for_compression(self, messages: List[Dict[str, str]]) -> str:
+        """LLM 总结一段对话. 失败返空串."""
+        if self._llm_client is None or not messages:
+            return ""
+        formatted = "\n".join(
+            f"[{m.get('role', 'user')}] {(m.get('content') or '')[:600]}"
+            for m in messages
+            if m.get("content")
+        )
+        if not formatted.strip():
+            return ""
+        prompt = (
+            "请把下面的对话历史浓缩成 3-8 句的中文摘要, 保留:\n"
+            "- 用户的主要诉求 / 提到的关键名词\n"
+            "- 已经确认的事实 / 决策 / 偏好\n"
+            "- 助手已给出的关键答复\n"
+            "不要复述寒暄, 不要加 markdown 列表项, 写连贯段落.\n\n"
+            f"[对话历史]\n{formatted}\n\n"
+            "摘要:"
+        )
+        try:
+            out = self._llm_client.generate(prompt)
+            return (out or "").strip()[:2000]
+        except Exception:
+            return ""
+
     @staticmethod
     def _parse_extracted_json(raw: str) -> List[Dict[str, Any]]:
         """LLM 输出 JSON 数组, 但实际经常带 ```json 围栏或前后解释.
