@@ -146,7 +146,9 @@
         pendingAttachments: [],
         settings: {
             baseUrl: '',
-            apiKey: '',
+            // dev 默认 key — 跟 .env.example 里 API_KEY_1 一致, 本地起服务即可用.
+            // 生产部署须 unset 这条默认, 不影响 localStorage 已存的真 key.
+            apiKey: 'dev_api_key_1_change_in_prod',
             sessionId: '',
             tenant: 'default',
             useStream: false,
