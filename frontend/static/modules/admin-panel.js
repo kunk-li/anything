@@ -156,6 +156,103 @@
                     </dl>
                 </div>`);
             }
+
+            // Task LLL (#98): Token / Cost 仪表 (A)
+            if (d.usage) {
+                const total = d.usage.total || {};
+                const byModel = d.usage.by_model || {};
+                const byTenant = d.usage.by_tenant || {};
+                const cost = (total.cost_usd || 0).toFixed(4);
+                const tokens = total.total_tokens || 0;
+                const calls = total.calls || 0;
+                const topModels = Object.entries(byModel)
+                    .sort((a, b) => (b[1].total_tokens || 0) - (a[1].total_tokens || 0))
+                    .slice(0, 5)
+                    .map(([name, b]) => `<dt class="path">${escapeHtml(name)}</dt>
+                        <dd>${b.total_tokens || 0} tok · $${(b.cost_usd || 0).toFixed(4)} · ${b.calls || 0}×</dd>`)
+                    .join('') || '<dd>-</dd>';
+                const topTenants = Object.entries(byTenant)
+                    .sort((a, b) => (b[1].cost_usd || 0) - (a[1].cost_usd || 0))
+                    .slice(0, 5)
+                    .map(([name, b]) => `<dt class="path">${escapeHtml(name)}</dt>
+                        <dd>$${(b.cost_usd || 0).toFixed(4)} · ${b.calls || 0}×</dd>`)
+                    .join('') || '<dd>-</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>📊 Token 用量 (Y/XX)</h4>
+                    <dl>
+                        <dt>total cost</dt><dd><strong>$${cost}</strong></dd>
+                        <dt>total tokens</dt><dd><strong>${tokens}</strong></dd>
+                        <dt>total calls</dt><dd>${calls}</dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>Top models:</strong>
+                        <dl>${topModels}</dl>
+                    </div>
+                    <div class="admin-subsection">
+                        <strong>Top tenants:</strong>
+                        <dl>${topTenants}</dl>
+                    </div>
+                </div>`);
+            }
+
+            // Task LLL (#98): Model Health (B)
+            if (d.health && d.health.models) {
+                const stateChip = (s) => {
+                    const colors = { healthy: '#22c55e', probation: '#f59e0b', unhealthy: '#ef4444' };
+                    const c = colors[s] || '#6b7280';
+                    return `<span class="chip" style="color:${c};border-color:${c};">${escapeHtml(s)}</span>`;
+                };
+                const modelRows = Object.entries(d.health.models)
+                    .map(([name, m]) => {
+                        const failRate = ((m.failure_rate || 0) * 100).toFixed(1);
+                        const cd = m.cooldown_remaining_seconds || 0;
+                        return `<dt class="path">${escapeHtml(name)}</dt>
+                            <dd>${stateChip(m.state)} 失败率 ${failRate}% · ${m.total_calls || 0}调用${
+                                cd > 0 ? ` · 冷却 ${cd}s` : ''
+                            }</dd>`;
+                    }).join('') || '<dt>无</dt><dd>(暂无调用记录)</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>❤️ 模型健康 (HH/BBB)</h4>
+                    <dl>
+                        <dt>threshold</dt><dd>${d.health.fail_threshold} 连失</dd>
+                        <dt>cooldown</dt><dd>${d.health.cooldown_seconds}s</dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>模型状态:</strong>
+                        <dl>${modelRows}</dl>
+                    </div>
+                </div>`);
+            }
+
+            // Task LLL (#98): Quota / Rate limit (BB/AAA)
+            if (d.quota) {
+                const q = d.quota;
+                const dailyRows = Object.entries(q.daily_usd_used_by_tenant || {})
+                    .map(([tenant, usd]) => `<dt class="path">${escapeHtml(tenant)}</dt>
+                        <dd>$${(usd || 0).toFixed(4)} / $${(q.daily_usd_limit || 0).toFixed(2) || '∞'}</dd>`)
+                    .join('') || '<dt>无</dt><dd>(无 tenant 记录)</dd>';
+                const rateRows = Object.entries(q.current_rate_window_size || {})
+                    .map(([tenant, n]) => `<dt class="path">${escapeHtml(tenant)}</dt>
+                        <dd>${n} / ${q.rate_per_minute || '∞'} /min</dd>`)
+                    .join('') || '<dt>无</dt><dd>-</dd>';
+                html.push(`<div class="admin-card">
+                    <h4>🚦 配额 / 限流 (BB/AAA)</h4>
+                    <dl>
+                        <dt>daily USD limit</dt><dd>${q.daily_usd_limit ? '$' + q.daily_usd_limit : '不限'}</dd>
+                        <dt>rate /min</dt><dd>${q.rate_per_minute || '不限'}</dd>
+                        <dt>global used</dt><dd>$${(q.global_usd_used || 0).toFixed(4)}${q.global_usd_limit ? ' / $' + q.global_usd_limit : ''}</dd>
+                    </dl>
+                    <div class="admin-subsection">
+                        <strong>Daily USD by tenant:</strong>
+                        <dl>${dailyRows}</dl>
+                    </div>
+                    <div class="admin-subsection">
+                        <strong>Rate window:</strong>
+                        <dl>${rateRows}</dl>
+                    </div>
+                </div>`);
+            }
+
             els.adminGrid.innerHTML = html.join('');
         }
 

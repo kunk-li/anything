@@ -181,6 +181,22 @@ class AdminRoutesMixin:
                 self.logger.warning(f"[admin] 加载 usage tracker 失败: {e}")
                 data["usage"] = None
 
+            # 7. Task LLL (#98): Model health (HH/BBB) — 让前端模型表显状态
+            try:
+                from llm_adapter_module.utils import get_health_tracker
+                data["health"] = get_health_tracker().snapshot()
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 health tracker 失败: {e}")
+                data["health"] = None
+
+            # 8. Task LLL (#98): Quota (BB/AAA) — 让前端显配额状态
+            try:
+                from quota_module import get_quota_guard
+                data["quota"] = get_quota_guard().snapshot()
+            except Exception as e:
+                self.logger.warning(f"[admin] 加载 quota guard 失败: {e}")
+                data["quota"] = None
+
             return JSONResponse(
                 status_code=200,
                 content={

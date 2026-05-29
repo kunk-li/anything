@@ -1791,3 +1791,28 @@ body.has-drag .chat-pane::before {
 
 /* response 里的 memory_hits / reflection chip 用 message-meta 已有样式
    特殊颜色由 inline style 控制, 这里不重复. */
+
+/* Task LLL (#98): admin tab 内子分组样式 */
+.admin-subsection {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+}
+.admin-subsection strong {
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+.admin-subsection dl {
+    margin-top: 4px;
+}
+.admin-subsection dt.path {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+}
+.admin-subsection dd {
+    font-size: 11px;
+    color: var(--text-faint);
+}
