@@ -209,6 +209,52 @@
             });
         }
 
+        // Task TTTT-2 (#139): workflow 模板按钮 + 列表
+        document.getElementById('workflow-save-btn')?.addEventListener('click', _saveCurrentAsWorkflow);
+        document.getElementById('workflow-list-btn')?.addEventListener('click', () => {
+            _refreshWorkflowsList();
+            openDrawer('workflows');
+        });
+        document.querySelectorAll('[data-close="workflows"]').forEach(el =>
+            el.addEventListener('click', () => closeDrawer('workflows'))
+        );
+        document.getElementById('workflows-list')?.addEventListener('click', (e) => {
+            const del = e.target.closest('.workflow-delete');
+            if (del) {
+                e.stopPropagation();
+                const idx = parseInt(del.dataset.idx, 10);
+                if (isNaN(idx)) return;
+                if (!confirm('删除此模板?')) return;
+                const list = _loadWorkflows();
+                list.splice(idx, 1);
+                _saveWorkflows(list);
+                _refreshWorkflowsList();
+                return;
+            }
+            const item = e.target.closest('.workflow-item');
+            if (!item) return;
+            const idx = parseInt(item.dataset.idx, 10);
+            if (isNaN(idx)) return;
+            const list = _loadWorkflows();
+            const w = list[idx];
+            if (!w) return;
+            // 切 mode + 填输入框
+            if (w.mode) {
+                const tab = document.querySelector(`.mode-tab[data-mode="${w.mode}"]`);
+                if (tab) tab.click();
+            }
+            els.inputText.value = w.text || '';
+            els.inputText.focus();
+            els.inputText.dispatchEvent(new Event('input', { bubbles: true }));
+            closeDrawer('workflows');
+            toast('info', '模板已加载', w.name);
+        });
+        // 启动时刷一次 badge count
+        setTimeout(() => {
+            const cnt = document.getElementById('workflow-count');
+            if (cnt) cnt.textContent = String(_loadWorkflows().length);
+        }, 500);
+
         // Task LLLL (#129): shortcuts modal — button 点 / ? 键 / 全局快捷键
         const sbtn = document.getElementById('shortcuts-btn');
         if (sbtn) sbtn.addEventListener('click', () => openDrawer('shortcuts'));
@@ -2520,6 +2566,61 @@
             if (sendLabel) sendLabel.textContent = t('composer.send');
             if (sendIcon) sendIcon.textContent = '↵';
         }
+    }
+
+    // ---------- Task TTTT-2 (#139): Workflow 模板 (localStorage) ----------
+    const _WORKFLOWS_KEY = 'anything_workflows';
+
+    function _loadWorkflows() {
+        try {
+            const raw = localStorage.getItem(_WORKFLOWS_KEY);
+            return raw ? JSON.parse(raw) : [];
+        } catch (_) { return []; }
+    }
+    function _saveWorkflows(list) {
+        try {
+            localStorage.setItem(_WORKFLOWS_KEY, JSON.stringify(list));
+        } catch (_) {}
+        const countEl = document.getElementById('workflow-count');
+        if (countEl) countEl.textContent = String(list.length);
+    }
+    function _refreshWorkflowsList() {
+        const ul = document.getElementById('workflows-list');
+        if (!ul) return;
+        const list = _loadWorkflows();
+        if (!list.length) {
+            ul.innerHTML = '<li class="empty-state">还没保存任何模板. 在输入框写内容, 点 "💾 存为模板" 创建.</li>';
+            return;
+        }
+        ul.innerHTML = list.map((w, i) => `
+            <li class="workflow-item" data-idx="${i}">
+                <div class="workflow-main">
+                    <span class="workflow-name">${escapeHtml(w.name || ('模板 ' + (i+1)))}</span>
+                    <span class="workflow-tag chip">${escapeHtml(w.mode || 'rag')}</span>
+                    <div class="workflow-preview">${escapeHtml((w.text || '').slice(0, 80))}</div>
+                </div>
+                <button class="icon-btn workflow-delete" data-idx="${i}" title="删除">✕</button>
+            </li>
+        `).join('');
+    }
+    function _saveCurrentAsWorkflow() {
+        const text = (els.inputText.value || '').trim();
+        if (!text) {
+            toast('warn', '输入框为空', '先写点啥再保存');
+            return;
+        }
+        const name = (prompt('给这个模板起个名字:', text.slice(0, 30)) || '').trim();
+        if (!name) return;  // 用户取消
+        const list = _loadWorkflows();
+        list.unshift({
+            name,
+            text,
+            mode: state.mode,
+            saved_at: Date.now(),
+        });
+        _saveWorkflows(list.slice(0, 50));  // 上限 50
+        _refreshWorkflowsList();
+        toast('success', '模板已保存', name);
     }
 
     // ---------- Task NNNN (#131): 主题切换 ----------

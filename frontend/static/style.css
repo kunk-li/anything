@@ -744,6 +744,65 @@ body.has-drag .chat-pane::before {
     font-size: 11px;
 }
 
+/* Task TTTT-2 (#139): workflow 模板 */
+.workflows-bar {
+    margin-top: 6px;
+    gap: 6px !important;
+    justify-content: flex-start;
+}
+.workflows-bar .small-btn {
+    font-size: 11px;
+    padding: 4px 8px;
+}
+.workflows-bar .badge {
+    margin-left: 4px;
+    padding: 0 6px;
+    background: var(--bg-elev2);
+    border-radius: 8px;
+    font-size: 10px;
+}
+.workflows-list { list-style: none; padding: 0; margin: 0; }
+.workflow-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 100ms;
+    background: var(--bg-elev2);
+}
+.workflow-item:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.workflow-main { flex: 1; min-width: 0; }
+.workflow-name { font-weight: 600; font-size: 13px; }
+.workflow-tag {
+    margin-left: 8px;
+    font-size: 10px;
+    padding: 1px 6px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-dim);
+}
+.workflow-preview {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.workflow-delete {
+    opacity: 0;
+    transition: opacity 100ms;
+}
+.workflow-item:hover .workflow-delete { opacity: 1; }
+
 /* Task LLLL (#129): 快捷键 panel */
 .shortcuts-panel {
     width: 380px;

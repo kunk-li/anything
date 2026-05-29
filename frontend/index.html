@@ -205,8 +205,28 @@
                         <span class="send-icon">↵</span>
                     </button>
                 </div>
+                <!-- Task TTTT-2 (#139): workflow 保存模板 + 复用 -->
+                <div class="composer-row workflows-bar">
+                    <button type="button" class="small-btn ghost" id="workflow-save-btn" title="把当前输入保存为模板, 下次一键复用">💾 存为模板</button>
+                    <button type="button" class="small-btn ghost" id="workflow-list-btn" title="查看 / 加载已保存模板">📋 我的模板 <span class="badge" id="workflow-count">0</span></button>
+                </div>
             </div>
         </section>
+
+        <!-- Task TTTT-2 (#139): workflow 模板列表 drawer -->
+        <div class="drawer" id="workflows-drawer" hidden>
+            <div class="drawer-backdrop" data-close="workflows"></div>
+            <div class="drawer-panel">
+                <div class="drawer-header">
+                    <h3>📋 我的任务模板</h3>
+                    <button class="icon-btn" data-close="workflows" aria-label="close">✕</button>
+                </div>
+                <div class="drawer-body">
+                    <p class="hint">点模板回填到输入框. 模板存在浏览器 localStorage, 跨设备不同步.</p>
+                    <ul class="workflows-list" id="workflows-list"></ul>
+                </div>
+            </div>
+        </div>
 
         <!-- 右:侧栏 -->
         <aside class="sidebar">
@@ -600,21 +620,21 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=143"></script>
-    <script src="/static/i18n.js?v=143"></script>
-    <script src="/static/markdown.js?v=143"></script>
+    <script src="/static/api.js?v=139"></script>
+    <script src="/static/i18n.js?v=139"></script>
+    <script src="/static/markdown.js?v=139"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=143"></script>
-    <script src="/static/modules/export.js?v=143"></script>
-    <script src="/static/modules/health.js?v=143"></script>
-    <script src="/static/modules/upload-manager.js?v=143"></script>
-    <script src="/static/modules/admin-panel.js?v=143"></script>
-    <script src="/static/modules/models-admin.js?v=143"></script>
+    <script src="/static/modules/ui-helpers.js?v=139"></script>
+    <script src="/static/modules/export.js?v=139"></script>
+    <script src="/static/modules/health.js?v=139"></script>
+    <script src="/static/modules/upload-manager.js?v=139"></script>
+    <script src="/static/modules/admin-panel.js?v=139"></script>
+    <script src="/static/modules/models-admin.js?v=139"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=143"></script>
+    <script src="/static/modules/memory-panel.js?v=139"></script>
 
-    <script src="/static/app.js?v=143"></script>
+    <script src="/static/app.js?v=139"></script>
 </body>
 </html>
