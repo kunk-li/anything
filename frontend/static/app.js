@@ -152,6 +152,7 @@
             sessionId: '',
             tenant: 'default',
             useStream: false,
+            theme: 'dark',  // Task NNNN (#131): dark/light/auto
         },
     };
 
@@ -186,6 +187,25 @@
         // Task FFFF (#123): 启动后拉一次 /agent/tools, 让 "工具调用" tab 空态时
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
+
+        // Task NNNN (#131): 主题切换按钮
+        document.querySelectorAll('.theme-opt').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const theme = btn.dataset.theme;
+                if (!theme) return;
+                state.settings.theme = theme;
+                try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+                _applyTheme(theme);
+                toast('info', '主题已切换', theme);
+            });
+        });
+        // 系统主题变化时, auto 模式跟随
+        if (window.matchMedia) {
+            const mq = window.matchMedia('(prefers-color-scheme: light)');
+            mq.addEventListener?.('change', () => {
+                if (state.settings.theme === 'auto') _applyTheme('auto');
+            });
+        }
 
         // Task LLLL (#129): shortcuts modal — button 点 / ? 键 / 全局快捷键
         const sbtn = document.getElementById('shortcuts-btn');
@@ -598,6 +618,8 @@
         els.apiKeyInput.value = state.settings.apiKey;
         els.sessionInput.value = state.settings.sessionId;
         els.tenantInput.value = state.settings.tenant;
+        // Task NNNN (#131): 启动 apply 主题
+        _applyTheme(state.settings.theme || 'dark');
         // Task XXXX (#112): tenant 双向同步 — drawer input + header mini chip
         if (els.tenantInputDrawer) els.tenantInputDrawer.value = state.settings.tenant;
         if (els.tenantValue) els.tenantValue.textContent = state.settings.tenant || 'default';
@@ -2361,6 +2383,19 @@
             els.jobResult.className = 'job-result error';
             els.jobResult.textContent = `× ${e.message}`;
         }
+    }
+
+    // ---------- Task NNNN (#131): 主题切换 ----------
+    function _applyTheme(theme) {
+        let actual = theme;
+        if (theme === 'auto') {
+            actual = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        document.documentElement.dataset.theme = actual;
+        // 同步按钮 active 状态
+        document.querySelectorAll('.theme-opt').forEach(b => {
+            b.classList.toggle('active', b.dataset.theme === theme);
+        });
     }
 
     // ---------- Task FFFF (#123) + HHHH (#125): Agent 工具列表 (可点击预填 demo) ----------

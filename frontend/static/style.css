@@ -6,22 +6,29 @@
  *   - 响应式:>1100px 双栏, 600-1100px 单栏 + 抽屉侧栏, <600px 单栏 + 折叠
  * ============================================================ */
 
-:root {
+:root, :root[data-theme="dark"] {
     --bg: #0f1115;
     --bg-elev: #161922;
     --bg-elev2: #1f2330;
     --border: #2a2f3c;
     --border-strong: #3a4055;
     --text: #e6e9ef;
+    --text-strong: #ffffff;
     --text-dim: #9aa1b1;
     --text-faint: #6b7385;
     --accent: #6c8bf5;
     --accent-strong: #4f74f0;
     --accent-soft: rgba(108, 139, 245, 0.15);
+    --primary: #4f8cff;
+    --primary-hover: #3a78ed;
+    --primary-soft: rgba(79, 140, 255, 0.18);
+    --bg-soft: rgba(127, 127, 127, 0.12);
     --success: #4ade80;
     --warning: #facc15;
     --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.18);
     --code-bg: #0c0e13;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.45);
     --radius: 10px;
     --radius-sm: 6px;
@@ -29,6 +36,33 @@
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
         "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* Task NNNN (#131): 亮色主题 — 用 data-theme="light" 切换 */
+:root[data-theme="light"] {
+    --bg: #ffffff;
+    --bg-elev: #f7f8fa;
+    --bg-elev2: #eef0f4;
+    --border: #d8dce3;
+    --border-strong: #b8bfca;
+    --text: #1a1d23;
+    --text-strong: #000000;
+    --text-dim: #5a6270;
+    --text-faint: #8a92a0;
+    --accent: #4f74f0;
+    --accent-strong: #3a5edb;
+    --accent-soft: rgba(79, 116, 240, 0.10);
+    --primary: #4f8cff;
+    --primary-hover: #3a78ed;
+    --primary-soft: rgba(79, 140, 255, 0.12);
+    --bg-soft: rgba(0, 0, 0, 0.04);
+    --success: #16a34a;
+    --warning: #d97706;
+    --danger: #dc2626;
+    --danger-soft: rgba(220, 38, 38, 0.10);
+    --code-bg: #f3f4f8;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.10);
 }
 
 * {
@@ -596,6 +630,23 @@ body:has(.llm-banner) .app-header {
     background: var(--accent);
     color: white;
 }
+/* Task NNNN (#131): 主题切换按钮 (复用 .lang-opt 样式 + 共用 active) */
+.theme-opt {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.theme-opt:hover { color: var(--text); }
+.theme-opt.active {
+    background: var(--accent);
+    color: white;
+}
+.theme-switch { display: inline-flex; gap: 4px; padding: 2px; background: var(--bg-elev2); border: 1px solid var(--border); border-radius: 6px; }
 .icon-btn:hover {
     color: var(--text);
     border-color: var(--border-strong);
