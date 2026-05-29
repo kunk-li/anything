@@ -369,12 +369,16 @@ def install_quota_hooks(
     daily_usd_limit: Optional[float] = None,
     global_usd_limit: Optional[float] = None,
     rate_per_minute: Optional[int] = None,
+    registry=None,  # Task CCC (#89): 可注入 HookRegistry, 默认全局单例
 ) -> QuotaGuard:
-    """一行安装: 注册 pre_llm_call + pre_tool_call hook + 设置单例.
+    """一行安装: 注册 pre_llm_call + pre_tool_call hook + 设置 quota 单例.
 
     用法 (bootstrap 启动时):
-        from common_utils_module.utils.quota import install_quota_hooks
+        from quota_module import install_quota_hooks
         install_quota_hooks(daily_usd_limit=10.0, rate_per_minute=30)
+
+    Task CCC (#89): 加 registry 参数, 让 bootstrap 可注入隔离的 HookRegistry
+    (例: per-tenant registry / 测试 mock). 默认 None 时走全局单例 — back-compat.
     """
     if daily_usd_limit is None and global_usd_limit is None and rate_per_minute is None:
         # 都不设 → 从环境变量读
@@ -387,7 +391,7 @@ def install_quota_hooks(
     else:
         configure_quota(daily_usd_limit, global_usd_limit, rate_per_minute)
     guard = get_quota_guard()
-    reg = get_hook_registry()
+    reg = registry if registry is not None else get_hook_registry()
 
     def quota_pre_llm(prompt, model, ctx):
         # LLM 调用前: 主要看 rate limit; cost 还不知道, 先 0

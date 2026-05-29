@@ -165,15 +165,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def install_audit_hooks(path: Optional[str] = None) -> AuditLogger:
+def install_audit_hooks(path: Optional[str] = None, registry=None) -> AuditLogger:
     """一行安装: 注册 pre/post_tool_call + pre/post_llm_call hook + 单例.
 
     用法 (bootstrap 启动时):
         install_audit_hooks()                            # 默认 run/audit.log.jsonl
         install_audit_hooks(path="/var/log/anything/audit.jsonl")
+
+    Task CCC (#89): 加 registry 参数, 让 bootstrap 可注入隔离的 HookRegistry.
+    默认 None 时走全局单例 — back-compat.
     """
     logger = configure_audit_logger(path=path)
-    reg = get_hook_registry()
+    reg = registry if registry is not None else get_hook_registry()
 
     def on_pre_tool(tool_name, input_data, ctx):
         # 仅记入参 keys (脱敏)
