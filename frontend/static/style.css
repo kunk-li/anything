@@ -1839,6 +1839,48 @@ body.has-drag .chat-pane::before {
     font-style: italic;
 }
 
+/* Task NNN (#100): Reflection 详情 modal */
+.reflect-section {
+    margin: 12px 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+.reflect-section:last-child { border-bottom: none; }
+.reflect-section h4 {
+    font-size: 13px;
+    margin: 0 0 6px 0;
+    color: var(--text);
+}
+.reflect-meta-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.reflect-list {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 0;
+}
+.reflect-list li {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+}
+.reflect-raw {
+    background: var(--bg-soft, rgba(255,255,255,0.04));
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: auto;
+    max-height: 200px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 /* Task LLL (#98): admin tab 内子分组样式 */
 .admin-subsection {
     margin-top: 10px;

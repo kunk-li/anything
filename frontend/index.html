@@ -392,6 +392,46 @@
         </div>
     </div>
 
+    <!-- ============== Task NNN (#100): Reflection critique 详情 modal ============== -->
+    <div class="drawer" id="reflect-drawer" hidden>
+        <div class="drawer-backdrop" data-close="reflect"></div>
+        <div class="drawer-panel">
+            <div class="drawer-header">
+                <h3 data-i18n="reflect.modal.title">✨ Reflection 反思详情</h3>
+                <button class="icon-btn" data-close="reflect" aria-label="close">✕</button>
+            </div>
+            <div class="drawer-body">
+                <div class="reflect-section">
+                    <div class="reflect-meta-row">
+                        <span class="chip" id="reflect-quality">quality=-</span>
+                        <span class="chip" id="reflect-llm-calls">LLM 调用 -</span>
+                        <span class="chip" id="reflect-cost-ms">- ms</span>
+                    </div>
+                </div>
+                <div class="reflect-section">
+                    <h4 data-i18n="reflect.modal.issues">🔍 发现的问题</h4>
+                    <ul class="reflect-list" id="reflect-issues">
+                        <li class="empty-state">(无)</li>
+                    </ul>
+                </div>
+                <div class="reflect-section">
+                    <h4 data-i18n="reflect.modal.missing">📋 缺失信息</h4>
+                    <ul class="reflect-list" id="reflect-missing">
+                        <li class="empty-state">(无)</li>
+                    </ul>
+                </div>
+                <div class="reflect-section" id="reflect-skip-section" hidden>
+                    <h4 data-i18n="reflect.modal.skipped">⏭ 跳过原因</h4>
+                    <div class="empty-state" id="reflect-skip-reason"></div>
+                </div>
+                <div class="reflect-section">
+                    <h4 data-i18n="reflect.modal.raw">📄 完整 critique (JSON)</h4>
+                    <pre class="reflect-raw" id="reflect-raw"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============== Toast ============== -->
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 

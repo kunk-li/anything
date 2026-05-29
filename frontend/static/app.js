@@ -98,6 +98,16 @@
         memorySearchInput: $('memory-search-input'),
         memorySearchBtn: $('memory-search-btn'),
         memoryTagFilter: $('memory-tag-filter'),
+        // Task NNN (#100): Reflection 详情 modal
+        reflectDrawer: $('reflect-drawer'),
+        reflectQuality: $('reflect-quality'),
+        reflectLlmCalls: $('reflect-llm-calls'),
+        reflectCostMs: $('reflect-cost-ms'),
+        reflectIssues: $('reflect-issues'),
+        reflectMissing: $('reflect-missing'),
+        reflectSkipSection: $('reflect-skip-section'),
+        reflectSkipReason: $('reflect-skip-reason'),
+        reflectRaw: $('reflect-raw'),
     };
 
     // 当前正在跑的 WebSocket 句柄 (用于"停止"按钮中断)
@@ -1188,16 +1198,17 @@
                     .join('\n');
                 meta.appendChild(m);
             }
-            // Task KKK (#97): Reflection 反思徽章 (III #95 注入的 details.reflection)
+            // Task KKK (#97) / NNN (#100): Reflection 反思徽章 (点击弹详情 modal)
             if (msg.meta.reflection) {
                 const r = document.createElement('span');
                 r.className = 'chip reflect-chip';
-                r.style.cssText = 'color:#22c55e;border-color:#22c55e;';
+                r.style.cssText = 'color:#22c55e;border-color:#22c55e;cursor:pointer;';
                 const refl = msg.meta.reflection;
                 const qStr = refl.overall_quality != null
                     ? ` (q=${refl.overall_quality}→改进)` : '';
                 r.textContent = '✨ 反思已应用' + qStr;
-                r.title = JSON.stringify(refl.critique || refl, null, 2);
+                r.title = '点击查看详细 critique';
+                r.addEventListener('click', () => openReflectModal(refl));
                 meta.appendChild(r);
             }
             if (msg.meta.traceId) {
@@ -2202,6 +2213,68 @@
         els.planDrawer.addEventListener('click', handleBackdrop);
 
         openDrawer('plan');
+    }
+
+    // ---------- Task NNN (#100): Reflection 详情 modal ----------
+    /**
+     * 弹出 Reflection meta 详情, 显示 critique issues / missing_info / 修订耗时.
+     * meta 结构 (III #95 产出):
+     *   {
+     *     critique: {issues:[], missing_info:[], overall_quality:1-5, should_revise:bool},
+     *     n_issues, overall_quality, llm_calls, cost_ms,
+     *     skipped?: 'no_llm' | 'critique_llm_failed' | 'critique_json_parse_failed' |
+     *               'skipped_revise' | 'revise_llm_failed' | 'revise_empty',
+     *     err?: str,
+     *   }
+     */
+    function openReflectModal(refl) {
+        if (!els.reflectDrawer) return;
+        // chips
+        els.reflectQuality.textContent = `quality=${refl.overall_quality != null ? refl.overall_quality : '-'}`;
+        els.reflectLlmCalls.textContent = `LLM 调用 ${refl.llm_calls != null ? refl.llm_calls : '-'}`;
+        els.reflectCostMs.textContent = `${refl.cost_ms != null ? refl.cost_ms : '-'} ms`;
+
+        const critique = refl.critique || {};
+        // issues
+        const issues = (critique.issues || []).filter(Boolean);
+        if (issues.length) {
+            els.reflectIssues.innerHTML = issues.map(
+                i => `<li>${escapeHtml(String(i))}</li>`
+            ).join('');
+        } else {
+            els.reflectIssues.innerHTML = '<li class="empty-state">(无)</li>';
+        }
+        // missing_info
+        const missing = (critique.missing_info || []).filter(Boolean);
+        if (missing.length) {
+            els.reflectMissing.innerHTML = missing.map(
+                m => `<li>${escapeHtml(String(m))}</li>`
+            ).join('');
+        } else {
+            els.reflectMissing.innerHTML = '<li class="empty-state">(无)</li>';
+        }
+        // skipped 原因
+        if (refl.skipped) {
+            els.reflectSkipSection.hidden = false;
+            els.reflectSkipReason.textContent = `${refl.skipped}${refl.err ? ' — ' + refl.err : ''}`;
+        } else {
+            els.reflectSkipSection.hidden = true;
+        }
+        // raw JSON
+        try {
+            els.reflectRaw.textContent = JSON.stringify(refl, null, 2);
+        } catch (_) {
+            els.reflectRaw.textContent = String(refl);
+        }
+
+        const handleBackdrop = (e) => {
+            if (e.target && e.target.matches('[data-close="reflect"]')) {
+                els.reflectDrawer.removeEventListener('click', handleBackdrop);
+                closeDrawer('reflect');
+            }
+        };
+        els.reflectDrawer.addEventListener('click', handleBackdrop);
+        openDrawer('reflect');
     }
 
     // ---------- Toast ----------
