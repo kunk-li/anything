@@ -187,6 +187,23 @@
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
 
+        // Task GGGG (#124): 欢迎屏 example prompt 卡片 click → 切 mode + 填输入框
+        document.addEventListener('click', (e) => {
+            const card = e.target.closest('.welcome-example');
+            if (!card) return;
+            const mode = card.dataset.mode;
+            const prompt = card.dataset.prompt;
+            if (mode) {
+                const tab = document.querySelector(`.mode-tab[data-mode="${mode}"]`);
+                if (tab) tab.click();
+            }
+            if (prompt && els.inputText) {
+                els.inputText.value = prompt;
+                els.inputText.focus();
+                els.inputText.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+
         // Task KKK (#97): 长期记忆面板 — 工厂注入 deps + bindEvents
         if (window.AnythingApp && window.AnythingApp.memoryPanel) {
             const memPanel = window.AnythingApp.memoryPanel({ els, t, toast, escapeHtml });
@@ -1514,15 +1531,36 @@
     function renderHistory() {
         els.messages.innerHTML = '';
         if (!state.history.length) {
-            // 重新插入欢迎块 (复用 data-i18n 让 setLocale 也能刷新)
+            // 重新插入欢迎块 + GGGG (#124) 示例 prompt 卡片
             els.messages.innerHTML = `<div class="welcome">
-                <h2 data-i18n="welcome.title"></h2>
-                <p data-i18n="welcome.desc"></p>
-                <ul class="hint-list">
-                    <li data-i18n="welcome.hint.rag"></li>
-                    <li data-i18n="welcome.hint.agent"></li>
-                    <li data-i18n="welcome.hint.hybrid"></li>
-                </ul>
+                <h2 data-i18n="welcome.title">欢迎使用 Anything</h2>
+                <p data-i18n="welcome.desc">RAG 检索 / Agent 任务执行 / Hybrid 混合, 选择模式后输入开始对话.</p>
+                <div class="welcome-examples">
+                    <div class="welcome-example-row">
+                        <button class="welcome-example" data-mode="agent" data-prompt="现在北京几点">
+                            <span class="we-icon">🕒</span><span class="we-text">现在北京几点</span><span class="we-tag">Agent</span>
+                        </button>
+                        <button class="welcome-example" data-mode="agent" data-prompt="12345 乘以 67890 等于多少">
+                            <span class="we-icon">🧮</span><span class="we-text">12345 × 67890 = ?</span><span class="we-tag">Agent</span>
+                        </button>
+                    </div>
+                    <div class="welcome-example-row">
+                        <button class="welcome-example" data-mode="agent" data-prompt="北京天气怎么样">
+                            <span class="we-icon">🌤</span><span class="we-text">北京天气怎么样</span><span class="we-tag">Agent</span>
+                        </button>
+                        <button class="welcome-example" data-mode="agent" data-prompt="维基百科查一下 Python 编程语言">
+                            <span class="we-icon">📖</span><span class="we-text">查 Python 维基</span><span class="we-tag">Agent</span>
+                        </button>
+                    </div>
+                    <div class="welcome-example-row">
+                        <button class="welcome-example" data-mode="rag" data-prompt="什么是 RAG">
+                            <span class="we-icon">🔍</span><span class="we-text">什么是 RAG</span><span class="we-tag">RAG</span>
+                        </button>
+                        <button class="welcome-example" data-mode="hybrid" data-prompt="项目里 tenant 是怎么设计的">
+                            <span class="we-icon">🧩</span><span class="we-text">tenant 是怎么设计的</span><span class="we-tag">Hybrid</span>
+                        </button>
+                    </div>
+                </div>
             </div>`;
             if (window.I18n) window.I18n.applyToDom(els.messages);
             return;

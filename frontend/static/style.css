@@ -667,6 +667,60 @@ body.has-drag .chat-pane::before {
 .welcome .hint-list li:last-child { border-bottom: none; }
 .welcome b { color: var(--accent); font-family: var(--mono); }
 
+/* Task GGGG (#124): 欢迎屏 example prompt 卡片 */
+.welcome-examples {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 28px;
+    text-align: left;
+}
+.welcome-example-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.welcome-example {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 120ms;
+    color: var(--text);
+    text-align: left;
+    font-size: 13px;
+    width: 100%;
+    text-align: left;
+}
+.welcome-example:hover {
+    border-color: var(--accent, #4f8cff);
+    background: var(--bg-soft, rgba(79,140,255,0.08));
+    transform: translateY(-1px);
+}
+.welcome-example .we-icon { font-size: 18px; flex-shrink: 0; }
+.welcome-example .we-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.welcome-example .we-tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--accent-soft, rgba(79,140,255,0.18));
+    color: var(--accent, #4f8cff);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+@media (max-width: 700px) {
+    .welcome-example-row { grid-template-columns: 1fr; }
+}
+
 /* 单条消息 */
 .message {
     display: flex;

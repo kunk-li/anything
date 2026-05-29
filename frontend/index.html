@@ -79,12 +79,46 @@
             <div class="messages" id="messages" aria-live="polite">
                 <div class="welcome">
                     <h2 data-i18n="welcome.title">欢迎使用 Anything</h2>
-                    <p data-i18n="welcome.desc">RAG 检索 / Agent 任务执行 / Hybrid 混合,选择模式后输入开始对话。</p>
-                    <ul class="hint-list">
-                        <li data-i18n="welcome.hint.rag"></li>
-                        <li data-i18n="welcome.hint.agent"></li>
-                        <li data-i18n="welcome.hint.hybrid"></li>
-                    </ul>
+                    <p data-i18n="welcome.desc">RAG 检索 / Agent 任务执行 / Hybrid 混合, 选择模式后输入开始对话.</p>
+                    <!-- Task GGGG (#124): 删空 i18n hint-list, 改成可点击 example prompt 卡片 -->
+                    <div class="welcome-examples" id="welcome-examples">
+                        <div class="welcome-example-row">
+                            <button class="welcome-example" data-mode="agent" data-prompt="现在北京几点">
+                                <span class="we-icon">🕒</span>
+                                <span class="we-text">现在北京几点</span>
+                                <span class="we-tag">Agent</span>
+                            </button>
+                            <button class="welcome-example" data-mode="agent" data-prompt="12345 乘以 67890 等于多少">
+                                <span class="we-icon">🧮</span>
+                                <span class="we-text">12345 × 67890 = ?</span>
+                                <span class="we-tag">Agent</span>
+                            </button>
+                        </div>
+                        <div class="welcome-example-row">
+                            <button class="welcome-example" data-mode="agent" data-prompt="北京天气怎么样">
+                                <span class="we-icon">🌤</span>
+                                <span class="we-text">北京天气怎么样</span>
+                                <span class="we-tag">Agent</span>
+                            </button>
+                            <button class="welcome-example" data-mode="agent" data-prompt="维基百科查一下 Python 编程语言">
+                                <span class="we-icon">📖</span>
+                                <span class="we-text">查 Python 维基</span>
+                                <span class="we-tag">Agent</span>
+                            </button>
+                        </div>
+                        <div class="welcome-example-row">
+                            <button class="welcome-example" data-mode="rag" data-prompt="什么是 RAG">
+                                <span class="we-icon">🔍</span>
+                                <span class="we-text">什么是 RAG</span>
+                                <span class="we-tag">RAG</span>
+                            </button>
+                            <button class="welcome-example" data-mode="hybrid" data-prompt="项目里 tenant 是怎么设计的">
+                                <span class="we-icon">🧩</span>
+                                <span class="we-text">tenant 是怎么设计的</span>
+                                <span class="we-tag">Hybrid</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -518,21 +552,21 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=123"></script>
-    <script src="/static/i18n.js?v=123"></script>
-    <script src="/static/markdown.js?v=123"></script>
+    <script src="/static/api.js?v=124"></script>
+    <script src="/static/i18n.js?v=124"></script>
+    <script src="/static/markdown.js?v=124"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=123"></script>
-    <script src="/static/modules/export.js?v=123"></script>
-    <script src="/static/modules/health.js?v=123"></script>
-    <script src="/static/modules/upload-manager.js?v=123"></script>
-    <script src="/static/modules/admin-panel.js?v=123"></script>
-    <script src="/static/modules/models-admin.js?v=123"></script>
+    <script src="/static/modules/ui-helpers.js?v=124"></script>
+    <script src="/static/modules/export.js?v=124"></script>
+    <script src="/static/modules/health.js?v=124"></script>
+    <script src="/static/modules/upload-manager.js?v=124"></script>
+    <script src="/static/modules/admin-panel.js?v=124"></script>
+    <script src="/static/modules/models-admin.js?v=124"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=123"></script>
+    <script src="/static/modules/memory-panel.js?v=124"></script>
 
-    <script src="/static/app.js?v=123"></script>
+    <script src="/static/app.js?v=124"></script>
 </body>
 </html>
