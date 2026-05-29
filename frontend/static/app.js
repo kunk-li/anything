@@ -1542,6 +1542,47 @@
                 li.appendChild(cards);
             }
 
+            // Task QQQ (#103): spawn_subagent 嵌套可视化
+            // obsData 来自 spawn_subagent 工具返的 data: {answer, iterations_used,
+            //   tool_results_summary, allowed_tools, role}
+            if (toolName === 'spawn_subagent' && obsData && (obsData.answer != null || obsData.tool_results_summary)) {
+                const subWrap = document.createElement('details');
+                subWrap.className = 'subagent-card';
+                subWrap.open = true;
+                const role = obsData.role || '(默认)';
+                const iters = obsData.iterations_used != null ? obsData.iterations_used : '?';
+                const subTools = (obsData.tool_results_summary || []);
+                const subToolsHtml = subTools.length
+                    ? subTools.map(tr => `
+                        <li class="subagent-tool ${tr.success ? 'ok' : 'fail'}">
+                            ${tr.success ? '✓' : '✗'} <code>${escapeHtml(tr.tool_name || '?')}</code>
+                        </li>`).join('')
+                    : '<li class="empty-state">(无子工具调用)</li>';
+                const allowedChips = (obsData.allowed_tools || []).slice(0, 8)
+                    .map(tn => `<span class="subagent-allowed-tool">${escapeHtml(tn)}</span>`).join('');
+                subWrap.innerHTML = `
+                    <summary class="subagent-summary">
+                        🤖 子 Agent <span class="subagent-role">role=${escapeHtml(role)}</span>
+                        <span class="subagent-stats">${iters} 轮 · ${subTools.length} 工具调用</span>
+                    </summary>
+                    <div class="subagent-body">
+                        <div class="subagent-section">
+                            <strong>可用工具:</strong>
+                            <div class="subagent-allowed">${allowedChips || '<span class="empty-state">(继承全部)</span>'}</div>
+                        </div>
+                        <div class="subagent-section">
+                            <strong>子工具调用:</strong>
+                            <ul class="subagent-tool-list">${subToolsHtml}</ul>
+                        </div>
+                        <div class="subagent-section">
+                            <strong>子 Agent 最终答案:</strong>
+                            <div class="subagent-answer">${escapeHtml((obsData.answer || '').slice(0, 500))}${(obsData.answer || '').length > 500 ? ' …' : ''}</div>
+                        </div>
+                    </div>
+                `;
+                li.appendChild(subWrap);
+            }
+
             els.stepList.appendChild(li);
         });
         // 自动滚动到最新一步
