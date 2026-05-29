@@ -27,6 +27,14 @@ from common_utils_module import BlockedError, get_hook_registry
 class ReActEngineMixin:
     """ReAct 多轮规划循环 + Plan mode 早出."""
 
+    # Task YY (#85): 走 DI 拿 hook_registry — 优先 deps 注入, fallback 全局单例.
+    # 让单元测试可以注入隔离的 HookRegistry, 避免全局单例残留 hook 污染下条测试.
+    def _hook_registry(self):
+        deps = getattr(self, "deps", None)
+        if deps is not None and getattr(deps, "hook_registry", None) is not None:
+            return deps.hook_registry
+        return get_hook_registry()
+
     def _react_execute(
             self,
             task: str,
@@ -179,7 +187,7 @@ class ReActEngineMixin:
                 "iteration": iteration, "phase": "react",
             }
             try:
-                new_input = get_hook_registry().fire(
+                new_input = self._hook_registry().fire(
                     "pre_tool_call", tool_name, tool_input, hook_ctx,
                 )
                 if isinstance(new_input, dict):
@@ -212,7 +220,7 @@ class ReActEngineMixin:
 
             # Task Z (#60): post_tool_call hook
             try:
-                new_result = get_hook_registry().fire(
+                new_result = self._hook_registry().fire(
                     "post_tool_call", tool_name, tool_input, tool_result, hook_ctx,
                 )
                 if isinstance(new_result, dict):

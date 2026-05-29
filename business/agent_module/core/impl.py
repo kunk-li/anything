@@ -65,6 +65,10 @@ class SimpleAgent(
         self.logger = deps.logger
         self.config = deps.config
         self.exception_handler = deps.exception_handler
+        # Task YY (#85): 暴露 deps 给 mixin 走 DI 拿 cross-cutting registries
+        # (deps.hook_registry / deps.audit_logger / 等). mixin 通过 self.deps
+        # 优先访问; None 时 fallback get_X() 全局单例.
+        self.deps = deps
 
         # LLM 规划器: 可显式注入 callable (prompt -> str);
         # 未注入时回退到 tool_registry["llm_generate"]
