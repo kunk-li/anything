@@ -522,6 +522,67 @@ body {
         padding: 10px;
         font-size: 11px;
     }
+
+    /* Task XXXX-16 (#163): 移动端补漏 — XXXX 系列新加的 UI 在窄屏校验 */
+
+    /* 欢迎屏 example 卡片: 改单列堆叠 (不再 2 列) */
+    .welcome-example-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+    .welcome-example {
+        width: 100%;
+    }
+    .we-text { font-size: 13px; }
+
+    /* workflow 行: 紧凑 + 不换行 (两按钮挤一行不会太密) */
+    .workflows-bar {
+        gap: 6px;
+    }
+    .workflows-bar .small-btn {
+        font-size: 11px;
+        padding: 4px 8px;
+    }
+
+    /* 快捷键 modal: kbd + desc 改成上下堆叠 (横向放不下) */
+    .kb-row {
+        flex-wrap: wrap;
+        align-items: baseline;
+    }
+    .kb-row .kb-desc {
+        flex-basis: 100%;
+        margin-left: 0;
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-top: 2px;
+    }
+
+    /* 主题切换 3 按钮: 缩小 + 单行 */
+    .theme-opt {
+        font-size: 11px;
+        padding: 6px 8px;
+    }
+
+    /* 编辑消息 textarea 防爆 */
+    .msg-edit-textarea {
+        font-size: 13px;
+    }
+
+    /* sessions sidebar 搜索框: 触摸不至于点歪 */
+    #sessions-search-input {
+        font-size: 14px;  /* 防 iOS auto-zoom */
+        padding: 8px 10px;
+    }
+
+    /* admin sub-tabs 在窄屏: 改 horizontal scroll 而非 wrap 撞乱 */
+    .admin-subnav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .admin-subtab {
+        flex-shrink: 0;
+    }
 }
 
 /* ===== 触摸优化: 任何带触摸的设备 ===== */
@@ -1245,7 +1306,8 @@ body.has-drag .chat-pane::before {
 
 .composer {
     flex-shrink: 0;
-    padding: 12px 24px 16px;
+    /* Task XXXX-16 (#163): 底部 safe-area-inset 让 iPhone 刘海屏底部安全区垫起来 */
+    padding: 12px 24px calc(16px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: var(--bg-elev);
 }
