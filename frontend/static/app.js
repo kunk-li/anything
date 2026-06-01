@@ -1769,6 +1769,29 @@
         }, 1000);
     }
 
+    // Task XXXX-3 (#150): 给 assistant message body 加单条复制按钮 (右上 hover 显)
+    function _attachMessageCopyButton(body, rawText) {
+        if (!body || !rawText) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'msg-copy-btn';
+        btn.title = '复制本条消息';
+        btn.textContent = '📋';
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(rawText);
+                btn.textContent = '✓';
+                setTimeout(() => { btn.textContent = '📋'; }, 1200);
+                toast('success', '已复制', '');
+            } catch (err) {
+                toast('error', '复制失败', err.message);
+            }
+        });
+        body.style.position = 'relative';  // 让 absolute 按钮挂得住
+        body.appendChild(btn);
+    }
+
     // Task VVVV (#146): 给消息里每张图加 hover 出现的下载按钮
     function _attachImageDownloadButtons(root) {
         if (!root) return;
@@ -2041,6 +2064,8 @@
             window.Markdown.bindCopyButtons(body);
             // Task VVVV (#146): 给每张 <img> 包 wrapper + 下载按钮
             _attachImageDownloadButtons(body);
+            // Task XXXX-3 (#150): 加单条复制按钮
+            _attachMessageCopyButton(body, msg.content || '');
         } else {
             body.textContent = msg.content || '';
         }
