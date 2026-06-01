@@ -167,20 +167,23 @@ def _load_dotenv_if_exists() -> None:
 
     解析规则:
         - 跳过空行 / # 开头注释
-        - "KEY=value" 格式, value 两端的 " 或 ' 引号会被剥除
+        - "KEY=value" 格式 (= 两侧空格会 strip), value 两端的 " 或 ' 引号会被剥除
         - 已设置的环境变量不会被 .env 覆盖(env > .env)
 
-    定位策略:
-        - 当前 cwd / .env
+    定位策略 (按顺序探, 找到第一个就加载停止):
+        1. ANYTHING_DOTENV_PATH 环境变量显式指定
+        2. cwd / .env
+        3. cwd 向上找 (最多 5 层), 适配从 run/ 启动但 .env 在上一层的情况
+        4. 项目根启发 — 找到含 'basic_support' 子目录的最近祖先, 在那里找 .env
         - 找不到也不报错(可选机制)
     """
     from pathlib import Path
-    candidates = [Path.cwd() / ".env"]
-    for env_file in candidates:
-        if not env_file.exists():
-            continue
+
+    def _try_load(p: Path) -> bool:
+        if not p.exists() or not p.is_file():
+            return False
         try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
+            for line in p.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
@@ -189,13 +192,40 @@ def _load_dotenv_if_exists() -> None:
                 v = v.strip()
                 if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                     v = v[1:-1]
-                # 现有环境变量优先, 不被 .env 覆盖
                 if k and k not in os.environ:
                     os.environ[k] = v
         except Exception:
-            # 任何解析错误静默忽略, .env 是可选机制
             pass
-        return  # 只加载第一个找到的
+        return True
+
+    # 1. 显式指定
+    explicit = os.environ.get("ANYTHING_DOTENV_PATH", "").strip()
+    if explicit and _try_load(Path(explicit)):
+        return
+
+    # 2. cwd
+    if _try_load(Path.cwd() / ".env"):
+        return
+
+    # 3. cwd 向上找 5 层
+    cur = Path.cwd().resolve()
+    for _ in range(5):
+        parent = cur.parent
+        if parent == cur:
+            break
+        if _try_load(parent / ".env"):
+            return
+        cur = parent
+
+    # 4. 项目根启发: 沿 __file__ 上溯, 找含 basic_support 子目录的祖先
+    try:
+        here = Path(__file__).resolve()
+        for ancestor in [here] + list(here.parents):
+            if (ancestor / "basic_support").is_dir() and (ancestor / ".env").exists():
+                _try_load(ancestor / ".env")
+                return
+    except Exception:
+        pass
 
 
 def build_basic_deps() -> BasicDeps:
