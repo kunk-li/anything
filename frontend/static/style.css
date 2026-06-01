@@ -6,35 +6,68 @@
  *   - 响应式:>1100px 双栏, 600-1100px 单栏 + 抽屉侧栏, <600px 单栏 + 折叠
  * ============================================================ */
 
-:root, :root[data-theme="dark"] {
-    /* 视觉改版: 灰阶层次拉开 (bg < elev < surface < elev2), 让卡片浮得起来 */
-    --bg: #0b0d12;
-    --bg-elev: #14171d;
-    --bg-elev2: #1d212b;
-    --surface: #171b23;        /* 消息气泡 / 卡片底, 比 bg-elev 略亮一档 */
-    --border: #262b37;
-    --border-strong: #39414f;
-    --text: #e8ebf1;
+/* ===== 暖色配色 (赤陶橙) — dark 主题: 暖深褐底 + 亮橙, 不是冷黑冷蓝 =====
+   注意: 默认主题已改为 light (暖奶油). dark 仅覆盖颜色, radius/字体/transition 继承 :root(light). */
+:root[data-theme="dark"] {
+    --bg: #1a1613;
+    --bg-elev: #221d18;
+    --bg-elev2: #2c2620;
+    --surface: #241e18;
+    --border: #393026;
+    --border-strong: #4d4234;
+    --text: #ece4d8;
     --text-strong: #ffffff;
-    --text-dim: #a6adbd;
-    --text-faint: #6f7789;
-    --accent: #7c9bff;         /* 提亮的主蓝, 更鲜活 */
-    --accent-strong: #5f80f6;
-    --accent-soft: rgba(124, 155, 255, 0.16);
-    --accent-glow: rgba(124, 155, 255, 0.38);
-    --primary: #3b66ea;
-    --primary-hover: #3257d6;
-    --primary-soft: rgba(124, 155, 255, 0.18);
-    --bg-soft: rgba(140, 152, 178, 0.10);
-    --success: #4ade80;
-    --warning: #facc15;
-    --danger: #f87171;
-    --danger-soft: rgba(248, 113, 113, 0.16);
-    --code-bg: #0c0e13;
+    --text-dim: #b6ab97;
+    --text-faint: #807665;
+    --accent: #e58050;          /* 亮赤陶橙 (深底用更亮) */
+    --accent-strong: #c8613f;
+    --accent-soft: rgba(229, 128, 80, 0.15);
+    --accent-glow: rgba(229, 128, 80, 0.34);
+    --primary: #d4693c;
+    --primary-hover: #bb5531;
+    --primary-soft: rgba(229, 128, 80, 0.18);
+    --bg-soft: rgba(230, 208, 178, 0.07);
+    --success: #5fb574;
+    --warning: #e0a93f;
+    --danger: #e26b4f;
+    --danger-soft: rgba(226, 107, 79, 0.18);
+    --code-bg: #15110d;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
     --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.42);
     --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.58);
-    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.045);  /* 卡片顶部高光线 */
+    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Task NNNN (#131): 亮色主题 — 用 data-theme="light" 切换 */
+/* ===== 默认主题 = 暖奶油 + 赤陶橙 (Claude 风) — 浅色暖调, 告别黑+蓝 ===== */
+:root, :root[data-theme="light"] {
+    --bg: #f5f1ea;             /* 奶油米白 */
+    --bg-elev: #efe9dd;        /* 略深的米 (左右栏 / header) */
+    --bg-elev2: #e7dfd0;       /* 更深 (输入框 / 标签底) */
+    --surface: #ffffff;        /* 卡片 / 消息气泡 纯白 */
+    --border: #e5ddce;
+    --border-strong: #d6ccb7;
+    --text: #2b2620;           /* 暖墨 */
+    --text-strong: #18130d;
+    --text-dim: #6e6453;       /* 暖灰 */
+    --text-faint: #9c9482;
+    --accent: #c2603e;         /* 赤陶橙 — 文字 / 强调 / 图标 */
+    --accent-strong: #a44a2d;
+    --accent-soft: rgba(194, 96, 62, 0.12);
+    --accent-glow: rgba(194, 96, 62, 0.26);
+    --primary: #b8542f;        /* 主按钮深赤陶 (白字对比达标) */
+    --primary-hover: #9e4527;
+    --primary-soft: rgba(194, 96, 62, 0.14);
+    --bg-soft: rgba(120, 100, 70, 0.07);
+    --success: #3f9456;
+    --warning: #b9791f;
+    --danger: #c0492f;
+    --danger-soft: rgba(192, 73, 47, 0.12);
+    --code-bg: #efe9dd;
+    --shadow-sm: 0 1px 2px rgba(90, 70, 45, 0.08);
+    --shadow-md: 0 6px 18px rgba(90, 70, 45, 0.12);
+    --shadow-lg: 0 16px 44px rgba(90, 70, 45, 0.18);
+    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.8);
     --radius: 12px;
     --radius-sm: 8px;
     --radius-lg: 16px;
@@ -42,37 +75,6 @@
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
         "Microsoft YaHei", system-ui, sans-serif;
-}
-
-/* Task NNNN (#131): 亮色主题 — 用 data-theme="light" 切换 */
-:root[data-theme="light"] {
-    --bg: #ffffff;
-    --bg-elev: #f7f8fa;
-    --bg-elev2: #eef0f4;
-    --border: #d8dce3;
-    --border-strong: #b8bfca;
-    --text: #1a1d23;
-    --text-strong: #000000;
-    --text-dim: #5a6270;
-    --text-faint: #8a92a0;
-    --accent: #4f74f0;
-    --accent-strong: #3a5edb;
-    --accent-soft: rgba(79, 116, 240, 0.10);
-    --primary: #4f8cff;
-    --primary-hover: #3a78ed;
-    --primary-soft: rgba(79, 140, 255, 0.12);
-    --bg-soft: rgba(0, 0, 0, 0.04);
-    --success: #16a34a;
-    --warning: #d97706;
-    --danger: #dc2626;
-    --danger-soft: rgba(220, 38, 38, 0.10);
-    --code-bg: #f3f4f8;
-    --surface: #ffffff;
-    --accent-glow: rgba(79, 116, 240, 0.28);
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
-    --shadow-md: 0 6px 18px rgba(20, 30, 60, 0.10);
-    --shadow-lg: 0 14px 44px rgba(20, 30, 60, 0.14);
-    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 * {
@@ -95,7 +97,7 @@ html, body {
 /* 背景微光晕 — 打破大面积死黑, 给空间感与深度 (顶部中央极淡蓝光) */
 body {
     background:
-        radial-gradient(900px 460px at 50% -6%, rgba(124, 155, 255, 0.07), transparent 64%),
+        radial-gradient(900px 460px at 50% -6%, rgba(194, 96, 62, 0.07), transparent 64%),
         var(--bg);
 }
 
@@ -264,7 +266,7 @@ body {
     background: var(--bg-soft, rgba(127,127,127,0.12));
 }
 .session-item.active {
-    background: var(--primary-soft, rgba(79, 140, 255, 0.18));
+    background: var(--primary-soft, rgba(194, 96, 62, 0.18));
     color: var(--text-strong, #fff);
     font-weight: 500;
     box-shadow: inset 3px 0 0 var(--accent);
@@ -875,7 +877,7 @@ body.has-drag .chat-pane::before {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(108, 139, 245, 0.12);
+    background: rgba(194, 96, 62, 0.12);
     border: 3px dashed var(--accent);
     border-radius: var(--radius);
     color: var(--accent);
@@ -1071,7 +1073,7 @@ body.has-drag .chat-pane::before {
     align-items: center;
     justify-content: center;
     border-radius: 16px;
-    background: linear-gradient(150deg, var(--accent-soft), rgba(124, 155, 255, 0.02));
+    background: linear-gradient(150deg, var(--accent-soft), rgba(194, 96, 62, 0.02));
     border: 1px solid var(--border-strong);
     color: var(--accent);
     box-shadow: var(--shadow-md), var(--ring);
@@ -1877,7 +1879,7 @@ body.share-readonly .msg-feedback {
     color: var(--accent);
     font-size: 14px;
     font-weight: 600;
-    background: rgba(108, 139, 245, 0.08);
+    background: rgba(194, 96, 62, 0.08);
     pointer-events: none;
     border-radius: var(--radius);
 }
@@ -1951,13 +1953,13 @@ body.share-readonly .msg-feedback {
     display: flex;
     align-items: center;
     gap: 6px;
-    box-shadow: 0 2px 10px rgba(59, 102, 234, 0.45);
+    box-shadow: 0 2px 10px rgba(194, 96, 62, 0.45);
     transition: all var(--transition);
 }
 .send-btn:hover:not(:disabled) {
     background: var(--primary-hover);
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(59, 102, 234, 0.5);
+    box-shadow: 0 6px 18px rgba(194, 96, 62, 0.5);
 }
 .send-btn:disabled {
     opacity: 0.5;
@@ -2145,7 +2147,7 @@ body.share-readonly .msg-feedback {
     margin: 0;
 }
 .preview-text mark {
-    background: rgba(108, 139, 245, 0.3);
+    background: rgba(194, 96, 62, 0.3);
     color: var(--text);
     padding: 1px 2px;
     border-radius: 2px;
@@ -2167,7 +2169,7 @@ body.share-readonly .msg-feedback {
 .react-thought {
     margin-top: 6px;
     padding: 6px 10px;
-    background: rgba(108, 139, 245, 0.08);
+    background: rgba(194, 96, 62, 0.08);
     border-left: 3px solid var(--accent);
     border-radius: 3px;
     font-size: 12px;
@@ -2433,7 +2435,7 @@ body.share-readonly .msg-feedback {
     color: var(--text, #d4d4d4);
 }
 .admin-subtab.active {
-    background: var(--primary-soft, rgba(79, 140, 255, 0.18));
+    background: var(--primary-soft, rgba(194, 96, 62, 0.18));
     color: var(--primary, #4f8cff);
     border-color: var(--primary, #4f8cff);
     font-weight: 600;
@@ -2636,7 +2638,7 @@ body.share-readonly .msg-feedback {
     padding: 8px 18px;
     border-radius: var(--radius-sm);
     font-weight: 600;
-    box-shadow: 0 2px 10px rgba(59, 102, 234, 0.4);
+    box-shadow: 0 2px 10px rgba(194, 96, 62, 0.4);
     transition: all var(--transition);
 }
 .primary-btn:hover { background: var(--primary-hover); }

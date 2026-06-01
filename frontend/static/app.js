@@ -157,7 +157,7 @@
             sessionId: '',
             tenant: 'default',
             useStream: false,
-            theme: 'dark',  // Task NNNN (#131): dark/light/auto
+            theme: 'light',  // Task NNNN (#131): dark/light/auto — 默认暖奶油浅色
         },
     };
 
@@ -1396,7 +1396,7 @@
         els.sessionInput.value = state.settings.sessionId;
         els.tenantInput.value = state.settings.tenant;
         // Task NNNN (#131): 启动 apply 主题
-        _applyTheme(state.settings.theme || 'dark');
+        _applyTheme(state.settings.theme || 'light');
         // Task XXXX (#112): tenant 双向同步 — drawer input + header mini chip
         if (els.tenantInputDrawer) els.tenantInputDrawer.value = state.settings.tenant;
         if (els.tenantValue) els.tenantValue.textContent = state.settings.tenant || 'default';
