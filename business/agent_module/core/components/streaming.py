@@ -43,16 +43,36 @@ class StreamingMixin:
         yield {"type": "meta", "steps": [], "tool_results_summary": [],
                "citations": [], "retrieved_chunks": []}
         got_any = False
+        buf = []
         try:
             for token in self.llm_client.chat_stream(prompt=prompt, trace_id=trace_id):
                 if token:
                     got_any = True
+                    buf.append(str(token))
                     yield {"type": "chunk", "text": str(token)}
         except Exception as e:
             self.logger.warning(f"[agent-stream] chat_stream 异常, 降级: {e}")
             return False
         if not got_any:
             return False
+        # 关键 (后端单一数据源): 流式对话完成后, 持久化 user task + assistant answer
+        # 到 state_store. _save_state_safe 会读老 events 并 append 这两条 (merge,
+        # 不覆盖历史). 切会话/刷新页面时前端从后端拉, 不再丢失流式对话.
+        full_answer = "".join(buf)
+        try:
+            self._save_state_safe(
+                session_id=request.get("session_id"),
+                state={
+                    "status": "completed",
+                    "task": task,
+                    "answer": full_answer,
+                    "execution_mode": "agent",
+                    "updated_at": time.time(),
+                },
+                trace_id=trace_id,
+            )
+        except Exception as _save_err:
+            self.logger.warning(f"[agent-stream] 持久化失败(忽略): {_save_err}")
         yield {"type": "done", "code": "SUCCESS",
                "cost_time": round(time.time() - start_time, 3)}
         return True

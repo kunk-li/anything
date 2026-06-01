@@ -144,6 +144,9 @@
         sending: false,           // 兼容旧引用; 实际并发逻辑用 inflight Map
         // Task RRRR (#135): per-session 并发跟踪 — sid → { placeholderId, startedAt }
         inflight: new Map(),
+        // per-session 内存历史快照 — sid → messages[]. 切走会话时存当前 history,
+        // 切回时恢复 (含正在 streaming 未完成的消息). 修"切走再切回最新消息丢失".
+        sessionHistories: {},
         // 待发送的图片附件 [{id, file, previewUrl, status: 'pending'|'uploading'|'ready'|'failed', storedPath?}]
         pendingAttachments: [],
         settings: {
@@ -1031,6 +1034,10 @@
                 toast('error', '创建会话失败', '后端未返 session_id');
                 return;
             }
+            // 0. 存当前 session 到内存缓存 (含正在 streaming 的消息), 切回不丢
+            if (state.settings.sessionId) {
+                state.sessionHistories[state.settings.sessionId] = state.history;
+            }
             // 1. state + sessionInput 同步
             state.settings.sessionId = newId;
             if (els.sessionInput) els.sessionInput.value = newId;
@@ -1327,20 +1334,34 @@
     function switchSessionTo(sid) {
         if (!sid || sid === state.settings.sessionId) return;
         // Task RRRR (#135): 不再 stopSending — 多会话并行, 旧 session 的 inflight 让它跑完
+        const oldSid = state.settings.sessionId;
+        // 切走前: 把当前 session 的 history 存进内存缓存 (含正在 streaming 未完成的消息).
+        // 保存的是同一个数组引用, streaming 闭包的 updateMessage 仍能更新到它.
+        if (oldSid) {
+            state.sessionHistories[oldSid] = state.history;
+        }
+
         state.settings.sessionId = sid;
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
         ApiClient.configure(state.settings);
         _updateSendButtonUI();
         refreshSessions();
-        // 修复 (切会话残留): 切换前先强制清空 state.history, 避免 _loadSessionHistory
-        // 的 hadLocal 防护逻辑把上一个 session 的消息当作"本地备份"保留下来.
-        // 切换 = 用户明确换 session, 不存在"网络抖动要保护本地数据"的场景.
-        state.history = [];
-        if (els.messages) {
-            els.messages.innerHTML = '<div class="welcome"><p class="hint">加载中…</p></div>';
+
+        // 后端单一数据源原则: 默认从后端拉历史 (user + assistant 都已持久化到 state_store).
+        // 唯一例外: 目标 session 正在 streaming (后端还没最终数据) → 用内存缓存里的实时
+        // 累积内容; streaming 完成会持久化到后端, 之后切回就走后端.
+        const cached = state.sessionHistories[sid];
+        if (state.inflight.has(sid) && Array.isArray(cached)) {
+            state.history = cached;
+            renderHistory();
+        } else {
+            state.history = [];
+            if (els.messages) {
+                els.messages.innerHTML = '<div class="welcome"><p class="hint">加载中…</p></div>';
+            }
+            _loadSessionHistory(sid);
         }
-        _loadSessionHistory(sid);
         toast('info', '已切换会话', sid);
     }
 
@@ -2272,6 +2293,11 @@
                 },
                 onChunk: (text) => {
                     accumulated += text;
+                    // 同步到消息对象 content — 即使用户切走了会话, 内容也持久在该
+                    // session 缓存里; 切回时 renderHistory 显示全量 (不丢最新消息).
+                    const m = _findMsgAnywhere(placeholderId);
+                    if (m) { m.content = accumulated; m.streaming = true; }
+                    // 更新 DOM (仅当该 placeholder 当前显示时, appendStreamChunk 内部找节点)
                     appendStreamChunk(placeholderId, accumulated);
                 },
                 onMetadata: (m) => {
@@ -2868,16 +2894,32 @@
         return id;
     }
 
+    // 在当前 history + 所有 session 缓存里找一条消息对象 (streaming 切走时, 该消息
+    // 已被存进 sessionHistories, 不在当前 state.history). 返回对象引用或 null.
+    function _findMsgAnywhere(id) {
+        let m = state.history.find(x => x.id === id);
+        if (m) return m;
+        for (const sid in state.sessionHistories) {
+            const arr = state.sessionHistories[sid];
+            if (Array.isArray(arr)) {
+                m = arr.find(x => x.id === id);
+                if (m) return m;
+            }
+        }
+        return null;
+    }
+
     function updateMessage(id, patch) {
-        const idx = state.history.findIndex(m => m.id === id);
-        if (idx === -1) return;
-        Object.assign(state.history[idx], patch);
+        const msg = _findMsgAnywhere(id);
+        if (!msg) return;
+        Object.assign(msg, patch);
+        // DOM 节点只在该消息所属 session 当前显示时存在 → 自动只更新当前 session 的 DOM,
+        // streaming 切走的会话只更新数据 (缓存), 切回时 renderHistory 渲染最新.
         const node = els.messages.querySelector(`[data-id="${id}"]`);
         if (node) {
-            node.replaceWith(buildMessageNode(state.history[idx]));
+            node.replaceWith(buildMessageNode(msg));
+            scrollToBottom();
         }
-        scrollToBottom();
-        persistHistory();
     }
 
     function renderHistory() {
