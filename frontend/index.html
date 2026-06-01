@@ -238,25 +238,32 @@
                     </div>
                     <div class="composer-extras">
                         <!-- Task JJJJ (#127): 加 data-tip 自绘 tooltip, 解释每个 toggle 啥用 -->
+                        <!-- 主行: 流式 (常用) + 高级折叠器 -->
                         <label class="stream-toggle has-tip"
                                data-tip="流式 (Streaming): 答案逐字输出 (打字机效果), 速度感更好">
-                            <input type="checkbox" id="stream-toggle" />
+                            <input type="checkbox" id="stream-toggle" checked />
                             <span data-i18n="composer.stream">流式</span>
                         </label>
-                        <label class="stream-toggle has-tip"
-                               data-tip="计划模式 (Plan): Agent 先列工具调用计划, 等你审批再执行 (借鉴 Claude Code)">
-                            <input type="checkbox" id="plan-toggle" />
-                            <span data-i18n="composer.plan">计划</span>
-                        </label>
-                        <label class="stream-toggle has-tip"
-                               data-tip="反思 (Reflection): 答案出来后再让 LLM critique → revise 一次, 质量更高但慢 2 倍">
-                            <input type="checkbox" id="reflect-toggle" />
-                            <span data-i18n="composer.reflect">反思</span>
-                        </label>
-                        <label class="topk-input">
-                            <span data-i18n="composer.topk">top_k</span>
-                            <input type="number" id="topk-input" min="1" max="50" value="5" />
-                        </label>
+                        <!-- Task PM-6: plan / reflect / top_k 收进 details (默认收起 — 90% 用户不用) -->
+                        <details class="composer-advanced">
+                            <summary>⚙ 高级</summary>
+                            <label class="stream-toggle has-tip"
+                                   data-tip="计划模式 (Plan): Agent 先列工具调用计划, 等你审批再执行 (借鉴 Claude Code)">
+                                <input type="checkbox" id="plan-toggle" />
+                                <span data-i18n="composer.plan">计划</span>
+                            </label>
+                            <label class="stream-toggle has-tip"
+                                   data-tip="反思 (Reflection): 答案出来后再让 LLM critique → revise 一次, 质量更高但慢 2 倍">
+                                <input type="checkbox" id="reflect-toggle" />
+                                <span data-i18n="composer.reflect">反思</span>
+                            </label>
+                            <label class="topk-input">
+                                <span data-i18n="composer.topk">top_k</span>
+                                <input type="number" id="topk-input" min="1" max="50" value="5" />
+                            </label>
+                        </details>
+                        <!-- Task PM-7-6: 输入时的 token / cost 估算 (右对齐) -->
+                        <span class="cost-estimate" id="cost-estimate" hidden></span>
                     </div>
                 </div>
                 <!-- 拖拽附件预览 (有附件时才显示) -->
@@ -723,23 +730,23 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=167"></script>
-    <script src="/static/i18n.js?v=167"></script>
-    <script src="/static/markdown.js?v=167"></script>
+    <script src="/static/api.js?v=168"></script>
+    <script src="/static/i18n.js?v=168"></script>
+    <script src="/static/markdown.js?v=168"></script>
     <!-- Task XXXX-9 (#156): IndexedDB KV mirror (workflows / drafts 用) -->
-    <script src="/static/idb-store.js?v=167"></script>
+    <script src="/static/idb-store.js?v=168"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=167"></script>
-    <script src="/static/modules/export.js?v=167"></script>
-    <script src="/static/modules/health.js?v=167"></script>
-    <script src="/static/modules/upload-manager.js?v=167"></script>
-    <script src="/static/modules/admin-panel.js?v=167"></script>
-    <script src="/static/modules/models-admin.js?v=167"></script>
+    <script src="/static/modules/ui-helpers.js?v=168"></script>
+    <script src="/static/modules/export.js?v=168"></script>
+    <script src="/static/modules/health.js?v=168"></script>
+    <script src="/static/modules/upload-manager.js?v=168"></script>
+    <script src="/static/modules/admin-panel.js?v=168"></script>
+    <script src="/static/modules/models-admin.js?v=168"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=167"></script>
+    <script src="/static/modules/memory-panel.js?v=168"></script>
 
-    <script src="/static/app.js?v=167"></script>
+    <script src="/static/app.js?v=168"></script>
 </body>
 </html>

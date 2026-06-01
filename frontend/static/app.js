@@ -190,6 +190,13 @@
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
 
+        // Task PM-7-5: 检测 ?share=<sid> → 进入 read-only 模式
+        const shareParam = new URLSearchParams(location.search).get('share');
+        if (shareParam) {
+            _enterShareReadOnlyMode(shareParam);
+            return;  // 早出, 跳过 normal init 流程
+        }
+
         // Task PM-3: 启动后检测有没有可用 LLM, 没有就弹首启向导
         setTimeout(_maybeShowFirstRunWizard, 800);
         _bindFirstRunWizard();
@@ -361,6 +368,13 @@
         // 列表 <ul> 上用事件委托处理 item click / delete click
         if (els.sessionList) {
             els.sessionList.addEventListener('click', (e) => {
+                const shareBtn = e.target.closest('.session-item-share');
+                if (shareBtn) {
+                    e.stopPropagation();
+                    const sid = shareBtn.dataset.sid;
+                    if (sid) _shareSession(sid);
+                    return;
+                }
                 const delBtn = e.target.closest('.session-item-delete');
                 if (delBtn) {
                     e.stopPropagation();
@@ -428,6 +442,7 @@
                     <span class="session-item-name">${flag} ${escapeHtml(displayName)}</span>
                     <span class="session-item-meta">${escapeHtml(when)}</span>
                 </div>
+                <button class="session-item-share" data-sid="${escapeHtml(sid)}" title="分享只读链接给同事" aria-label="分享">🔗</button>
                 <button class="session-item-delete" data-sid="${escapeHtml(sid)}" title="删除会话" aria-label="删除">✕</button>
             </li>`);
         }
@@ -478,6 +493,59 @@
     // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
     function _resetSessionsPagination() {
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
+    // Task PM-7-6: 输入框 token / cost 粗估 (4 char ≈ 1 token, 单价照 Qwen-max 平均 $0.003/1K)
+    // 显示在 composer-extras 右侧. 准确性不是目标 — 让用户对 "大 prompt 烧钱" 有感.
+    function _updateCostEstimate() {
+        const el = document.getElementById('cost-estimate');
+        if (!el) return;
+        const text = els.inputText?.value || '';
+        if (text.length < 100) {
+            el.hidden = true;
+            return;
+        }
+        const inputTokens = Math.round(text.length / 4);
+        const estOutputTokens = 500;  // 假定 500 token 回答 (粗略)
+        const totalTokens = inputTokens + estOutputTokens;
+        // 单价: $0.003 / 1K (qwen-max 中间档), $0.001 是省钱档, $0.03 是 gpt-4o
+        const usd = (totalTokens / 1000) * 0.003;
+        el.hidden = false;
+        el.textContent = `≈ ${inputTokens.toLocaleString()} tok / $${usd.toFixed(4)}`;
+        el.title = `输入 ~${inputTokens} token + 预估回答 ~${estOutputTokens} token. 单价按 $0.003/1K 估 (qwen-max 档).`;
+    }
+
+    // Task PM-7-5: 进入 read-only 分享模式. 隐藏 composer + sidebar 操作, 拉远端 session 渲.
+    async function _enterShareReadOnlyMode(sid) {
+        document.body.classList.add('share-readonly');
+        // 顶部加个 banner 显这是分享内容
+        const banner = document.createElement('div');
+        banner.className = 'share-banner';
+        banner.innerHTML = `
+            🔗 你正在查看一段分享的对话 (只读). <a href="/">回到 Anything 主界面</a>
+        `;
+        document.body.insertBefore(banner, document.body.firstChild);
+
+        state.settings.sessionId = sid;
+        try {
+            await _loadSessionHistory(sid);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    // Task PM-7-5: 分享 session — 复制只读链接到剪贴板
+    // URL: /?share=<sid> 前端检测到 ?share= 时进入 read-only 模式 (隐藏 composer + 用 GET /sessions/{id} 渲)
+    async function _shareSession(sid) {
+        if (!sid) return;
+        const url = `${location.protocol}//${location.host}/?share=${encodeURIComponent(sid)}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            toast('success', '已复制分享链接', '同事打开会进入只读模式');
+        } catch (e) {
+            // 剪贴板失败 fallback: prompt 显内容
+            prompt('复制下面这个链接发给同事:', url);
+        }
     }
 
     // Task PM-7-3: per-session system prompt (存 localStorage, key by sid)
@@ -1407,6 +1475,7 @@
         // Task PM-4: 监听 input, 输入框首字符是 / 且光标在开头时弹 palette
         els.inputText.addEventListener('input', () => {
             _slashPaletteOnInput();
+            _updateCostEstimate();  // PM-7-6
         });
 
         // ========== 📷 文件选择按钮 (拖拽永远 fallback) ==========

@@ -1291,6 +1291,78 @@ body.has-drag .chat-pane::before {
     .firstrun-providers { grid-template-columns: 1fr; }
 }
 
+/* Task PM-6: 高级 details 折叠器, 把 plan/reflect/top_k 藏起来 */
+.composer-advanced {
+    display: inline-block;
+    margin: 0 4px;
+}
+.composer-advanced summary {
+    cursor: pointer;
+    padding: 4px 8px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+    user-select: none;
+    list-style: none;
+}
+.composer-advanced summary::-webkit-details-marker { display: none; }
+.composer-advanced summary:hover { color: var(--text); border-color: var(--accent); }
+.composer-advanced[open] {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.composer-advanced[open] summary { background: var(--accent-soft); border-color: var(--accent); }
+.composer-advanced > label,
+.composer-advanced > .topk-input { margin-left: 4px; }
+
+/* Task PM-7-6: 输入估算 (cost) */
+.cost-estimate {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-left: auto;
+    padding: 2px 8px;
+    background: var(--bg-elev);
+    border-radius: 10px;
+    font-family: var(--mono);
+}
+
+/* Task PM-7-5: share 按钮 + 分享 banner */
+.session-item-share {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 2px 6px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.session-item:hover .session-item-share { opacity: 0.7; }
+.session-item-share:hover { opacity: 1 !important; color: var(--accent); }
+.share-banner {
+    background: var(--accent-soft);
+    border-bottom: 1px solid var(--accent);
+    padding: 10px 24px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text);
+}
+.share-banner a { color: var(--accent); margin-left: 8px; }
+body.share-readonly .composer,
+body.share-readonly .sessions-sidebar-header,
+body.share-readonly .sessions-sidebar-toolbar,
+body.share-readonly .sessions-search,
+body.share-readonly .msg-edit-btn,
+body.share-readonly .msg-regen-btn,
+body.share-readonly .msg-fb-btn,
+body.share-readonly .msg-feedback {
+    display: none !important;
+}
+
 /* Task PM-7-2: 重新生成按钮 (assistant body 右上, copy 按钮左边) */
 .msg-regen-btn {
     position: absolute;
