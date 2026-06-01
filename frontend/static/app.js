@@ -3804,11 +3804,11 @@
         if (isInflight) {
             els.sendBtn.classList.add('sending');
             if (sendLabel) sendLabel.textContent = t('composer.stop');
-            if (sendIcon) sendIcon.textContent = '⏹';
+            if (sendIcon) sendIcon.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-stop"/></svg>';
         } else {
             els.sendBtn.classList.remove('sending');
             if (sendLabel) sendLabel.textContent = t('composer.send');
-            if (sendIcon) sendIcon.textContent = '↵';
+            if (sendIcon) sendIcon.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"/></svg>';
         }
     }
 

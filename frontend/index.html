@@ -5,13 +5,25 @@
     <!-- Task XXXX-16 (#163): viewport-fit=cover 让 iPhone 刘海屏底部 safe-area 生效 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Anything · RAG & Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=175">
+    <link rel="stylesheet" href="/static/style.css?v=177">
 </head>
 <body>
+    <!-- 内联 SVG 图标 sprite (替代 emoji chrome 图标; stroke=currentColor 跟随主题/hover) -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+        <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/><path d="M19 3l.6 1.8L21.5 5.5 19.6 6.1 19 8l-.6-1.9L16.5 5.5l1.9-.7z"/></symbol>
+        <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></symbol>
+        <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></symbol>
+        <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+        <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+        <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></symbol>
+        <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></symbol>
+        <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></symbol>
+    </svg>
+
     <!-- ============== Header ============== -->
     <header class="app-header">
         <div class="brand">
-            <span class="logo">🤖</span>
+            <span class="logo"><svg class="icon icon-brand" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sparkles"/></svg></span>
             <span class="title" data-i18n="app.title">Anything</span>
             <span class="subtitle" data-i18n="app.subtitle">RAG & Agent</span>
         </div>
@@ -37,15 +49,15 @@
                     aria-label="language">中/EN</button>
             <!-- Task VVVV (#108): 左侧 sessions sidebar 在窄屏的开关 -->
             <button class="icon-btn sidebar-toggle" id="sessions-sidebar-toggle"
-                    aria-label="toggle sessions sidebar" title="会话列表 / Sessions">💬</button>
+                    aria-label="toggle sessions sidebar" title="会话列表 / Sessions"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-message"/></svg></button>
             <button class="icon-btn sidebar-toggle" id="sidebar-toggle"
-                    aria-label="toggle sidebar" title="侧栏 / Sidebar">≡</button>
+                    aria-label="toggle sidebar" title="侧栏 / Sidebar"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-panel"/></svg></button>
             <!-- Task LLLL (#129): ? 显快捷键 -->
             <button class="icon-btn has-tip" id="shortcuts-btn"
-                    data-tip="键盘快捷键 (?)" aria-label="shortcuts">?</button>
+                    data-tip="键盘快捷键 (?)" aria-label="shortcuts"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-help"/></svg></button>
             <button class="icon-btn" id="settings-btn"
                     data-i18n-attr="title:header.settings"
-                    aria-label="settings">⚙</button>
+                    aria-label="settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-settings"/></svg></button>
         </div>
     </header>
 
@@ -278,10 +290,10 @@
                     <input type="file" id="image-picker" accept="image/*" multiple hidden />
                     <button id="image-btn" class="icon-btn"
                             data-i18n-attr="title:composer.attach.upload_image"
-                            type="button">📷</button>
+                            type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg></button>
                     <button id="send-btn" class="send-btn">
                         <span class="send-label" data-i18n="composer.send">发送</span>
-                        <span class="send-icon">↵</span>
+                        <span class="send-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-send"/></svg></span>
                     </button>
                 </div>
                 <!-- Task TTTT-2 (#139): workflow 保存模板 + 复用 -->
@@ -730,23 +742,23 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=175"></script>
-    <script src="/static/i18n.js?v=175"></script>
-    <script src="/static/markdown.js?v=175"></script>
+    <script src="/static/api.js?v=177"></script>
+    <script src="/static/i18n.js?v=177"></script>
+    <script src="/static/markdown.js?v=177"></script>
     <!-- Task XXXX-9 (#156): IndexedDB KV mirror (workflows / drafts 用) -->
-    <script src="/static/idb-store.js?v=175"></script>
+    <script src="/static/idb-store.js?v=177"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=175"></script>
-    <script src="/static/modules/export.js?v=175"></script>
-    <script src="/static/modules/health.js?v=175"></script>
-    <script src="/static/modules/upload-manager.js?v=175"></script>
-    <script src="/static/modules/admin-panel.js?v=175"></script>
-    <script src="/static/modules/models-admin.js?v=175"></script>
+    <script src="/static/modules/ui-helpers.js?v=177"></script>
+    <script src="/static/modules/export.js?v=177"></script>
+    <script src="/static/modules/health.js?v=177"></script>
+    <script src="/static/modules/upload-manager.js?v=177"></script>
+    <script src="/static/modules/admin-panel.js?v=177"></script>
+    <script src="/static/modules/models-admin.js?v=177"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=175"></script>
+    <script src="/static/modules/memory-panel.js?v=177"></script>
 
-    <script src="/static/app.js?v=175"></script>
+    <script src="/static/app.js?v=177"></script>
 </body>
 </html>
