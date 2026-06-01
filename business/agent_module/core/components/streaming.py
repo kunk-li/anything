@@ -158,7 +158,11 @@ class StreamingMixin:
                 return
             # chat_stream 失败 → 落到下面原逻辑兜底
 
-        if self.execution_strategy != "react":
+        # ZZ-4: ReAct 分支以前只看 self.execution_strategy (Agent 全局默认, 通常 single_shot),
+        # 忽略了刚算出的 _want_react → 导致 extra_params.execution_strategy=react / plan_only
+        # 被悄悄丢弃, 走 single_shot execute() (工具能跑但没有 thought/action/observation 实时
+        # 轨迹). 图片附件场景前端就靠这个 flag 路由到 ReAct, 所以这里要把 _want_react 也算上.
+        if not _want_react and self.execution_strategy != "react":
             # single_shot 不支持真实流, 直接降级 execute + 一次性 chunk
             result = self.execute(dict(request))
             if result.get("code") == "SUCCESS":
