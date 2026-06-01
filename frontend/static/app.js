@@ -1326,17 +1326,20 @@
 
     function switchSessionTo(sid) {
         if (!sid || sid === state.settings.sessionId) return;
-        // Task RRRR (#135): 不再 stopSending — 多会话并行, 旧 session 的 inflight 让它跑完,
-        // 响应回来时根据 capturedSid 自动找到 (或不显, 后端已 QQQQ 持久化, 切回能看到).
+        // Task RRRR (#135): 不再 stopSending — 多会话并行, 旧 session 的 inflight 让它跑完
         state.settings.sessionId = sid;
         if (els.sessionInput) els.sessionInput.value = sid;
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
         ApiClient.configure(state.settings);
-        // Task RRRR-2: 切了 session, send 按钮视觉同步 (新 session 没 inflight → 显"发送")
         _updateSendButtonUI();
-        // 重新渲列表 active 状态
         refreshSessions();
-        // Task ZZZZ (#117): 拉新 session 的 events → 重建 message 区
+        // 修复 (切会话残留): 切换前先强制清空 state.history, 避免 _loadSessionHistory
+        // 的 hadLocal 防护逻辑把上一个 session 的消息当作"本地备份"保留下来.
+        // 切换 = 用户明确换 session, 不存在"网络抖动要保护本地数据"的场景.
+        state.history = [];
+        if (els.messages) {
+            els.messages.innerHTML = '<div class="welcome"><p class="hint">加载中…</p></div>';
+        }
         _loadSessionHistory(sid);
         toast('info', '已切换会话', sid);
     }

@@ -220,8 +220,42 @@ class StreamingMixin:
                 ],
                 "citations": [], "retrieved_chunks": [],
             }
-            # Agent final answer 切片 (不调 chat_stream)
-            if final_answer:
+            # Agent final answer: 优先调 llm_service.chat_stream 真 token 流;
+            # llm_service 没暴露 chat_stream 时降级为切片伪流.
+            # 注: 零工具调用场景下 (LLM 直接给 final_answer), 用 task 重新流式生成
+            # 答案; 有工具调用时, 用 task + 工具结果 prompt 重新流式总结.
+            _streamed = False
+            chat_stream_fn = None
+            for src in ("llm_service", "llm_client"):
+                obj = getattr(self, src, None)
+                if obj is not None and hasattr(obj, "chat_stream"):
+                    chat_stream_fn = obj.chat_stream
+                    break
+            if chat_stream_fn and final_answer:
+                try:
+                    # 拼最终回答 prompt: 有工具结果时把结果带上让 LLM 自然语言总结
+                    if tool_results:
+                        tool_ctx_parts = []
+                        for tr in tool_results:
+                            tn = tr.get("tool_name", "?")
+                            summary = self._summarize_tool_output(tr.get("output"))
+                            tool_ctx_parts.append(f"[工具 {tn} 结果]\n{summary}")
+                        tool_ctx = "\n\n".join(tool_ctx_parts)
+                        stream_prompt = (
+                            f"用户任务: {task}\n\n"
+                            f"已收集到的信息:\n{tool_ctx}\n\n"
+                            f"请基于以上信息, 用自然语言直接回答用户."
+                        )
+                    else:
+                        # 纯 chat 类问题 (LLM 决定不调任何工具)
+                        stream_prompt = str(task or "")
+                    for token in chat_stream_fn(stream_prompt, trace_id=trace_id):
+                        if token:
+                            yield {"type": "chunk", "text": str(token)}
+                    _streamed = True
+                except Exception as e:
+                    self.logger.warning(f"[react-stream] chat_stream 失败, 降级切片: {e}")
+            if not _streamed and final_answer:
                 chunk_size = max(1, len(final_answer) // 80)
                 for i in range(0, len(final_answer), chunk_size):
                     yield {"type": "chunk", "text": final_answer[i:i + chunk_size]}
