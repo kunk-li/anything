@@ -1817,6 +1817,27 @@
         }, 1000);
     }
 
+    // Task XXXX-6 (#153): 答案高度 > 600px 时折叠 + 加"展开/收起"按钮
+    function _maybeFoldLongMessage(body) {
+        // 等下一帧让 img 等加载完, 再量高 (粗略但实用)
+        setTimeout(() => {
+            if (!body || body.dataset.foldChecked) return;
+            body.dataset.foldChecked = '1';
+            const h = body.scrollHeight;
+            if (h <= 600) return;
+            body.classList.add('msg-foldable', 'msg-folded');
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'msg-fold-toggle';
+            toggle.textContent = `▼ 展开全部 (${h}px)`;
+            toggle.addEventListener('click', () => {
+                const folded = body.classList.toggle('msg-folded');
+                toggle.textContent = folded ? `▼ 展开全部 (${h}px)` : '▲ 收起';
+            });
+            body.appendChild(toggle);
+        }, 100);
+    }
+
     // Task XXXX-3 (#150): 给 assistant message body 加单条复制按钮 (右上 hover 显)
     function _attachMessageCopyButton(body, rawText) {
         if (!body || !rawText) return;
@@ -2114,6 +2135,8 @@
             _attachImageDownloadButtons(body);
             // Task XXXX-3 (#150): 加单条复制按钮
             _attachMessageCopyButton(body, msg.content || '');
+            // Task XXXX-6 (#153): 长答案折叠 — 渲完后 next tick 量高度
+            _maybeFoldLongMessage(body);
         } else {
             body.textContent = msg.content || '';
         }

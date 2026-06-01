@@ -1044,6 +1044,36 @@ body.has-drag .chat-pane::before {
 .message:hover .msg-copy-btn { opacity: 0.7; }
 .msg-copy-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
 
+/* Task XXXX-6 (#153): 长答案折叠 (>600px 高时给 msg-foldable, 默认 msg-folded 限高) */
+.message-body.msg-foldable {
+    position: relative;
+}
+.message-body.msg-foldable.msg-folded {
+    max-height: 600px;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black calc(100% - 60px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 60px), transparent);
+}
+.msg-fold-toggle {
+    display: block;
+    margin: 8px auto 0;
+    background: var(--bg-elev2);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 4px 16px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.msg-fold-toggle:hover { background: var(--accent-soft); border-color: var(--accent); }
+.message-body.msg-foldable.msg-folded .msg-fold-toggle {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+}
+
 /* Task TTTT-6 (#143): markdown 渲染的图片自适应 + 圆角 + 阴影 */
 .message-body img {
     max-width: 100%;
