@@ -9,12 +9,12 @@
 /* ===== 暖色配色 (赤陶橙) — dark 主题: 暖深褐底 + 亮橙, 不是冷黑冷蓝 =====
    注意: 默认主题已改为 light (暖奶油). dark 仅覆盖颜色, radius/字体/transition 继承 :root(light). */
 :root[data-theme="dark"] {
-    --bg: #1a1613;
-    --bg-elev: #221d18;
-    --bg-elev2: #2c2620;
-    --surface: #241e18;
-    --border: #393026;
-    --border-strong: #4d4234;
+    --bg: #1b1a17;             /* 微暖中性深灰 (去深褐土味) */
+    --bg-elev: #232220;
+    --bg-elev2: #2d2b27;
+    --surface: #211f1c;
+    --border: #383530;
+    --border-strong: #4a463f;
     --text: #ece4d8;
     --text-strong: #ffffff;
     --text-dim: #b6ab97;
@@ -41,12 +41,12 @@
 /* Task NNNN (#131): 亮色主题 — 用 data-theme="light" 切换 */
 /* ===== 默认主题 = 暖奶油 + 赤陶橙 (Claude 风) — 浅色暖调, 告别黑+蓝 ===== */
 :root, :root[data-theme="light"] {
-    --bg: #f5f1ea;             /* 奶油米白 */
-    --bg-elev: #efe9dd;        /* 略深的米 (左右栏 / header) */
-    --bg-elev2: #e7dfd0;       /* 更深 (输入框 / 标签底) */
-    --surface: #ffffff;        /* 卡片 / 消息气泡 纯白 */
-    --border: #e5ddce;
-    --border-strong: #d6ccb7;
+    --bg: #e9e5dd;             /* 柔和米灰 (降亮度, 不刺眼) */
+    --bg-elev: #e2ddd2;        /* 左右栏 / header */
+    --bg-elev2: #d8d1c3;       /* 输入框 / 标签底 */
+    --surface: #f6f3ed;        /* 卡片 / 消息气泡 柔白 (非纯白, 不晃眼) */
+    --border: #d6cebd;
+    --border-strong: #c5bba6;
     --text: #2b2620;           /* 暖墨 */
     --text-strong: #18130d;
     --text-dim: #6e6453;       /* 暖灰 */
@@ -97,9 +97,11 @@ html, body {
 /* 背景微光晕 — 打破大面积死黑, 给空间感与深度 (顶部中央极淡蓝光) */
 body {
     background:
-        radial-gradient(900px 460px at 50% -6%, rgba(194, 96, 62, 0.07), transparent 64%),
+        radial-gradient(900px 460px at 50% -6%, rgba(194, 96, 62, 0.045), transparent 64%),
         var(--bg);
 }
+/* 暗色下去掉橙光晕 — 深底上橙雾显脏别扭 */
+:root[data-theme="dark"] body { background: var(--bg); }
 
 button {
     font-family: inherit;
