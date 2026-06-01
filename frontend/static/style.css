@@ -247,6 +247,23 @@ body {
     color: var(--text-strong, #fff);
     font-weight: 500;
 }
+/* Task XXXX-8 (#155): session 列表 "加载更多" 行 */
+.session-list-loadmore {
+    list-style: none;
+    text-align: center;
+    padding: 10px 8px;
+}
+.session-list-loadmore button {
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-style: dashed;
+}
+.session-list-loadmore button:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
 /* Task XXXX-4 (#151): pending-delete 视觉淡化 + 删除线 */
 .session-item.pending-delete {
     opacity: 0.4;

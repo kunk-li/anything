@@ -373,7 +373,10 @@
         }
         // Task YYYY-H (#114): 搜索框 — 本地 filter, 不发请求
         if (els.sessionsSearchInput) {
-            els.sessionsSearchInput.addEventListener('input', _filterAndRenderSessions);
+            els.sessionsSearchInput.addEventListener('input', () => {
+                _resetSessionsPagination();  // XXXX-8: 重置分页
+                _filterAndRenderSessions();
+            });
         }
         // VVVV: 启动就拉一次 — 用户看到 sidebar 已经有内容, 不用点
         setTimeout(refreshSessions, 200);
@@ -382,6 +385,9 @@
     // ---------- Task SSS (#105) + VVVV (#108) + YYYY-H (#114): 多会话管理 (含搜索过滤) ----------
     // 缓存当前 session 列表 (供 search filter 用, 不发请求)
     let _sessionsCache = [];
+    // Task XXXX-8 (#155): 客户端分页, 默 30 条 + "加载更多" 按钮
+    const _SESSIONS_PAGE_SIZE = 30;
+    let _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
 
     function _renderSessionList(sessions) {
         if (!els.sessionList) return;
@@ -391,8 +397,11 @@
             els.sessionList.innerHTML = '<li class="empty-state">无匹配会话</li>';
             return;
         }
+        // 分页: 只渲前 _sessionsVisibleLimit 条
+        const visible = sessions.slice(0, _sessionsVisibleLimit);
+        const hidden = sessions.length - visible.length;
         const items = [];
-        for (const s of sessions) {
+        for (const s of visible) {
             const sid = s.session_id;
             const when = s.last_modified
                 ? new Date(s.last_modified * 1000).toLocaleString()
@@ -409,7 +418,19 @@
                 <button class="session-item-delete" data-sid="${escapeHtml(sid)}" title="删除会话" aria-label="删除">✕</button>
             </li>`);
         }
+        // 加 "加载更多" footer
+        if (hidden > 0) {
+            items.push(`<li class="session-list-loadmore"><button type="button" class="small-btn ghost" id="sessions-loadmore-btn">▼ 加载更多 (${hidden} 个剩余)</button></li>`);
+        }
         els.sessionList.innerHTML = items.join('');
+        // 绑定加载更多
+        const moreBtn = els.sessionList.querySelector('#sessions-loadmore-btn');
+        if (moreBtn) {
+            moreBtn.addEventListener('click', () => {
+                _sessionsVisibleLimit += _SESSIONS_PAGE_SIZE;
+                _filterAndRenderSessions();
+            });
+        }
         // Task RRRR: 渲完后给 inflight session 打 thinking 标记
         _updateSessionInflightUI();
     }
@@ -428,10 +449,15 @@
         _renderSessionList(filtered);
     }
 
+    // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
+    function _resetSessionsPagination() {
+        _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
     async function refreshSessions() {
         if (!els.sessionList) return;
         try {
-            const { payload, status } = await ApiClient.listSessions(50);
+            const { payload, status } = await ApiClient.listSessions(200);  // XXXX-8: 拉 200, 客户端分页
             if (status === 501) {
                 els.sessionList.innerHTML = '<li class="empty-state">(state_store 未注入)</li>';
                 if (els.sessionsCount) els.sessionsCount.textContent = '0';
