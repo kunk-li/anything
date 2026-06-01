@@ -41,7 +41,9 @@ llm:
   temperature: 0.7
 
   common:
-    timeout: 15
+    # LLM 单次请求超时秒. 写长文 / 推理类任务 15s 通常不够.
+    # 长上下文 + 长输出 (例: 写 6000 字, qwen-turbo 大约 60-90s) 需要 120s.
+    timeout: 120
     max_retry: 1
 
   default_vector_model: "text-embedding-3-small"
