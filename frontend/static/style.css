@@ -9,29 +9,29 @@
 /* ===== 暖色配色 (赤陶橙) — dark 主题: 暖深褐底 + 亮橙, 不是冷黑冷蓝 =====
    注意: 默认主题已改为 light (暖奶油). dark 仅覆盖颜色, radius/字体/transition 继承 :root(light). */
 :root[data-theme="dark"] {
-    --bg: #1b1a17;             /* 微暖中性深灰 (去深褐土味) */
-    --bg-elev: #232220;
-    --bg-elev2: #2d2b27;
-    --surface: #211f1c;
-    --border: #383530;
-    --border-strong: #4a463f;
-    --text: #ece4d8;
+    --bg: #0f1419;             /* 深蓝灰 (冷调, 干净清爽) */
+    --bg-elev: #161d24;
+    --bg-elev2: #1f2832;
+    --surface: #141b22;
+    --border: #283039;
+    --border-strong: #3a4654;
+    --text: #e6ecf2;
     --text-strong: #ffffff;
-    --text-dim: #b6ab97;
-    --text-faint: #807665;
-    --accent: #e58050;          /* 亮赤陶橙 (深底用更亮) */
-    --accent-strong: #c8613f;
-    --accent-soft: rgba(229, 128, 80, 0.15);
-    --accent-glow: rgba(229, 128, 80, 0.34);
-    --primary: #d4693c;
-    --primary-hover: #bb5531;
-    --primary-soft: rgba(229, 128, 80, 0.18);
-    --bg-soft: rgba(230, 208, 178, 0.07);
-    --success: #5fb574;
-    --warning: #e0a93f;
-    --danger: #e26b4f;
-    --danger-soft: rgba(226, 107, 79, 0.18);
-    --code-bg: #15110d;
+    --text-dim: #9fb0c0;
+    --text-faint: #6b7a8a;
+    --accent: #2dd4bf;          /* 亮 teal (深底用更亮, 清爽) */
+    --accent-strong: #14b8a6;
+    --accent-soft: rgba(45, 212, 191, 0.15);
+    --accent-glow: rgba(45, 212, 191, 0.30);
+    --primary: #0d9488;         /* teal 主按钮 */
+    --primary-hover: #0f766e;
+    --primary-soft: rgba(45, 212, 191, 0.18);
+    --bg-soft: rgba(160, 180, 200, 0.08);
+    --success: #34d399;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.16);
+    --code-bg: #0c1116;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
     --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.42);
     --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.58);
@@ -41,33 +41,33 @@
 /* Task NNNN (#131): 亮色主题 — 用 data-theme="light" 切换 */
 /* ===== 默认主题 = 暖奶油 + 赤陶橙 (Claude 风) — 浅色暖调, 告别黑+蓝 ===== */
 :root, :root[data-theme="light"] {
-    --bg: #e9e5dd;             /* 柔和米灰 (降亮度, 不刺眼) */
-    --bg-elev: #e2ddd2;        /* 左右栏 / header */
-    --bg-elev2: #d8d1c3;       /* 输入框 / 标签底 */
-    --surface: #f6f3ed;        /* 卡片 / 消息气泡 柔白 (非纯白, 不晃眼) */
-    --border: #d6cebd;
-    --border-strong: #c5bba6;
-    --text: #2b2620;           /* 暖墨 */
-    --text-strong: #18130d;
-    --text-dim: #6e6453;       /* 暖灰 */
-    --text-faint: #9c9482;
-    --accent: #c2603e;         /* 赤陶橙 — 文字 / 强调 / 图标 */
-    --accent-strong: #a44a2d;
-    --accent-soft: rgba(194, 96, 62, 0.12);
-    --accent-glow: rgba(194, 96, 62, 0.26);
-    --primary: #b8542f;        /* 主按钮深赤陶 (白字对比达标) */
-    --primary-hover: #9e4527;
-    --primary-soft: rgba(194, 96, 62, 0.14);
-    --bg-soft: rgba(120, 100, 70, 0.07);
-    --success: #3f9456;
-    --warning: #b9791f;
-    --danger: #c0492f;
-    --danger-soft: rgba(192, 73, 47, 0.12);
-    --code-bg: #efe9dd;
-    --shadow-sm: 0 1px 2px rgba(90, 70, 45, 0.08);
-    --shadow-md: 0 6px 18px rgba(90, 70, 45, 0.12);
-    --shadow-lg: 0 16px 44px rgba(90, 70, 45, 0.18);
-    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    --bg: #f3f5f8;             /* 清爽浅灰白 (冷调, 干净不刺眼) */
+    --bg-elev: #eaeef3;        /* 左右栏 / header */
+    --bg-elev2: #dfe5ec;       /* 输入框 / 标签底 */
+    --surface: #ffffff;        /* 卡片 / 消息气泡 纯白, 在浅灰底上清晰浮起 */
+    --border: #e1e7ee;
+    --border-strong: #ccd5e0;
+    --text: #1a2330;           /* 深蓝灰墨, 清晰高对比 */
+    --text-strong: #0f1620;
+    --text-dim: #5a6877;
+    --text-faint: #8794a4;
+    --accent: #0d9488;         /* teal 青绿 — 清爽, 文字 / 强调 / 图标 */
+    --accent-strong: #0a6b62;
+    --accent-soft: rgba(13, 148, 136, 0.11);
+    --accent-glow: rgba(13, 148, 136, 0.22);
+    --primary: #0c7d72;        /* 深 teal, 白字对比达标 */
+    --primary-hover: #0a6b62;
+    --primary-soft: rgba(13, 148, 136, 0.13);
+    --bg-soft: rgba(90, 104, 119, 0.08);
+    --success: #15a34a;
+    --warning: #c77d11;
+    --danger: #dc2626;
+    --danger-soft: rgba(220, 38, 38, 0.10);
+    --code-bg: #eef2f6;
+    --shadow-sm: 0 1px 2px rgba(30, 50, 70, 0.07);
+    --shadow-md: 0 6px 18px rgba(30, 50, 70, 0.10);
+    --shadow-lg: 0 16px 44px rgba(30, 50, 70, 0.14);
+    --ring: inset 0 1px 0 rgba(255, 255, 255, 0.9);
     --radius: 12px;
     --radius-sm: 8px;
     --radius-lg: 16px;
@@ -97,7 +97,7 @@ html, body {
 /* 背景微光晕 — 打破大面积死黑, 给空间感与深度 (顶部中央极淡蓝光) */
 body {
     background:
-        radial-gradient(900px 460px at 50% -6%, rgba(194, 96, 62, 0.045), transparent 64%),
+        radial-gradient(900px 460px at 50% -6%, rgba(13, 148, 136, 0.045), transparent 64%),
         var(--bg);
 }
 /* 暗色下去掉橙光晕 — 深底上橙雾显脏别扭 */
@@ -269,7 +269,7 @@ body {
     background: var(--bg-soft, rgba(127,127,127,0.12));
 }
 .session-item.active {
-    background: var(--primary-soft, rgba(194, 96, 62, 0.18));
+    background: var(--primary-soft, rgba(13, 148, 136, 0.18));
     color: var(--text-strong, #fff);
     font-weight: 500;
     box-shadow: inset 3px 0 0 var(--accent);
@@ -880,7 +880,7 @@ body.has-drag .chat-pane::before {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(194, 96, 62, 0.12);
+    background: rgba(13, 148, 136, 0.12);
     border: 3px dashed var(--accent);
     border-radius: var(--radius);
     color: var(--accent);
@@ -1076,7 +1076,7 @@ body.has-drag .chat-pane::before {
     align-items: center;
     justify-content: center;
     border-radius: 16px;
-    background: linear-gradient(150deg, var(--accent-soft), rgba(194, 96, 62, 0.02));
+    background: linear-gradient(150deg, var(--accent-soft), rgba(13, 148, 136, 0.02));
     border: 1px solid var(--border-strong);
     color: var(--accent);
     box-shadow: var(--shadow-md), var(--ring);
@@ -1882,7 +1882,7 @@ body.share-readonly .msg-feedback {
     color: var(--accent);
     font-size: 14px;
     font-weight: 600;
-    background: rgba(194, 96, 62, 0.08);
+    background: rgba(13, 148, 136, 0.08);
     pointer-events: none;
     border-radius: var(--radius);
 }
@@ -1957,13 +1957,13 @@ body.share-readonly .msg-feedback {
     display: flex;
     align-items: center;
     gap: 6px;
-    box-shadow: 0 2px 8px rgba(194, 96, 62, 0.42);
+    box-shadow: 0 2px 8px rgba(13, 148, 136, 0.42);
     transition: all var(--transition);
 }
 .send-btn:hover:not(:disabled) {
     background: var(--primary-hover);
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(194, 96, 62, 0.5);
+    box-shadow: 0 6px 18px rgba(13, 148, 136, 0.5);
 }
 .send-btn:disabled {
     opacity: 0.5;
@@ -2151,7 +2151,7 @@ body.share-readonly .msg-feedback {
     margin: 0;
 }
 .preview-text mark {
-    background: rgba(194, 96, 62, 0.3);
+    background: rgba(13, 148, 136, 0.3);
     color: var(--text);
     padding: 1px 2px;
     border-radius: 2px;
@@ -2173,7 +2173,7 @@ body.share-readonly .msg-feedback {
 .react-thought {
     margin-top: 6px;
     padding: 6px 10px;
-    background: rgba(194, 96, 62, 0.08);
+    background: rgba(13, 148, 136, 0.08);
     border-left: 3px solid var(--accent);
     border-radius: 3px;
     font-size: 12px;
@@ -2439,7 +2439,7 @@ body.share-readonly .msg-feedback {
     color: var(--text, #d4d4d4);
 }
 .admin-subtab.active {
-    background: var(--primary-soft, rgba(194, 96, 62, 0.18));
+    background: var(--primary-soft, rgba(13, 148, 136, 0.18));
     color: var(--primary, #4f8cff);
     border-color: var(--primary, #4f8cff);
     font-weight: 600;
@@ -2642,7 +2642,7 @@ body.share-readonly .msg-feedback {
     padding: 8px 18px;
     border-radius: var(--radius-sm);
     font-weight: 600;
-    box-shadow: 0 2px 10px rgba(194, 96, 62, 0.4);
+    box-shadow: 0 2px 10px rgba(13, 148, 136, 0.4);
     transition: all var(--transition);
 }
 .primary-btn:hover { background: var(--primary-hover); }
