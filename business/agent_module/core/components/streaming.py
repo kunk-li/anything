@@ -300,6 +300,7 @@ class StreamingMixin:
             # 注: 零工具调用场景下 (LLM 直接给 final_answer), 用 task 重新流式生成
             # 答案; 有工具调用时, 用 task + 工具结果 prompt 重新流式总结.
             _streamed = False
+            _streamed_text = []  # 收集实际输出, 用于持久化到后端
             chat_stream_fn = None
             for src in ("llm_service", "llm_client"):
                 obj = getattr(self, src, None)
@@ -326,14 +327,33 @@ class StreamingMixin:
                         stream_prompt = str(task or "")
                     for token in chat_stream_fn(stream_prompt, trace_id=trace_id):
                         if token:
+                            _streamed_text.append(str(token))
                             yield {"type": "chunk", "text": str(token)}
                     _streamed = True
                 except Exception as e:
                     self.logger.warning(f"[react-stream] chat_stream 失败, 降级切片: {e}")
             if not _streamed and final_answer:
+                _streamed_text = [final_answer]
                 chunk_size = max(1, len(final_answer) // 80)
                 for i in range(0, len(final_answer), chunk_size):
                     yield {"type": "chunk", "text": final_answer[i:i + chunk_size]}
+
+            # 持久化到后端 state_store (单一数据源) — 跟 _run_stream_direct 一致.
+            # ReAct 工具场景的对话也存, 切会话/刷新不丢.
+            try:
+                self._save_state_safe(
+                    session_id=session_id,
+                    state={
+                        "status": "completed",
+                        "task": task,
+                        "answer": "".join(_streamed_text) or final_answer,
+                        "execution_mode": "agent",
+                        "updated_at": time.time(),
+                    },
+                    trace_id=trace_id,
+                )
+            except Exception as _se:
+                self.logger.warning(f"[react-stream] 持久化失败(忽略): {_se}")
 
             yield {
                 "type": "done",
