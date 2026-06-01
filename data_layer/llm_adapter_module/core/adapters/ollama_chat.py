@@ -19,7 +19,7 @@ from llm_adapter_module.utils.tool_functions import (
     ensure_file_content_splits,
 )
 
-from ._http_mixin import _BaseHTTPAdapterMixin
+from ._http_mixin import _BaseHTTPAdapterMixin, _sanitize_api_base
 
 
 class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
@@ -41,9 +41,11 @@ class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         self.logger = logger
         # api_key 对 Ollama 是可选的 (反代加 token 时才用)
         self.api_key = str(model_cfg.get("api_key", "") or "")
-        self.api_base = str(
-            model_cfg.get("api_base", "http://localhost:11434") or ""
-        ).rstrip("/")
+        # Task XXXX-19 续: 走 sanitizer, 拦 "undefined" 脏值
+        self.api_base = _sanitize_api_base(
+            model_cfg.get("api_base"), model_name=model_name, logger=logger,
+            adapter_kind="ollama",
+        )
         self.timeout = int(common_cfg.get("timeout", 60))  # 本地推理可能稍慢
         self.max_retry = int(common_cfg.get("max_retry", 2))
 

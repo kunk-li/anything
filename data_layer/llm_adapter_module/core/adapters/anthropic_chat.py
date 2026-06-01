@@ -19,7 +19,7 @@ from llm_adapter_module.utils.tool_functions import (
     ensure_file_content_splits,
 )
 
-from ._http_mixin import _BaseHTTPAdapterMixin
+from ._http_mixin import _BaseHTTPAdapterMixin, _sanitize_api_base
 
 
 class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
@@ -37,9 +37,11 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         self.common_cfg = common_cfg
         self.logger = logger
         self.api_key = str(model_cfg.get("api_key", "") or "")
-        self.api_base = str(
-            model_cfg.get("api_base", "https://api.anthropic.com") or ""
-        ).rstrip("/")
+        # Task XXXX-19 续: 跟 OpenAI 系 adapter 一样走 sanitizer, 拦 "undefined" 脏值
+        self.api_base = _sanitize_api_base(
+            model_cfg.get("api_base"), model_name=model_name, logger=logger,
+            adapter_kind="anthropic",
+        )
         self.anthropic_version = str(model_cfg.get("anthropic_version", "2023-06-01"))
         self.timeout = int(common_cfg.get("timeout", 30))
         self.max_retry = int(common_cfg.get("max_retry", 3))

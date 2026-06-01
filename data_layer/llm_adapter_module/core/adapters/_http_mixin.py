@@ -24,9 +24,18 @@ import requests
 _INVALID_API_BASE_PATTERN = re.compile(r"^\s*(undefined|null|none|nan|)\s*$", re.I)
 
 
-def _sanitize_api_base(api_base: str, model_name: str = "", logger=None) -> str:
-    """把 api_base 归一化成合法 https URL. 失败值走启发式默认.
+def _sanitize_api_base(
+    api_base: str,
+    model_name: str = "",
+    logger=None,
+    *,
+    adapter_kind: str = "openai",
+) -> str:
+    """把 api_base 归一化成合法 http(s):// URL. 失败值走启发式默认.
 
+    Args:
+        adapter_kind: "openai" | "anthropic" | "ollama"
+            决定默认值方向 (不同 provider 默认 endpoint 不同)
     Returns:
         always a valid http(s):// URL (rstrip "/" 后), 永不为空 / "undefined".
     """
@@ -42,7 +51,36 @@ def _sanitize_api_base(api_base: str, model_name: str = "", logger=None) -> str:
     if not bad:
         return raw.rstrip("/")
 
-    # 1. 环境变量 — 用户在 .env 里如果配了就生效
+    # ---------- Anthropic 兜底 ----------
+    if adapter_kind == "anthropic":
+        env_base = (os.environ.get("ANTHROPIC_API_BASE") or "").strip()
+        if env_base.startswith(("http://", "https://")):
+            target = env_base
+        else:
+            target = "https://api.anthropic.com"
+        if logger:
+            try:
+                logger.warning(f"[llm_adapter:anthropic] api_base 非法 ({api_base!r}), fallback {target!r}")
+            except Exception:
+                pass
+        return target.rstrip("/")
+
+    # ---------- Ollama 兜底 ----------
+    if adapter_kind == "ollama":
+        env_base = (os.environ.get("OLLAMA_API_BASE") or "").strip()
+        if env_base.startswith(("http://", "https://")):
+            target = env_base
+        else:
+            target = "http://localhost:11434"
+        if logger:
+            try:
+                logger.warning(f"[llm_adapter:ollama] api_base 非法 ({api_base!r}), fallback {target!r}")
+            except Exception:
+                pass
+        return target.rstrip("/")
+
+    # ---------- OpenAI 系 (默认) 兜底 ----------
+    # 1. 环境变量 OPENAI_API_BASE
     env_base = (os.environ.get("OPENAI_API_BASE") or "").strip()
     if env_base.startswith(("http://", "https://")):
         if logger:
@@ -73,10 +111,32 @@ def _sanitize_api_base(api_base: str, model_name: str = "", logger=None) -> str:
     return fallback
 
 
+def _assert_clean_url(url: str) -> None:
+    """Task XXXX-19 续: 请求前再过一道. adapter 即使被脏值污染了, 这里 fail-fast,
+    不让 requests 用 15s timeout 慢慢 host=undefined.
+    """
+    if not isinstance(url, str):
+        raise ValueError(f"URL 非字符串: {type(url).__name__}")
+    low = url.lower().strip()
+    if not (low.startswith("http://") or low.startswith("https://")):
+        raise ValueError(
+            f"URL 缺 scheme (http/https): {url!r}. "
+            f"模型 api_base 配置可能错了, 去管理→模型管理修."
+        )
+    bad_hosts = ("//undefined", "//null", "//none", "//nan", "://undefined:", "://null:")
+    if any(b in low for b in bad_hosts):
+        raise ValueError(
+            f"URL 含非法 host (undefined/null): {url!r}. "
+            f"模型 api_base 是脏字符串, 需重新注册模型 (去管理→模型管理) "
+            f"或检查 .env 里 *_API_BASE 配置."
+        )
+
+
 class _BaseHTTPAdapterMixin:
     """给需要HTTP调用的适配器提供通用requests能力（超时、重试 + SSE 流式）"""
 
     def _post_json(self, url: str, headers: Dict[str, str], payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+        _assert_clean_url(url)
         resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
@@ -90,6 +150,7 @@ class _BaseHTTPAdapterMixin:
         SSE 协议每行 'data: {json}' 或 'data: [DONE]', 解析 choices[0].delta.content。
         DashScope / DeepSeek / Moonshot / 其他 OpenAI 兼容 endpoint 都走此格式。
         """
+        _assert_clean_url(url)
         import json as _json
         resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
         resp.raise_for_status()
@@ -128,6 +189,7 @@ class _BaseHTTPAdapterMixin:
         我们只关心 content_block_delta 事件里 delta.text_delta, 其他 (message_start /
         content_block_stop / message_stop) 忽略。
         """
+        _assert_clean_url(url)
         import json as _json
         resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
         resp.raise_for_status()
@@ -164,6 +226,7 @@ class _BaseHTTPAdapterMixin:
 
         yield 每个 message.content, 直到 done=true。
         """
+        _assert_clean_url(url)
         import json as _json
         resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout)
         resp.raise_for_status()
