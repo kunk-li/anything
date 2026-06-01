@@ -225,6 +225,7 @@ class InvokeRoutesMixin:
             await ws.accept()
             trace_id = ws.headers.get("X-Request-Id") or self._generate_trace_id()
             tenant_token = None
+            gen = None  # ZZ-2: 流式 generator, finally 里 close 以中断后端 LLM (停止按钮)
             try:
                 # 1. 收一条请求消息
                 try:
@@ -431,6 +432,14 @@ class InvokeRoutesMixin:
                 except Exception:
                     pass
             finally:
+                # ZZ-2: 关闭流式 generator → 触发 chat_stream 链的 GeneratorExit →
+                # requests response 连接关闭 → 中断后端 LLM 生成. 这样用户点停止 /
+                # 客户端断开时, 后端不再继续读 token (不烧 token).
+                if gen is not None:
+                    try:
+                        gen.close()
+                    except Exception:
+                        pass
                 if tenant_token is not None:
                     reset_current_tenant(tenant_token)
                 try:
