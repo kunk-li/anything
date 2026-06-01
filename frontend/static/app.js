@@ -490,7 +490,14 @@
                 _sessionsCache = [];
                 return;
             }
-            _sessionsCache = (payload.data || {}).sessions || [];
+            // Task XXXX-18: 保留 optimistic 占位 — 后端如果还没扫到这个 sid
+            // (响应已回但 _save_state_safe 异步未落盘), 不应该让它从左栏消失
+            const backendSessions = (payload.data || {}).sessions || [];
+            const backendIds = new Set(backendSessions.map(s => s.session_id));
+            const survivingOptimistic = _sessionsCache.filter(
+                s => s._optimistic && !backendIds.has(s.session_id)
+            );
+            _sessionsCache = [...survivingOptimistic, ...backendSessions];
             _filterAndRenderSessions();
         } catch (e) {
             els.sessionList.innerHTML = `<li class="empty-state error">× ${escapeHtml(e.message)}</li>`;
@@ -755,9 +762,12 @@
     }
 
     async function _loadSessionHistory(sid) {
-        // 清空当前展示, 先给"正在加载"占位
-        state.history = [];
-        if (els.messages) {
+        // Task XXXX-18: 不再先无脑清空 state.history. 后端可能比本地"旧"
+        // (新发送响应还没落盘, 或 LLM 失败没 save), 那种情况要保留本地版本.
+        const localBackup = Array.isArray(state.history) ? state.history.slice() : [];
+        const hadLocal = localBackup.length > 0;
+        if (els.messages && !hadLocal) {
+            // 只在 localStorage 也空时显加载中 (避免 flash 清空已有内容)
             els.messages.innerHTML = '<div class="welcome"><p>加载会话历史中…</p></div>';
             // Task MMMM (#130): 触发淡入动效 (replay 需先移除再加 class)
             els.messages.classList.remove('session-switched');
@@ -767,20 +777,36 @@
         try {
             const { payload, status } = await ApiClient.getSession(sid);
             if (status === 404) {
-                // 新会话/空会话, 渲欢迎页就好
-                renderHistory();
+                // 后端无该 session — 若本地有历史 (localStorage 残留), 保留;
+                // 若本地也空, 渲欢迎页.
+                if (!hadLocal) {
+                    state.history = [];
+                    renderHistory();
+                }
                 return;
             }
             if (status !== 200 || payload?.code !== 'SUCCESS') {
-                els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载失败 ${payload?.code || status} ${payload?.message || ''}</p></div>`;
+                // 网络/服务错误: 保留本地, 不清屏
+                if (!hadLocal) {
+                    els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载失败 ${payload?.code || status} ${payload?.message || ''}</p></div>`;
+                }
                 return;
             }
             const state_data = payload.data || {};
             const msgs = _stateToMessages(state_data);
+            // 关键判断: 后端给了 0 条消息, 但本地有 → 保留本地 (后端还没落盘的情况)
+            if (msgs.length === 0 && hadLocal) {
+                console.info(`[history] backend empty but local has ${localBackup.length} msgs — keeping local`);
+                state.history = localBackup;
+                renderHistory();
+                return;
+            }
             state.history = msgs;
             renderHistory();
         } catch (e) {
-            els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载异常: ${escapeHtml(e.message)}</p></div>`;
+            if (!hadLocal) {
+                els.messages.innerHTML = `<div class="welcome"><p style="color:var(--danger)">× 加载异常: ${escapeHtml(e.message)}</p></div>`;
+            }
         }
     }
 
