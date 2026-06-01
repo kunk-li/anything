@@ -2265,6 +2265,18 @@ body.has-drag .chat-pane::before {
     font-weight: 500;
 }
 .form-row input { width: 100%; }
+.form-row select.model-select {
+    width: 100%;
+    padding: 6px 8px;
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.form-row select.model-select:focus { border-color: var(--accent); outline: none; }
 .form-row .hint {
     color: var(--text-faint);
     font-size: 11px;

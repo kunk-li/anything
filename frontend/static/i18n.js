@@ -267,6 +267,13 @@ const I18n = (() => {
             'session.undo.title': '即将删除会话',
             'session.undo.body': '5 秒内可撤销',
             'session.undo.btn': '↩ 撤销',
+
+            // Task XXXX-20 (#164): chat model picker
+            'settings.chatModel': 'Chat 模型',
+            'settings.chatModel.auto': '⚙ 自动 (用配置默认)',
+            'settings.chatModel.hint': '选一个 = 所有 chat 走这个; 不选 = 走 .env / yaml 里 default_chat_model 配置. 想加更多型号去下面 "LLM 模型管理" 注册.',
+            'toast.chatModel.set': '默认 chat 模型已切换',
+            'toast.chatModel.cleared': '已清空选择, 回退配置默认',
         },
         en: {
             'app.title': 'Anything',
@@ -509,6 +516,12 @@ const I18n = (() => {
             'session.undo.title': 'Deleting session',
             'session.undo.body': 'Undo within 5 seconds',
             'session.undo.btn': '↩ Undo',
+
+            'settings.chatModel': 'Chat model',
+            'settings.chatModel.auto': '⚙ Auto (config default)',
+            'settings.chatModel.hint': 'Pick one = all chat uses it; pick none = use default_chat_model from .env / yaml. Register more models below under "LLM model management".',
+            'toast.chatModel.set': 'Default chat model switched',
+            'toast.chatModel.cleared': 'Selection cleared, reverting to config default',
         },
     };
 

@@ -458,6 +458,45 @@
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
     }
 
+    // Task XXXX-20 (#164): 加载 chat 模型 picker. 设置抽屉打开时调.
+    // 设计: 已注册的 CHAT 模型全列出来, 其中 is_default=true 的预选.
+    //       "⚙ 自动" 永远在第一位; 用户不选 = 走配置层 default_chat_model.
+    async function _loadChatModelPicker() {
+        const sel = document.getElementById('chat-model-select');
+        if (!sel) return;
+        try {
+            const { payload, status } = await ApiClient.listModels();
+            if (status !== 200 || payload?.code !== 'SUCCESS') return;
+            const models = (payload.data?.models || []).filter(
+                m => (m.request_type || '').toUpperCase() === 'CHAT'
+            );
+            // 重渲: 保留首个 "自动" option, 后面塞已注册
+            const autoOpt = sel.querySelector('option[value=""]');
+            sel.innerHTML = '';
+            if (autoOpt) sel.appendChild(autoOpt);
+            else {
+                const o = document.createElement('option');
+                o.value = '';
+                o.textContent = window.I18n?.t('settings.chatModel.auto') || '⚙ 自动';
+                sel.appendChild(o);
+            }
+            let currentDefault = '';
+            for (const m of models) {
+                const o = document.createElement('option');
+                o.value = m.name;
+                const flag = m.is_default ? ' ✓' : '';
+                const config = m.configured ? '' : ' (未配置 key)';
+                o.textContent = `${m.name}${flag}${config}`;
+                sel.appendChild(o);
+                if (m.is_default) currentDefault = m.name;
+            }
+            // 同步选中
+            sel.value = currentDefault;
+        } catch (e) {
+            console.warn('[chat-model-picker] load failed:', e.message);
+        }
+    }
+
     // Task XXXX-17: 发送中的会话还没在 _sessionsCache 里 → 乐观插一条占位,
     // 让左栏立刻显有此会话. response 完成 + refreshSessions 之后会被真数据覆盖.
     function _optimisticAddCurrentSession(sid, firstMsg) {
@@ -1251,7 +1290,33 @@
             openDrawer('settings');
             // 打开时自动刷新模型列表
             loadModels();
+            // Task XXXX-20 (#164): 同时刷 chat 模型 picker
+            _loadChatModelPicker();
         });
+        // Task XXXX-20 (#164): chat 模型 picker change
+        const chatModelSelect = document.getElementById('chat-model-select');
+        if (chatModelSelect) {
+            chatModelSelect.addEventListener('change', async () => {
+                const name = chatModelSelect.value;
+                try {
+                    if (!name) {
+                        // "自动" — 服务端没有"清除 default override"端点;
+                        // 用户体感上 "选回自动" 就是重启服务后回归 yaml/env 默认.
+                        // 提示一下, 不改服务端.
+                        toast('info', t('toast.chatModel.cleared'), '重启后生效, 或选具体模型覆盖');
+                        return;
+                    }
+                    const { payload, status } = await ApiClient.setDefaultModel(name, 'CHAT');
+                    if (status === 200 && payload?.code === 'SUCCESS') {
+                        toast('success', t('toast.chatModel.set'), name);
+                    } else {
+                        toast('error', payload?.code || status, payload?.message || '');
+                    }
+                } catch (e) {
+                    toast('error', '切换失败', e.message);
+                }
+            });
+        }
         $$('[data-close="settings"]').forEach(el =>
             el.addEventListener('click', () => closeDrawer('settings'))
         );
