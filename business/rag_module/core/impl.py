@@ -213,6 +213,18 @@ class SimpleRAG(BaseRAG):
         else:
             chunks = vec_chunks
 
+        # 5d. ZZ-3: 知识库 (KB) 过滤 — extra_params.kb_id 时只保留该 KB 内文档的 chunk.
+        # 让"建知识库 → 选知识库 → 只在这组文档里问"真正生效 (PM-5 之前只存元数据).
+        kb_id = extra_params.get("kb_id")
+        if kb_id:
+            allowed = self._kb_allowed_doc_ids(kb_id)
+            if allowed:  # KB 为空 / 读失败时不过滤, 避免全空
+                before = len(chunks)
+                chunks = [c for c in chunks if str(c.get("doc_id")) in allowed]
+                self.logger.info(
+                    f"RAG KB 过滤: kb_id={kb_id}, {before}→{len(chunks)} chunks (仅该知识库)"
+                )
+
         # 6. 可选 rerank (用 effective_query 而非 original)
         if self.enable_rerank and self.reranker is not None and chunks:
             chunks = self._apply_rerank(query=effective_query, chunks=chunks, trace_id=trace_id)
@@ -224,6 +236,32 @@ class SimpleRAG(BaseRAG):
             f"RAG 检索完成：trace_id={trace_id}, retrieved={len(chunks)}, selected={len(final_chunks)}"
         )
         return final_chunks
+
+    def _kb_allowed_doc_ids(self, kb_id):
+        """ZZ-3: 读知识库的 doc_id 集合, 用于检索过滤.
+
+        MVP 实现: 直接读 run/kb.sqlite3 (application 层 kb router 管理的库).
+        理想架构应由 application 层把 kb_id 解析成 doc_ids 注入 extra_params,
+        RAG 不直接依赖 kb 库 — 留作后续重构. 读失败 / KB 空时返回空集 (不过滤).
+        """
+        try:
+            import sqlite3
+            import os
+            from pathlib import Path
+            p = Path(os.environ.get("ANYTHING_DATA_ROOT", "run")) / "kb.sqlite3"
+            if not p.exists():
+                return set()
+            conn = sqlite3.connect(str(p), timeout=3.0)
+            try:
+                rows = conn.execute(
+                    "SELECT doc_id FROM kb_doc WHERE kb_id = ?", (str(kb_id),)
+                ).fetchall()
+            finally:
+                conn.close()
+            return {str(r[0]) for r in rows if r and r[0]}
+        except Exception as e:
+            self.logger.warning(f"读 KB doc_ids 失败 (忽略, 不过滤): kb_id={kb_id}, err={e}")
+            return set()
 
     def _apply_rewrite(
         self,
