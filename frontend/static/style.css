@@ -92,6 +92,13 @@ html, body {
     -webkit-font-smoothing: antialiased;
 }
 
+/* 背景微光晕 — 打破大面积死黑, 给空间感与深度 (顶部中央极淡蓝光) */
+body {
+    background:
+        radial-gradient(900px 460px at 50% -6%, rgba(124, 155, 255, 0.07), transparent 64%),
+        var(--bg);
+}
+
 button {
     font-family: inherit;
     font-size: inherit;
@@ -1055,6 +1062,21 @@ body.has-drag .chat-pane::before {
     margin: 0 auto 4px;
     max-width: 520px;
 }
+/* 品牌焦点徽标 — 标题上方, 把视线聚住 */
+.welcome-badge {
+    width: 58px;
+    height: 58px;
+    margin: 0 auto 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    background: linear-gradient(150deg, var(--accent-soft), rgba(124, 155, 255, 0.02));
+    border: 1px solid var(--border-strong);
+    color: var(--accent);
+    box-shadow: var(--shadow-md), var(--ring);
+}
+.welcome-badge .icon { width: 30px; height: 30px; }
 .welcome .hint-list {
     text-align: left;
     margin: 24px 0 0;
@@ -1105,7 +1127,11 @@ body.has-drag .chat-pane::before {
     border-color: var(--accent);
     background: var(--bg-elev);
     transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-soft);
+}
+.welcome-example:hover .we-icon {
+    background: var(--accent);
+    color: #fff;
 }
 .welcome-example .we-icon {
     flex-shrink: 0;

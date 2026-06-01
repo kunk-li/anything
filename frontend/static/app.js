@@ -2935,6 +2935,7 @@
         if (!state.history.length) {
             // 重新插入欢迎块 + GGGG (#124) 示例 prompt 卡片
             els.messages.innerHTML = `<div class="welcome">
+                <div class="welcome-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sparkles"/></svg></div>
                 <h2 data-i18n="welcome.title">欢迎使用 Anything</h2>
                 <p data-i18n="welcome.desc">RAG 检索 / Agent 任务执行 / Hybrid 混合, 选择模式后输入开始对话.</p>
                 <div class="welcome-examples">
