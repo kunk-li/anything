@@ -462,6 +462,119 @@
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
     }
 
+    // Task PM-4: Slash command palette — 输入框首字符 / 时弹工具选择
+    // 状态: _allAgentTools 由 _loadAgentTools 启动时填; palette 渲染在
+    // input 上方浮动. 上下方向键导航, Enter 选中, Esc 关闭.
+    let _allAgentTools = [];   // {name, description, category}
+    let _slashPaletteEl = null;
+    let _slashPaletteOpen = false;
+    let _slashPaletteIndex = 0;
+    let _slashPaletteFiltered = [];
+
+    function _slashPaletteOnInput() {
+        const v = els.inputText.value || '';
+        // 触发条件: textarea 首字符是 /, 第二个字符不是空格
+        if (!v.startsWith('/') || v.startsWith('/ ')) {
+            _slashPaletteClose();
+            return;
+        }
+        const q = v.slice(1).trim().toLowerCase();
+        const tools = _allAgentTools.length ? _allAgentTools : [];
+        _slashPaletteFiltered = q
+            ? tools.filter(t =>
+                  t.name.toLowerCase().includes(q) ||
+                  (t.description || '').toLowerCase().includes(q)
+              ).slice(0, 12)
+            : tools.slice(0, 12);
+        _slashPaletteIndex = 0;
+        _slashPaletteRender();
+    }
+
+    function _slashPaletteRender() {
+        if (!_slashPaletteFiltered.length) {
+            _slashPaletteClose();
+            return;
+        }
+        if (!_slashPaletteEl) {
+            _slashPaletteEl = document.createElement('div');
+            _slashPaletteEl.className = 'slash-palette';
+            // 挂到 composer 区底部 (input 上方)
+            const composer = els.inputText.closest('.composer') || document.body;
+            composer.appendChild(_slashPaletteEl);
+        }
+        _slashPaletteEl.innerHTML = _slashPaletteFiltered.map((t, i) => `
+            <div class="slash-item ${i === _slashPaletteIndex ? 'active' : ''}"
+                 data-idx="${i}" data-name="${escapeHtml(t.name)}">
+                <code class="slash-name">/${escapeHtml(t.name)}</code>
+                <span class="slash-desc">${escapeHtml((t.description || '').slice(0, 80))}</span>
+            </div>
+        `).join('');
+        _slashPaletteEl.querySelectorAll('.slash-item').forEach(item => {
+            item.addEventListener('mouseenter', () => {
+                _slashPaletteIndex = parseInt(item.dataset.idx, 10) || 0;
+                _slashPaletteRender();
+            });
+            item.addEventListener('click', () => {
+                _slashPaletteIndex = parseInt(item.dataset.idx, 10) || 0;
+                _slashPaletteSelect();
+            });
+        });
+        _slashPaletteOpen = true;
+    }
+
+    function _slashPaletteClose() {
+        if (_slashPaletteEl) {
+            _slashPaletteEl.remove();
+            _slashPaletteEl = null;
+        }
+        _slashPaletteOpen = false;
+        _slashPaletteFiltered = [];
+    }
+
+    function _slashPaletteSelect() {
+        const tool = _slashPaletteFiltered[_slashPaletteIndex];
+        if (!tool) return _slashPaletteClose();
+        // 把 textarea 替换成示例 task (有的话) 或工具 hint
+        const example = _AGENT_TOOL_EXAMPLES[tool.name] || `用 ${tool.name} 工具: `;
+        els.inputText.value = example;
+        els.inputText.focus();
+        // 切到 Agent 模式 (slash 都是 tool 调用, RAG 用不了)
+        if (state.mode !== 'agent') {
+            state.mode = 'agent';
+            renderModeTabs?.();
+            updateComposerPlaceholder?.();
+        }
+        _slashPaletteClose();
+    }
+
+    // keydown 拦截: palette 打开时 ↑↓ / Enter / Esc 给 palette 用, return true 表示已处理
+    function _slashPaletteHandleKey(e) {
+        if (!_slashPaletteOpen) return false;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            _slashPaletteIndex = (_slashPaletteIndex + 1) % _slashPaletteFiltered.length;
+            _slashPaletteRender();
+            return true;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            _slashPaletteIndex = (_slashPaletteIndex - 1 + _slashPaletteFiltered.length) % _slashPaletteFiltered.length;
+            _slashPaletteRender();
+            return true;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            _slashPaletteSelect();
+            return true;
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            _slashPaletteClose();
+            return true;
+        }
+        return false;
+    }
+
     // Task PM-3: 首启向导. 检测有没有可用的 chat 模型, 没有就弹.
     // "可用" 定义: 至少有 1 个 CHAT model 且 configured=true.
     async function _maybeShowFirstRunWizard() {
@@ -1121,6 +1234,8 @@
             }
         });
         els.inputText.addEventListener('keydown', (e) => {
+            // Task PM-4: slash palette 优先 — 打开时方向键 / Enter 给 palette 处理
+            if (_slashPaletteHandleKey(e)) return;
             // 中文/日韩输入法 composition 阶段, keyCode 229 + isComposing=true, 不发送
             if (e.isComposing || e.keyCode === 229) return;
             // Enter (无 shift) -> 发送; Shift+Enter -> 让 textarea 自然换行
@@ -1134,6 +1249,10 @@
                 e.preventDefault();
                 send();
             }
+        });
+        // Task PM-4: 监听 input, 输入框首字符是 / 且光标在开头时弹 palette
+        els.inputText.addEventListener('input', () => {
+            _slashPaletteOnInput();
         });
 
         // ========== 📷 文件选择按钮 (拖拽永远 fallback) ==========
@@ -3409,6 +3528,8 @@
                 </div>`;
             }).join('');
             grid.innerHTML = html;
+            // Task PM-4: 同时把 tool 列表存到 module-scope 给 slash command palette 用
+            _allAgentTools = (j.data?.tools || []).slice();
         } catch (e) {
             grid.innerHTML = `<div class="hint">加载异常: ${escapeHtml(e.message)}</div>`;
         }

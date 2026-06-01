@@ -1159,6 +1159,52 @@ body.has-drag .chat-pane::before {
 .message:hover .msg-copy-btn { opacity: 0.7; }
 .msg-copy-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
 
+/* Task PM-4: Slash command palette (浮在 input 上方) */
+.composer { position: relative; }
+.slash-palette {
+    position: absolute;
+    bottom: 100%;
+    left: 24px;
+    right: 24px;
+    max-width: 480px;
+    margin-bottom: 4px;
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    box-shadow: var(--shadow-lg);
+    max-height: 320px;
+    overflow-y: auto;
+    z-index: 30;
+}
+.slash-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.slash-item:last-child { border-bottom: none; }
+.slash-item.active { background: var(--accent-soft); }
+.slash-item .slash-name {
+    color: var(--accent);
+    font-weight: 600;
+    flex-shrink: 0;
+    min-width: 140px;
+}
+.slash-item .slash-desc {
+    color: var(--text-dim);
+    font-size: 12px;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+@media (max-width: 640px) {
+    .slash-palette { left: 12px; right: 12px; max-height: 240px; }
+    .slash-item .slash-name { min-width: 100px; font-size: 12px; }
+}
+
 /* Task PM-3: 首启向导. 复用 drawer 容器但需要居中 modal 形式 */
 .modal-drawer .drawer-backdrop {
     background: rgba(0, 0, 0, 0.6);
