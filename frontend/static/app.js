@@ -220,6 +220,7 @@
         // Task TTTT-2 (#139) + XXXX-9 (#156): workflow 模板按钮 + 列表 + IDB 初始化
         _initWorkflowsStore().catch((e) => console.warn('[workflows] IDB init failed:', e));
         document.getElementById('workflow-save-btn')?.addEventListener('click', _saveCurrentAsWorkflow);
+        document.getElementById('session-sysprompt-btn')?.addEventListener('click', _showSessionSysPromptModal);
         document.getElementById('workflow-list-btn')?.addEventListener('click', () => {
             _refreshWorkflowsList();
             openDrawer('workflows');
@@ -448,15 +449,28 @@
     }
 
     // YYYY-H: 按搜索词过滤 + 重渲
+    // Task PM-7-4: 同时搜消息内容 — 当本地 localStorage 里有 session 的 history 时
+    //              扫一遍消息文本; 没缓存的 session 只比 id+title
     function _filterAndRenderSessions() {
         const q = (els.sessionsSearchInput?.value || '').trim().toLowerCase();
         if (!q) {
             _renderSessionList(_sessionsCache);
             return;
         }
+        // PM-7-4: 加扫 history (localStorage 残存的当前会话, 远端 history 不在客户端)
+        const histMatch = (sid) => {
+            // 只能搜 当前 session 的 in-memory history (state.history); 跨 session 搜需后端支持, MVP 不做
+            if (sid === state.settings.sessionId && Array.isArray(state.history)) {
+                return state.history.some(m =>
+                    (m.content || '').toLowerCase().includes(q)
+                );
+            }
+            return false;
+        };
         const filtered = _sessionsCache.filter(s => {
             const hay = `${s.session_id} ${s.title || ''}`.toLowerCase();
-            return hay.includes(q);
+            if (hay.includes(q)) return true;
+            return histMatch(s.session_id);
         });
         _renderSessionList(filtered);
     }
@@ -464,6 +478,42 @@
     // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
     function _resetSessionsPagination() {
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
+    // Task PM-7-3: per-session system prompt (存 localStorage, key by sid)
+    const _SYSPROMPT_LSKEY = 'anything_session_sysprompts';
+    function _allSessionSysPrompts() {
+        try {
+            const raw = localStorage.getItem(_SYSPROMPT_LSKEY);
+            return raw ? JSON.parse(raw) : {};
+        } catch (_) { return {}; }
+    }
+    function _getSessionSystemPrompt(sid) {
+        if (!sid) return '';
+        const m = _allSessionSysPrompts();
+        return (m[sid] || '').trim();
+    }
+    function _setSessionSystemPrompt(sid, txt) {
+        if (!sid) return;
+        const m = _allSessionSysPrompts();
+        if (txt && txt.trim()) m[sid] = txt.trim();
+        else delete m[sid];
+        try { localStorage.setItem(_SYSPROMPT_LSKEY, JSON.stringify(m)); } catch (_) {}
+    }
+    // 暴露按钮: 在 chat-pane header (这里没有 header 容器, 直接挂到 composer 上方)
+    function _showSessionSysPromptModal() {
+        const sid = state.settings.sessionId;
+        if (!sid) return;
+        const current = _getSessionSystemPrompt(sid);
+        const txt = prompt(
+            `编辑本会话的 system prompt (LLM 系统指令):\n` +
+            `例: "你是 Python 老师, 解释代码时用类比"\n` +
+            `留空 = 清除`,
+            current
+        );
+        if (txt === null) return;  // cancel
+        _setSessionSystemPrompt(sid, txt);
+        toast('success', '本会话 system prompt 已更新', txt ? txt.slice(0, 40) : '(已清空)');
     }
 
     // Task PM-5: Knowledge Base 面板 + per-session attach
@@ -1942,10 +1992,17 @@
         }
 
         // Task PM-5: 当前 session attach 的 KB → extra_params.kb_id
-        // 后端 RAG 看到这字段可以 filter retrieval; agent 模式也透传
         if (state.settings.currentKbId) {
             body.extra_params = body.extra_params || {};
             body.extra_params.kb_id = state.settings.currentKbId;
+        }
+
+        // Task PM-7-3: per-session system prompt → extra_params.system_prompt
+        // (跟 AGENTS.md 项目全局指令叠加, 不替代)
+        const sysPrompt = _getSessionSystemPrompt(currentSid);
+        if (sysPrompt) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.system_prompt = sysPrompt;
         }
 
         // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
@@ -2422,6 +2479,36 @@
     }
 
     // Task XXXX-3 (#150): 给 assistant message body 加单条复制按钮 (右上 hover 显)
+    // Task PM-7-2: assistant 消息加 🔄 重新生成 — 砍掉本条 + 后续, 用上一条 user msg 重发
+    function _attachRegenerateButton(body, msg) {
+        if (!body || !msg) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'msg-regen-btn';
+        btn.title = '重新生成 (会换一种说法)';
+        btn.textContent = '🔄';
+        btn.addEventListener('click', () => {
+            const idx = state.history.findIndex(m => m.id === msg.id);
+            if (idx <= 0) return;
+            // 找前一条 user msg
+            let userIdx = -1;
+            for (let i = idx - 1; i >= 0; i--) {
+                if (state.history[i].role === 'user') { userIdx = i; break; }
+            }
+            if (userIdx < 0) {
+                toast('warn', '找不到上一条 user 消息', '');
+                return;
+            }
+            const userMsg = state.history[userIdx];
+            // truncate 到 userIdx (含), 然后 input 填用户原话 + send()
+            state.history = state.history.slice(0, userIdx);
+            renderHistory();
+            els.inputText.value = userMsg.content || '';
+            send();
+        });
+        body.appendChild(btn);
+    }
+
     function _attachMessageCopyButton(body, rawText) {
         if (!body || !rawText) return;
         const btn = document.createElement('button');
@@ -2804,6 +2891,10 @@
             _attachImageDownloadButtons(body);
             // Task XXXX-3 (#150): 加单条复制按钮
             _attachMessageCopyButton(body, msg.content || '');
+            // Task PM-7-2: 重新生成按钮 (非 error 都加)
+            if (!msg.error) {
+                _attachRegenerateButton(body, msg);
+            }
             // Task PM-2: 加 👍/👎 反馈按钮 (assistant message + 非 error 才显)
             if (!msg.error) {
                 _attachFeedbackButtons(body, msg);

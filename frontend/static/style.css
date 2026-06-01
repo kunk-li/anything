@@ -1291,6 +1291,24 @@ body.has-drag .chat-pane::before {
     .firstrun-providers { grid-template-columns: 1fr; }
 }
 
+/* Task PM-7-2: 重新生成按钮 (assistant body 右上, copy 按钮左边) */
+.msg-regen-btn {
+    position: absolute;
+    top: 6px;
+    right: 38px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.message:hover .msg-regen-btn { opacity: 0.7; }
+.msg-regen-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
+
 /* Task PM-2: 反馈条 (👍 / 👎 + 评语). 出现在 assistant message body 末尾. */
 .msg-feedback {
     margin-top: 12px;

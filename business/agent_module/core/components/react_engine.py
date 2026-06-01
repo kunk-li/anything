@@ -55,6 +55,13 @@ class ReActEngineMixin:
         if not available_tools:
             return None
 
+        # Task PM-7-3: 前端 settings.currentSessionSysPrompt → extra_params.system_prompt
+        # 这里在 task 顶部加一段 [本会话角色] 块, 跟 ProjectMemory (AGENTS.md 全局)
+        # 叠加, 用户能 per-session 定制 LLM 行为而不污染项目级 memory.
+        _session_sys = (extra_params.get("system_prompt") or "").strip()
+        if _session_sys:
+            task = f"[本会话角色 / SessionSystemPrompt]:\n{_session_sys}\n\n---\n\n{task}"
+
         # ============ Task V (#56): Plan mode 早出 ============
         plan_only = bool(extra_params.get("plan_only", False)) and not bool(
             extra_params.get("approve_plan", False)
