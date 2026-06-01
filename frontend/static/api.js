@@ -296,61 +296,132 @@ const ApiClient = (() => {
      */
     function openStream(handlers = {}) {
         const wsUrl = _wsUrl(settings.apiKey);
-        let ws;
-        try {
-            ws = new WebSocket(wsUrl);
-        } catch (e) {
-            if (handlers.onError) handlers.onError({ code: 'WS_OPEN_FAILED', message: e.message });
-            return { send: () => {}, close: () => {}, readyState: 3 };
+        // Task XXXX-15 (#162): WS 连接前重试 — 网络瞬时抖动时不让用户感知
+        // 重试策略: 立即 → 1s → 3s, 共 3 次. 都不行才报 WS_OPEN_FAILED.
+        // 注意: 只在 "握手就 close" / "立刻 error" 时重连; 已成功后断开不自动重连
+        // (避免重发已经在服务端开始执行的请求 → 重复执行)
+        const RECONNECT_DELAYS_MS = [0, 1000, 3000];  // 3 次尝试
+        let ws = null;
+        let _userClosed = false;     // 用户主动调 close() — 不要重连
+        let _everOpened = false;     // 曾经 OPEN 过 — 之后断开不再自动重连
+        let _attempt = 0;            // 当前重试次数
+        let _pendingSend = null;     // 重连期间用户调了 send 暂存
+
+        function _connectOnce() {
+            const delay = RECONNECT_DELAYS_MS[_attempt] || 0;
+            _attempt += 1;
+            setTimeout(() => {
+                if (_userClosed) return;
+                try {
+                    ws = new WebSocket(wsUrl);
+                } catch (e) {
+                    _maybeRetryOrGiveUp({ code: 'WS_OPEN_THROW', message: e.message });
+                    return;
+                }
+                _attachHandlers();
+            }, delay);
         }
 
-        ws.addEventListener('message', (ev) => {
-            let msg;
-            try { msg = JSON.parse(ev.data); } catch { return; }
-            switch (msg.type) {
-                case 'start':       handlers.onStart && handlers.onStart(msg); break;
-                case 'chunk':       handlers.onChunk && handlers.onChunk(msg.text || ''); break;
-                case 'metadata':    handlers.onMetadata && handlers.onMetadata(msg); break;
-                // Task #48: Agent ReAct 思维链
-                case 'thought':     handlers.onThought && handlers.onThought(msg); break;
-                case 'action':      handlers.onAction && handlers.onAction(msg); break;
-                case 'observation': handlers.onObservation && handlers.onObservation(msg); break;
-                // Task V/DD: Plan mode 事件
-                case 'plan':        handlers.onPlan && handlers.onPlan(msg); break;
-                case 'done':        handlers.onDone && handlers.onDone(msg); break;
-                case 'error':       handlers.onError && handlers.onError(msg); break;
-            }
-        });
-        ws.addEventListener('close', (ev) => {
-            if (handlers.onClose) handlers.onClose(ev);
-        });
-        ws.addEventListener('error', (ev) => {
-            if (handlers.onError) handlers.onError({
-                code: 'WS_ERROR',
-                message: 'WebSocket 错误 (可能是网络或服务端断开)',
+        function _attachHandlers() {
+            ws.addEventListener('open', () => {
+                _everOpened = true;
+                _attempt = 0;  // 成功后重置, 后续若再断不再自动重连
+                if (_pendingSend) {
+                    try { ws.send(JSON.stringify(_pendingSend)); } catch (_) {}
+                    _pendingSend = null;
+                }
+                if (handlers.onConnect) handlers.onConnect();
             });
-        });
+            ws.addEventListener('message', (ev) => {
+                let msg;
+                try { msg = JSON.parse(ev.data); } catch { return; }
+                switch (msg.type) {
+                    case 'start':       handlers.onStart && handlers.onStart(msg); break;
+                    case 'chunk':       handlers.onChunk && handlers.onChunk(msg.text || ''); break;
+                    case 'metadata':    handlers.onMetadata && handlers.onMetadata(msg); break;
+                    // Task #48: Agent ReAct 思维链
+                    case 'thought':     handlers.onThought && handlers.onThought(msg); break;
+                    case 'action':      handlers.onAction && handlers.onAction(msg); break;
+                    case 'observation': handlers.onObservation && handlers.onObservation(msg); break;
+                    // Task V/DD: Plan mode 事件
+                    case 'plan':        handlers.onPlan && handlers.onPlan(msg); break;
+                    case 'done':        handlers.onDone && handlers.onDone(msg); break;
+                    case 'error':       handlers.onError && handlers.onError(msg); break;
+                }
+            });
+            ws.addEventListener('close', (ev) => {
+                // 已成功过的连接断开: 不重连, 直接通知上层 (避免重复执行同请求)
+                if (_everOpened || _userClosed) {
+                    if (handlers.onClose) handlers.onClose(ev);
+                    return;
+                }
+                // 握手期间 close: 当作 fail, 尝试重连
+                _maybeRetryOrGiveUp({
+                    code: 'WS_CLOSED_DURING_HANDSHAKE',
+                    message: `WebSocket 握手期 close (code=${ev.code})`,
+                });
+            });
+            ws.addEventListener('error', (ev) => {
+                // error 后通常紧跟 close, 让 close handler 决定是否重连
+                if (_everOpened) {
+                    if (handlers.onError) handlers.onError({
+                        code: 'WS_ERROR',
+                        message: 'WebSocket 错误 (网络或服务端断开)',
+                    });
+                }
+                // 握手期 error 不通知上层, 等 close 重连
+            });
+        }
+
+        function _maybeRetryOrGiveUp(errInfo) {
+            if (_userClosed) return;
+            if (_attempt < RECONNECT_DELAYS_MS.length) {
+                console.warn(`[ws] reconnect attempt ${_attempt}/${RECONNECT_DELAYS_MS.length} after ${errInfo.message}`);
+                _connectOnce();
+            } else {
+                if (handlers.onError) handlers.onError({
+                    ...errInfo,
+                    code: 'WS_OPEN_FAILED',
+                    message: `WebSocket 连接失败 (重试 ${RECONNECT_DELAYS_MS.length} 次): ${errInfo.message}`,
+                });
+            }
+        }
+
+        _connectOnce();
 
         function send(body) {
             const finalBody = { ...body };
             if (settings.sessionId && !finalBody.session_id) {
                 finalBody.session_id = settings.sessionId;
             }
-            const tryFn = () => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(finalBody));
-                } else if (ws.readyState === WebSocket.CONNECTING) {
-                    ws.addEventListener('open', () => ws.send(JSON.stringify(finalBody)), { once: true });
+            if (!ws || ws.readyState === WebSocket.CONNECTING) {
+                // 重连中 / 握手中, 缓存最后一次 send, 等 open 触发
+                _pendingSend = finalBody;
+                if (ws && ws.readyState === WebSocket.CONNECTING) {
+                    ws.addEventListener('open', () => {
+                        if (_pendingSend) {
+                            try { ws.send(JSON.stringify(_pendingSend)); } catch (_) {}
+                            _pendingSend = null;
+                        }
+                    }, { once: true });
                 }
-            };
-            tryFn();
+                return;
+            }
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(finalBody));
+            }
         }
 
         function close() {
-            try { ws.close(); } catch (_) {}
+            _userClosed = true;
+            _pendingSend = null;
+            try { if (ws) ws.close(); } catch (_) {}
         }
 
-        return { send, close, get readyState() { return ws.readyState; } };
+        return {
+            send, close,
+            get readyState() { return ws ? ws.readyState : WebSocket.CONNECTING; },
+        };
     }
 
     function _wsUrl(apiKey) {
