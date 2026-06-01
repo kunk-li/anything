@@ -35,11 +35,23 @@ class StreamingMixin:
                 )
         except Exception:
             augmented = task
-        # 2. per-session system prompt (PM-7-3)
+        # 2. 注入对话历史 (多轮上下文) — 修金鱼记忆. 读 state_store 最近 N 轮.
+        hist_block = ""
+        try:
+            history = self._load_history(request.get("session_id"))
+            if history:
+                lines = []
+                for h in history:
+                    who = "用户" if h.get("role") == "user" else "助手"
+                    lines.append(f"{who}: {h.get('content', '')}")
+                hist_block = "[对话历史]\n" + "\n".join(lines) + "\n\n"
+        except Exception:
+            hist_block = ""
+        # 3. per-session system prompt (PM-7-3)
         sys_prompt = (extra_params.get("system_prompt") or "").strip()
-        prompt = (f"[系统指令]\n{sys_prompt}\n\n[用户]\n{augmented}"
-                  if sys_prompt else augmented)
-        # 3. 先发空 meta (前端清 trace 区), 再逐 token
+        sys_block = f"[系统指令]\n{sys_prompt}\n\n" if sys_prompt else ""
+        prompt = f"{sys_block}{hist_block}[当前问题]\n{augmented}" if (sys_block or hist_block) else augmented
+        # 4. 先发空 meta (前端清 trace 区), 再逐 token
         yield {"type": "meta", "steps": [], "tool_results_summary": [],
                "citations": [], "retrieved_chunks": []}
         got_any = False

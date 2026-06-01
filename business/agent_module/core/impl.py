@@ -766,6 +766,34 @@ class SimpleAgent(
                 f"event_type={event_type}, error={str(e)}"
             )
 
+    def _load_history(self, session_id, max_turns: int = 6):
+        """从 state_store 读最近 N 轮对话, 返回 [{role, content}, ...].
+
+        修 Agent "金鱼记忆": 之前 Agent 完全不读会话历史 (只有 long_term_memory
+        facts), 多轮对话不连贯. 现在跟 RAG 一样从 state.events 读最近 N 轮注入 prompt.
+        读的是历史 (不含当前轮, 当前轮流式完成后才持久化).
+        """
+        if not session_id or not self.state_store:
+            return []
+        try:
+            state = self.state_store.get_state(session_id)
+        except Exception:
+            return []
+        if not isinstance(state, dict):
+            return []
+        events = state.get("events") or []
+        max_msgs = max(1, max_turns) * 2
+        if len(events) > max_msgs:
+            events = events[-max_msgs:]
+        msgs = []
+        for ev in events:
+            if isinstance(ev, dict):
+                role = ev.get("role")
+                content = ev.get("content")
+                if role in ("user", "assistant") and isinstance(content, str) and content:
+                    msgs.append({"role": role, "content": content})
+        return msgs
+
     def _save_state_safe(
             self,
             session_id: str,
