@@ -72,6 +72,8 @@ def sql_query(payload: Dict[str, Any]) -> Dict[str, Any]:
     if truncated:
         rows = rows[:max_rows]
 
+    # Task PM-7-8: description 含 markdown 表格, 前端 (普通 markdown 渲染) 直接显成表
+    md_table = _rows_to_markdown_table(cols, rows, max_rows=20)
     return {
         "code": "SUCCESS",
         "message": "ok",
@@ -82,14 +84,36 @@ def sql_query(payload: Dict[str, Any]) -> Dict[str, Any]:
             "truncated": truncated,
             "description": (
                 f"返回 {len(cols)} 列 {len(rows)} 行"
-                + (" (已截断)" if truncated else "")
+                + (" (已截断 max_rows)" if truncated else "")
                 + (f". {demo_note}" if demo_note else "")
+                + (f"\n\n{md_table}" if md_table else "")
             ),
         },
         "trace_id": trace_id,
         "retryable": False,
         "details": None,
     }
+
+
+def _rows_to_markdown_table(cols: List[str], rows: List[List[Any]], max_rows: int = 20) -> str:
+    """Task PM-7-8: SQL 结果 → markdown 表 (前端 markdown 渲染直接显)."""
+    if not cols:
+        return ""
+    if not rows:
+        return f"| {' | '.join(cols)} |\n| {' | '.join('---' for _ in cols)} |\n| {' | '.join('(空)' for _ in cols)} |"
+    visible = rows[:max_rows]
+    header = "| " + " | ".join(str(c) for c in cols) + " |"
+    sep = "| " + " | ".join("---" for _ in cols) + " |"
+    body_lines = []
+    for r in visible:
+        cells = [str(c) if c is not None else "" for c in r]
+        # 转义 markdown 表格中 | 字符
+        cells = [c.replace("|", "\\|").replace("\n", " ") for c in cells]
+        body_lines.append("| " + " | ".join(cells) + " |")
+    note = ""
+    if len(rows) > max_rows:
+        note = f"\n\n_(共 {len(rows)} 行, 表中展示前 {max_rows} 行)_"
+    return "\n".join([header, sep] + body_lines) + note
 
 
 def _run_query(

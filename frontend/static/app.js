@@ -2548,6 +2548,84 @@
     }
 
     // Task XXXX-3 (#150): 给 assistant message body 加单条复制按钮 (右上 hover 显)
+    // Task PM-7-7: 多模型 side-by-side 对比 — 同 prompt 跑 2-3 个 model, 平铺答案
+    // 实现思路: 拉已注册 CHAT models → 让用户勾 2-3 个 → 平行调 /invoke (非流式) →
+    //          每个答案渲成一张并列卡片 (用 assistant 消息插入, mode='compare').
+    // 简化: 不走流式 (流式 + 多模型并发, UI 状态难管理), 用 sendOnce 模式.
+    async function _startModelCompare(userMsg) {
+        if (!userMsg) return;
+        // 先列 models
+        let models = [];
+        try {
+            const { payload, status } = await ApiClient.listModels();
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                toast('error', '加载模型失败', payload?.code || status);
+                return;
+            }
+            models = (payload.data?.models || []).filter(
+                m => (m.request_type || '').toUpperCase() === 'CHAT' && m.configured
+            );
+        } catch (e) {
+            toast('error', '加载模型失败', e.message);
+            return;
+        }
+        if (models.length < 2) {
+            toast('warn', '至少需要 2 个已配置 model', '去 ⚙ 设置 → 高级 → 模型管理 注册');
+            return;
+        }
+        // 弹简易选择 (用 prompt; 后续可换 modal)
+        const names = models.map(m => m.name);
+        const pick = prompt(
+            `选 2-3 个模型对比 (逗号分隔, 名字必须精确):\n可选: ${names.join(', ')}\n默全选前 3 个`,
+            names.slice(0, 3).join(', ')
+        );
+        if (pick === null) return;
+        const selected = pick.split(',').map(s => s.trim()).filter(s => names.includes(s));
+        if (selected.length < 2) {
+            toast('warn', '至少选 2 个 (名字要精确)', '');
+            return;
+        }
+        const userText = userMsg.content || '';
+        const mode = userMsg.mode || 'agent';
+        // 渲一个 compare card 占位
+        const placeholderId = addMessage({
+            role: 'assistant', mode: 'compare', content: '',
+            compareModels: selected, compareResults: {}, loading: true, ts: Date.now(),
+        });
+        // 并行调
+        const tenant = state.settings.tenant || 'default';
+        const tasks = selected.map(modelName =>
+            ApiClient.invoke({
+                type: mode,
+                task: userText,
+                top_k: 5,
+                tenant_id: tenant,
+                extra_params: { model_name: modelName },
+            }).then(r => ({ modelName, ok: true, payload: r.payload, status: r.status }))
+              .catch(e => ({ modelName, ok: false, error: e.message }))
+        );
+        const results = await Promise.all(tasks);
+        // 更新 placeholder msg
+        const msg = state.history.find(m => m.id === placeholderId);
+        if (!msg) return;
+        msg.loading = false;
+        msg.compareResults = {};
+        for (const r of results) {
+            if (r.ok && r.status === 200 && r.payload?.code === 'SUCCESS') {
+                msg.compareResults[r.modelName] = {
+                    answer: r.payload.data?.answer || '(无回答)',
+                    cost_time: r.payload.cost_time,
+                };
+            } else {
+                msg.compareResults[r.modelName] = {
+                    answer: `× ${r.error || r.payload?.code || r.status}: ${r.payload?.message || ''}`,
+                    error: true,
+                };
+            }
+        }
+        renderHistory();
+    }
+
     // Task PM-7-2: assistant 消息加 🔄 重新生成 — 砍掉本条 + 后续, 用上一条 user msg 重发
     function _attachRegenerateButton(body, msg) {
         if (!body || !msg) return;
@@ -2941,6 +3019,28 @@
         body.className = 'message-body';
         if (msg.error) body.classList.add('error');
 
+        // Task PM-7-7: compare 卡片 — 多 model 答案并列
+        if (msg.mode === 'compare') {
+            const cards = (msg.compareModels || []).map(name => {
+                const r = (msg.compareResults || {})[name];
+                if (!r) return `<div class="compare-card pending">
+                    <div class="compare-card-head"><strong>${escapeHtml(name)}</strong> <span class="hint">运行中…</span></div>
+                </div>`;
+                const cls = r.error ? 'compare-card error' : 'compare-card';
+                const ans = window.Markdown ? window.Markdown.render(r.answer || '') : escapeHtml(r.answer || '');
+                const cost = r.cost_time ? ` <span class="hint">${r.cost_time}s</span>` : '';
+                return `<div class="${cls}">
+                    <div class="compare-card-head"><strong>${escapeHtml(name)}</strong>${cost}</div>
+                    <div class="compare-card-body">${ans}</div>
+                </div>`;
+            }).join('');
+            body.innerHTML = `<div class="compare-grid">${cards}</div>`;
+            content.appendChild(body);
+            wrapper.appendChild(avatar);
+            wrapper.appendChild(content);
+            return wrapper;
+        }
+
         if (msg.loading) {
             // Task XXXX-1 (#148): 长任务显 elapsed 秒数, 避免卡死错觉
             const startTs = msg.loadingStartedAt || Date.now();
@@ -2987,6 +3087,18 @@
                 _enterEditMode(msg, wrapper, body);
             });
             wrapper.appendChild(editBtn);  // 浮在右上 (CSS absolute)
+
+            // Task PM-7-7: 对比按钮 — 让多个 model 跑同 prompt 比答案
+            const compareBtn = document.createElement('button');
+            compareBtn.type = 'button';
+            compareBtn.className = 'msg-compare-btn';
+            compareBtn.title = '让 2-3 个模型同时跑这条 prompt, 比答案';
+            compareBtn.textContent = '⚖';
+            compareBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                _startModelCompare(msg);
+            });
+            wrapper.appendChild(compareBtn);
         }
 
         // citations

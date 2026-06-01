@@ -1291,6 +1291,74 @@ body.has-drag .chat-pane::before {
     .firstrun-providers { grid-template-columns: 1fr; }
 }
 
+/* Task PM-7-7: 多模型对比 卡片 */
+.compare-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+}
+.compare-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    min-height: 120px;
+}
+.compare-card.pending {
+    background: repeating-linear-gradient(
+        45deg, var(--bg-elev), var(--bg-elev) 10px,
+        var(--bg-elev2) 10px, var(--bg-elev2) 20px
+    );
+}
+.compare-card.error { border-color: var(--danger); }
+.compare-card-head {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+.compare-card-head strong { color: var(--accent); }
+.compare-card-body { font-size: 13px; line-height: 1.5; }
+.msg-compare-btn {
+    position: absolute;
+    top: 6px;
+    right: 36px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.message-user:hover .msg-compare-btn { opacity: 0.7; }
+.msg-compare-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
+
+/* Task PM-7-8: markdown 表格 (SQL 结果等) */
+.md-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10px 0;
+    font-size: 13px;
+    border: 1px solid var(--border);
+}
+.md-table th {
+    background: var(--bg-elev2);
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 2px solid var(--border-strong);
+    font-weight: 600;
+}
+.md-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+.md-table tr:last-child td { border-bottom: none; }
+.md-table tr:nth-child(even) { background: rgba(127, 127, 127, 0.04); }
+
 /* Task PM-6: 高级 details 折叠器, 把 plan/reflect/top_k 藏起来 */
 .composer-advanced {
     display: inline-block;
