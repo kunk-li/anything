@@ -2052,6 +2052,15 @@
             body.extra_params.plan_only = true;
         }
 
+        // 流式 toggle 真生效: 后端 execution_strategy 默 single_shot 不走真流, 必须
+        // 显式注入 react 才会拿到 token-by-token 推送 (streaming.py 注释明确这点).
+        // 没勾流式时不注入, 保留 yaml 配置默认.
+        const useStreamForReq = !!(els.streamToggle && els.streamToggle.checked);
+        if (useStreamForReq && (mode === 'agent' || mode === 'hybrid')) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.execution_strategy = 'react';
+        }
+
         // Task KKK (#97) / III (#95): Reflection 开关注入 extra_params.enable_reflection
         // Agent 拿到答案后会跑 critique → revise 二阶段优化
         const reflectMode = !!(els.reflectToggle && els.reflectToggle.checked);
