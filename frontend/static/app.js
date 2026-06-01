@@ -395,7 +395,10 @@
         const current = state.settings.sessionId;
         if (els.sessionsCount) els.sessionsCount.textContent = String(sessions.length);
         if (!sessions.length) {
-            els.sessionList.innerHTML = '<li class="empty-state">无匹配会话</li>';
+            // Task XXXX-17: 区分"过滤无匹配"和"真无会话"两种空态
+            const q = (els.sessionsSearchInput?.value || '').trim();
+            const msg = q ? '无匹配会话' : (window.I18n?.t('sessions.empty') || '无会话');
+            els.sessionList.innerHTML = `<li class="empty-state">${escapeHtml(msg)}</li>`;
             return;
         }
         // 分页: 只渲前 _sessionsVisibleLimit 条
@@ -453,6 +456,22 @@
     // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
     function _resetSessionsPagination() {
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
+    // Task XXXX-17: 发送中的会话还没在 _sessionsCache 里 → 乐观插一条占位,
+    // 让左栏立刻显有此会话. response 完成 + refreshSessions 之后会被真数据覆盖.
+    function _optimisticAddCurrentSession(sid, firstMsg) {
+        if (!sid) return;
+        if (_sessionsCache.some(s => s.session_id === sid)) return;  // 已有, 跳
+        const title = (firstMsg || sid).split('\n')[0].slice(0, 30);
+        _sessionsCache.unshift({
+            session_id: sid,
+            title,
+            last_modified: Math.floor(Date.now() / 1000),
+            has_history: true,
+            _optimistic: true,  // 标记位, refreshSessions 时会被服务端真值覆盖
+        });
+        _filterAndRenderSessions();
     }
 
     async function refreshSessions() {
@@ -1518,6 +1537,10 @@
         state.inflight.set(capturedSid, { placeholderId, startedAt: Date.now() });
         // 同时刷左栏 inflight 标记 + 按钮视觉 (per-session)
         _updateSessionInflightUI();
+        // Task XXXX-17: 当前 sid 还没进 _sessionsCache (后端 state 还没落盘) →
+        // 先乐观加一条到本地 cache, 让左栏立刻显有这个会话; 真名/真时间会在
+        // 后续 refreshSessions (response 完成后) 拉到再覆盖.
+        _optimisticAddCurrentSession(capturedSid, displayContent);
         state.activePlaceholderId = placeholderId;
         els.inputText.value = '';
         els.inputText.focus();
@@ -1538,6 +1561,9 @@
             }
             state.sending = false;
             state.activePlaceholderId = null;
+            // Task XXXX-17: 响应完, 后端 state 已落盘 → 拉真数据覆盖 optimistic 占位
+            // (真 title 由 backend 提取 user 首条消息生成, 比前端裁剪准)
+            refreshSessions().catch(() => {});
         }
 
         // 发送完成后清空附件 (无论成功失败都清, 失败的已经在 UI 上标红)
