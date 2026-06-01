@@ -49,6 +49,76 @@
         </div>
     </header>
 
+    <!-- Task PM-3: 首次启动配置向导 — 检测无可用 LLM 时显 -->
+    <div class="drawer modal-drawer" id="firstrun-drawer" hidden>
+        <div class="drawer-backdrop"></div>
+        <div class="drawer-panel firstrun-panel">
+            <div class="drawer-header">
+                <h3>👋 欢迎使用 Anything — 配置 LLM 开始 chat</h3>
+            </div>
+            <div class="drawer-body">
+                <p class="hint" style="margin-bottom:12px">
+                    还没配可用的 chat 模型. 选 provider, 粘 API key, 立刻可以 chat. 不需要碰 yaml.
+                </p>
+
+                <div class="form-row">
+                    <label>1. Provider</label>
+                    <div class="firstrun-providers">
+                        <button type="button" class="firstrun-provider-btn" data-provider="dashscope">
+                            <span class="fp-icon">🇨🇳</span>
+                            <span class="fp-name">DashScope (通义千问)</span>
+                            <span class="fp-hint">国内, Qwen 系列, 有免费额度</span>
+                        </button>
+                        <button type="button" class="firstrun-provider-btn" data-provider="openai">
+                            <span class="fp-icon">🌍</span>
+                            <span class="fp-name">OpenAI</span>
+                            <span class="fp-hint">GPT-4o / GPT-4o-mini</span>
+                        </button>
+                        <button type="button" class="firstrun-provider-btn" data-provider="deepseek">
+                            <span class="fp-icon">🧠</span>
+                            <span class="fp-name">DeepSeek</span>
+                            <span class="fp-hint">便宜大碗, 推理强</span>
+                        </button>
+                        <button type="button" class="firstrun-provider-btn" data-provider="ollama">
+                            <span class="fp-icon">💻</span>
+                            <span class="fp-name">Ollama (本地)</span>
+                            <span class="fp-hint">不需要 key, 要本地先 ollama pull</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-row" id="firstrun-key-row" hidden>
+                    <label for="firstrun-key-input">2. API Key</label>
+                    <input type="password" id="firstrun-key-input"
+                           placeholder="粘贴你的 API key" />
+                    <p class="hint" id="firstrun-key-hint"></p>
+                </div>
+
+                <div class="form-row" id="firstrun-model-row" hidden>
+                    <label for="firstrun-model-input">3. 模型名</label>
+                    <input type="text" id="firstrun-model-input" placeholder="例: qwen-max" />
+                    <p class="hint">LLM provider 那边定义的模型 ID, 可改</p>
+                </div>
+
+                <div class="form-row" id="firstrun-base-row" hidden>
+                    <label for="firstrun-base-input">4. API Base URL (一般不动)</label>
+                    <input type="text" id="firstrun-base-input" />
+                </div>
+
+                <div class="form-row" id="firstrun-submit-row" hidden>
+                    <button type="button" class="small-btn primary" id="firstrun-submit-btn"
+                            style="font-size:14px;padding:8px 24px">
+                        ✓ 保存并开始 chat
+                    </button>
+                    <button type="button" class="small-btn ghost" id="firstrun-skip-btn"
+                            style="margin-left:8px">
+                        跳过 (我自己改 .env)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Task LLLL (#129): 快捷键帮助 modal -->
     <div class="drawer" id="shortcuts-drawer" hidden>
         <div class="drawer-backdrop" data-close="shortcuts"></div>
@@ -634,23 +704,23 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=163"></script>
-    <script src="/static/i18n.js?v=163"></script>
-    <script src="/static/markdown.js?v=163"></script>
+    <script src="/static/api.js?v=164"></script>
+    <script src="/static/i18n.js?v=164"></script>
+    <script src="/static/markdown.js?v=164"></script>
     <!-- Task XXXX-9 (#156): IndexedDB KV mirror (workflows / drafts 用) -->
-    <script src="/static/idb-store.js?v=163"></script>
+    <script src="/static/idb-store.js?v=164"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=163"></script>
-    <script src="/static/modules/export.js?v=163"></script>
-    <script src="/static/modules/health.js?v=163"></script>
-    <script src="/static/modules/upload-manager.js?v=163"></script>
-    <script src="/static/modules/admin-panel.js?v=163"></script>
-    <script src="/static/modules/models-admin.js?v=163"></script>
+    <script src="/static/modules/ui-helpers.js?v=164"></script>
+    <script src="/static/modules/export.js?v=164"></script>
+    <script src="/static/modules/health.js?v=164"></script>
+    <script src="/static/modules/upload-manager.js?v=164"></script>
+    <script src="/static/modules/admin-panel.js?v=164"></script>
+    <script src="/static/modules/models-admin.js?v=164"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=163"></script>
+    <script src="/static/modules/memory-panel.js?v=164"></script>
 
-    <script src="/static/app.js?v=163"></script>
+    <script src="/static/app.js?v=164"></script>
 </body>
 </html>

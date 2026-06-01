@@ -1159,6 +1159,51 @@ body.has-drag .chat-pane::before {
 .message:hover .msg-copy-btn { opacity: 0.7; }
 .msg-copy-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
 
+/* Task PM-3: 首启向导. 复用 drawer 容器但需要居中 modal 形式 */
+.modal-drawer .drawer-backdrop {
+    background: rgba(0, 0, 0, 0.6);
+}
+.firstrun-panel {
+    max-width: 540px;
+    margin: 5vh auto;
+    width: 90%;
+    position: relative;
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+}
+.firstrun-providers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.firstrun-provider-btn {
+    background: var(--bg-elev);
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--text);
+    transition: all 0.15s;
+}
+.firstrun-provider-btn:hover {
+    border-color: var(--accent);
+    background: var(--bg-elev2);
+}
+.firstrun-provider-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.firstrun-provider-btn .fp-icon { font-size: 18px; }
+.firstrun-provider-btn .fp-name { font-weight: 600; font-size: 13px; }
+.firstrun-provider-btn .fp-hint { font-size: 11px; color: var(--text-dim); }
+@media (max-width: 640px) {
+    .firstrun-providers { grid-template-columns: 1fr; }
+}
+
 /* Task PM-2: 反馈条 (👍 / 👎 + 评语). 出现在 assistant message body 末尾. */
 .msg-feedback {
     margin-top: 12px;

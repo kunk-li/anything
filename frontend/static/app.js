@@ -190,6 +190,10 @@
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
 
+        // Task PM-3: 启动后检测有没有可用 LLM, 没有就弹首启向导
+        setTimeout(_maybeShowFirstRunWizard, 800);
+        _bindFirstRunWizard();
+
         // Task NNNN (#131): 主题切换按钮
         document.querySelectorAll('.theme-opt').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -456,6 +460,142 @@
     // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
     function _resetSessionsPagination() {
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
+    // Task PM-3: 首启向导. 检测有没有可用的 chat 模型, 没有就弹.
+    // "可用" 定义: 至少有 1 个 CHAT model 且 configured=true.
+    async function _maybeShowFirstRunWizard() {
+        try {
+            const { payload, status } = await ApiClient.listModels();
+            if (status !== 200 || payload?.code !== 'SUCCESS') return;
+            const models = payload.data?.models || [];
+            const configured = models.filter(
+                m => (m.request_type || '').toUpperCase() === 'CHAT' && m.configured
+            );
+            if (configured.length > 0) return;  // 已有可用, 不弹
+            // 没有 — 显向导
+            const drawer = document.getElementById('firstrun-drawer');
+            if (drawer) drawer.hidden = false;
+        } catch (_) {
+            // 失败 (服务挂?) 不弹, 让用户自己处理
+        }
+    }
+
+    // 4 个 provider 的预设
+    const _FIRSTRUN_PROVIDERS = {
+        dashscope: {
+            label: 'DashScope (通义千问)',
+            api_base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            default_model: 'qwen-max',
+            adapter_class: 'OpenAIChatAdapter',
+            key_hint: 'sk-xxxx (从 https://dashscope.console.aliyun.com 获取)',
+            key_required: true,
+        },
+        openai: {
+            label: 'OpenAI',
+            api_base: 'https://api.openai.com/v1',
+            default_model: 'gpt-4o-mini',
+            adapter_class: 'OpenAIChatAdapter',
+            key_hint: 'sk-xxxx (从 https://platform.openai.com/api-keys 获取)',
+            key_required: true,
+        },
+        deepseek: {
+            label: 'DeepSeek',
+            api_base: 'https://api.deepseek.com/v1',
+            default_model: 'deepseek-chat',
+            adapter_class: 'OpenAIChatAdapter',
+            key_hint: 'sk-xxxx (从 https://platform.deepseek.com 获取)',
+            key_required: true,
+        },
+        ollama: {
+            label: 'Ollama (本地)',
+            api_base: 'http://localhost:11434/v1',
+            default_model: 'llama3.2',
+            adapter_class: 'OpenAIChatAdapter',
+            key_hint: 'Ollama 不需要 key (填 "ollama" 占位即可). 确保本地 ollama serve 已启动.',
+            key_required: false,
+        },
+    };
+
+    function _bindFirstRunWizard() {
+        const drawer = document.getElementById('firstrun-drawer');
+        if (!drawer) return;
+        let selectedProvider = null;
+
+        // provider 按钮
+        drawer.querySelectorAll('.firstrun-provider-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                selectedProvider = btn.dataset.provider;
+                drawer.querySelectorAll('.firstrun-provider-btn').forEach(b =>
+                    b.classList.toggle('active', b === btn)
+                );
+                const preset = _FIRSTRUN_PROVIDERS[selectedProvider];
+                if (!preset) return;
+                // 显后面的 step
+                document.getElementById('firstrun-key-row').hidden = false;
+                document.getElementById('firstrun-model-row').hidden = false;
+                document.getElementById('firstrun-base-row').hidden = false;
+                document.getElementById('firstrun-submit-row').hidden = false;
+                document.getElementById('firstrun-key-hint').textContent = preset.key_hint;
+                document.getElementById('firstrun-model-input').value = preset.default_model;
+                document.getElementById('firstrun-base-input').value = preset.api_base;
+                // Ollama 不需要 key, 自动填占位
+                const keyInput = document.getElementById('firstrun-key-input');
+                if (!preset.key_required) {
+                    keyInput.value = 'ollama';
+                    keyInput.disabled = true;
+                } else {
+                    keyInput.disabled = false;
+                    if (keyInput.value === 'ollama') keyInput.value = '';
+                    keyInput.focus();
+                }
+            });
+        });
+
+        // 保存按钮
+        document.getElementById('firstrun-submit-btn')?.addEventListener('click', async () => {
+            if (!selectedProvider) {
+                toast('warn', '请选 provider', '');
+                return;
+            }
+            const preset = _FIRSTRUN_PROVIDERS[selectedProvider];
+            const key = document.getElementById('firstrun-key-input').value.trim();
+            const modelName = document.getElementById('firstrun-model-input').value.trim();
+            const apiBase = document.getElementById('firstrun-base-input').value.trim();
+            if (preset.key_required && !key) {
+                toast('warn', 'API key 不能为空', '');
+                return;
+            }
+            if (!modelName) {
+                toast('warn', '模型名不能为空', '');
+                return;
+            }
+            try {
+                // 1. register model
+                const reg = await ApiClient.registerModel({
+                    name: modelName,
+                    request_type: 'CHAT',
+                    adapter_class: preset.adapter_class,
+                    api_key: key,
+                    api_base: apiBase,
+                    set_as_default: true,  // 自动设为默认
+                });
+                if (reg.status !== 200 || reg.payload?.code !== 'SUCCESS') {
+                    toast('error', reg.payload?.code || reg.status, reg.payload?.message || '');
+                    return;
+                }
+                toast('success', `${preset.label} 已配置`, `model=${modelName}, 默认 CHAT`);
+                drawer.hidden = true;
+                // 刷新设置抽屉里 picker (虽然没打开, 提前更新)
+                _loadChatModelPicker();
+            } catch (e) {
+                toast('error', '配置失败', e.message);
+            }
+        });
+
+        document.getElementById('firstrun-skip-btn')?.addEventListener('click', () => {
+            drawer.hidden = true;
+        });
     }
 
     // Task XXXX-20 (#164): 加载 chat 模型 picker. 设置抽屉打开时调.
