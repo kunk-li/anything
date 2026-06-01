@@ -22,8 +22,8 @@
     --accent-strong: #5f80f6;
     --accent-soft: rgba(124, 155, 255, 0.16);
     --accent-glow: rgba(124, 155, 255, 0.38);
-    --primary: #7c9bff;
-    --primary-hover: #5f80f6;
+    --primary: #3b66ea;
+    --primary-hover: #3257d6;
     --primary-soft: rgba(124, 155, 255, 0.18);
     --bg-soft: rgba(140, 152, 178, 0.10);
     --success: #4ade80;
@@ -820,7 +820,7 @@ body:has(.llm-banner) .app-header {
     color: var(--text);
 }
 .lang-opt.active {
-    background: var(--accent);
+    background: var(--primary);
     color: white;
 }
 /* Task NNNN (#131): 主题切换按钮 (复用 .lang-opt 样式 + 共用 active) */
@@ -836,7 +836,7 @@ body:has(.llm-banner) .app-header {
 }
 .theme-opt:hover { color: var(--text); }
 .theme-opt.active {
-    background: var(--accent);
+    background: var(--primary);
     color: white;
 }
 .theme-switch { display: inline-flex; gap: 4px; padding: 2px; background: var(--bg-elev2); border: 1px solid var(--border); border-radius: 6px; }
@@ -1029,16 +1029,31 @@ body.has-drag .chat-pane::before {
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* 空态(只有欢迎屏)时, 整个消息区垂直居中 — 不再把内容堆在顶部留大片空白 */
+.messages:has(> .welcome) {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
 .welcome {
-    max-width: 640px;
-    margin: 48px auto;
+    max-width: 760px;
+    margin: 0 auto;
     text-align: center;
     color: var(--text-dim);
 }
 .welcome h2 {
-    margin: 0 0 12px;
-    color: var(--text);
-    font-weight: 600;
+    margin: 0 0 10px;
+    color: var(--text-strong);
+    font-weight: 700;
+    font-size: 27px;
+    letter-spacing: 0.2px;
+}
+.welcome > p {
+    font-size: 14.5px;
+    color: var(--text-dim);
+    margin: 0 auto 4px;
+    max-width: 520px;
 }
 .welcome .hint-list {
     text-align: left;
@@ -1060,9 +1075,10 @@ body.has-drag .chat-pane::before {
 .welcome-examples {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-top: 28px;
+    gap: 12px;
+    margin-top: 34px;
     text-align: left;
+    width: 100%;
 }
 .welcome-example-row {
     display: grid;
@@ -1072,25 +1088,36 @@ body.has-drag .chat-pane::before {
 .welcome-example {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 12px 14px;
+    gap: 12px;
+    padding: 14px 16px;
     background: var(--bg-elev2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
     cursor: pointer;
-    transition: all 120ms;
+    transition: all 140ms ease;
     color: var(--text);
     text-align: left;
-    font-size: 13px;
+    font-size: 13.5px;
     width: 100%;
-    text-align: left;
+    box-shadow: var(--shadow-sm);
 }
 .welcome-example:hover {
-    border-color: var(--accent, #4f8cff);
-    background: var(--bg-soft, rgba(79,140,255,0.08));
-    transform: translateY(-1px);
+    border-color: var(--accent);
+    background: var(--bg-elev);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
 }
-.welcome-example .we-icon { font-size: 18px; flex-shrink: 0; }
+.welcome-example .we-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent);
+}
 .welcome-example .we-text {
     flex: 1;
     overflow: hidden;
@@ -1723,7 +1750,7 @@ body.share-readonly .msg-feedback {
     color: var(--text);
 }
 .mode-tab.active {
-    background: var(--accent);
+    background: var(--primary);
     color: white;
 }
 
@@ -1889,8 +1916,8 @@ body.share-readonly .msg-feedback {
 }
 
 .send-btn {
-    background: var(--accent);
-    border: 1px solid var(--accent);
+    background: var(--primary);
+    border: 1px solid var(--primary);
     color: white;
     padding: 0 18px;
     border-radius: var(--radius-sm);
@@ -1898,13 +1925,13 @@ body.share-readonly .msg-feedback {
     display: flex;
     align-items: center;
     gap: 6px;
-    box-shadow: 0 2px 8px var(--accent-glow);
+    box-shadow: 0 2px 10px rgba(59, 102, 234, 0.45);
     transition: all var(--transition);
 }
 .send-btn:hover:not(:disabled) {
-    background: var(--accent-strong);
+    background: var(--primary-hover);
     transform: translateY(-1px);
-    box-shadow: 0 5px 16px var(--accent-glow);
+    box-shadow: 0 6px 18px rgba(59, 102, 234, 0.5);
 }
 .send-btn:disabled {
     opacity: 0.5;
@@ -2565,6 +2592,9 @@ body.share-readonly .msg-feedback {
     padding: 6px 12px;
     border-radius: var(--radius-sm);
     font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     transition: all var(--transition);
 }
 .small-btn:hover {
@@ -2574,15 +2604,16 @@ body.share-readonly .msg-feedback {
 .small-btn.block { display: block; width: 100%; margin-top: 12px; }
 
 .primary-btn {
-    background: var(--accent);
-    border: 1px solid var(--accent);
+    background: var(--primary);
+    border: 1px solid var(--primary);
     color: white;
     padding: 8px 18px;
     border-radius: var(--radius-sm);
     font-weight: 600;
+    box-shadow: 0 2px 10px rgba(59, 102, 234, 0.4);
     transition: all var(--transition);
 }
-.primary-btn:hover { background: var(--accent-strong); }
+.primary-btn:hover { background: var(--primary-hover); }
 
 .secondary-btn {
     background: transparent;

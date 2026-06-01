@@ -2940,26 +2940,26 @@
                 <div class="welcome-examples">
                     <div class="welcome-example-row">
                         <button class="welcome-example" data-mode="agent" data-prompt="现在北京几点">
-                            <span class="we-icon">🕒</span><span class="we-text">现在北京几点</span><span class="we-tag">Agent</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-clock"/></svg></span><span class="we-text">现在北京几点</span><span class="we-tag">Agent</span>
                         </button>
                         <button class="welcome-example" data-mode="agent" data-prompt="12345 乘以 67890 等于多少">
-                            <span class="we-icon">🧮</span><span class="we-text">12345 × 67890 = ?</span><span class="we-tag">Agent</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-calc"/></svg></span><span class="we-text">12345 × 67890 = ?</span><span class="we-tag">Agent</span>
                         </button>
                     </div>
                     <div class="welcome-example-row">
                         <button class="welcome-example" data-mode="agent" data-prompt="北京天气怎么样">
-                            <span class="we-icon">🌤</span><span class="we-text">北京天气怎么样</span><span class="we-tag">Agent</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cloud"/></svg></span><span class="we-text">北京天气怎么样</span><span class="we-tag">Agent</span>
                         </button>
                         <button class="welcome-example" data-mode="agent" data-prompt="维基百科查一下 Python 编程语言">
-                            <span class="we-icon">📖</span><span class="we-text">查 Python 维基</span><span class="we-tag">Agent</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-book"/></svg></span><span class="we-text">查 Python 维基</span><span class="we-tag">Agent</span>
                         </button>
                     </div>
                     <div class="welcome-example-row">
                         <button class="welcome-example" data-mode="rag" data-prompt="什么是 RAG">
-                            <span class="we-icon">🔍</span><span class="we-text">什么是 RAG</span><span class="we-tag">RAG</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg></span><span class="we-text">什么是 RAG</span><span class="we-tag">RAG</span>
                         </button>
                         <button class="welcome-example" data-mode="hybrid" data-prompt="项目里 tenant 是怎么设计的">
-                            <span class="we-icon">🧩</span><span class="we-text">tenant 是怎么设计的</span><span class="we-tag">Hybrid</span>
+                            <span class="we-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-puzzle"/></svg></span><span class="we-text">tenant 是怎么设计的</span><span class="we-tag">Hybrid</span>
                         </button>
                     </div>
                 </div>
