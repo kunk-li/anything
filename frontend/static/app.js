@@ -2015,9 +2015,14 @@
         const urls = new Set();
         const summaries = d.tool_results_summary || [];
         for (const s of summaries) {
-            if (!s || !s.summary) continue;
+            if (!s) continue;
+            // Task XXXX-11 (#158): 优先读 backend 提供的结构化 images 字段, 不再 regex 扫
+            if (Array.isArray(s.images)) {
+                s.images.forEach(u => { if (typeof u === 'string' && u.startsWith('http')) urls.add(u); });
+            }
+            if (!s.summary) continue;
             const text = String(s.summary);
-            // 抠 http(s)://...{png|jpg|jpeg|webp} URL
+            // Legacy: 兜底支持老工具在 description 里塞 URL 的格式
             const m = text.match(/https?:\/\/[^\s"'<>]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'<>]*)?/gi);
             if (m) m.forEach(u => urls.add(u));
             // 抠 JSON 里 image_url / images 字段

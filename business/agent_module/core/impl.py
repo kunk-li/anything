@@ -612,6 +612,7 @@ class SimpleAgent(
             summaries.append({
                 "tool_name": tool_name,
                 "summary": self._summarize_tool_output(output),
+                "images": self._extract_image_urls(output),  # XXXX-11
             })
 
         if execution_mode == "hybrid":
@@ -997,6 +998,26 @@ class SimpleAgent(
             return obj if isinstance(obj, dict) else None
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_image_urls(output: Any) -> list:
+        """Task XXXX-11 (#158): 从工具输出 dict 抽 image url 列表 (image_generate 等).
+
+        前端 _collectGeneratedImages 优先读 tool_results_summary[i].images (结构),
+        不再 fallback 正则扫 description.
+        """
+        if not isinstance(output, dict):
+            return []
+        data = output.get("data")
+        urls = []
+        if isinstance(data, dict):
+            imgs = data.get("images")
+            if isinstance(imgs, list):
+                urls.extend([u for u in imgs if isinstance(u, str) and u.startswith("http")])
+            single = data.get("image_url")
+            if isinstance(single, str) and single.startswith("http") and single not in urls:
+                urls.append(single)
+        return urls
 
     def _summarize_tool_output(self, output: Any) -> str:
         """将工具输出压缩为简短摘要 (给 LLM 看 + 给前端展示).

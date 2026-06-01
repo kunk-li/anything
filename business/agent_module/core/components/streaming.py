@@ -213,7 +213,9 @@ class StreamingMixin:
                 ],
                 "tool_results_summary": [
                     {"tool_name": tr.get("tool_name"),
-                     "summary": self._summarize_tool_output(tr.get("output"))}
+                     "summary": self._summarize_tool_output(tr.get("output")),
+                     # Task XXXX-11 (#158): 结构化 images 字段, 前端直接读
+                     "images": self._extract_image_urls(tr.get("output")) if hasattr(self, "_extract_image_urls") else []}
                     for tr in tool_results
                 ],
                 "citations": [], "retrieved_chunks": [],

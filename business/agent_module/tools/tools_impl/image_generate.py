@@ -138,8 +138,9 @@ def image_generate_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                     f"任务完成但没拿到 url: {jj}",
                     trace_id,
                 )
-            # description 含 URL 让前端 _collectGeneratedImages 能扫到
-            url_block = "\n".join(urls)
+            # Task XXXX-11 (#158): description 改成 URL-free 的自然语言.
+            # URL 走 data.images 结构化字段, react 聚合时由 _extract_image_urls
+            # 注入到 tool_results_summary[i].images, 前端直接读结构字段.
             return {
                 "code": "SUCCESS",
                 "message": "ok",
@@ -151,7 +152,7 @@ def image_generate_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "size": size,
                     "n": n,
                     "task_id": task_id,
-                    "description": f"为你生成了 {len(urls)} 张图: {prompt}\n{url_block}",
+                    "description": f"已为你生成了 {len(urls)} 张图 (prompt: {prompt})",
                 },
                 "trace_id": trace_id,
                 "retryable": False,
