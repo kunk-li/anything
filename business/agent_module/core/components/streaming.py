@@ -20,6 +20,29 @@ from typing import Any, Dict, List, Optional
 class StreamingMixin:
     """Agent 流式 generator (Task #48 + Task V/W 集成版)."""
 
+    def _persist_stream_answer(self, session_id, task, answer, trace_id, status="completed"):
+        """ZZ-4: 持久化流式答案到 state_store (后端单一数据源).
+
+        success 路径 status=completed; 用户停止 / 中途异常时 status=interrupted,
+        已生成的半截答案也存下来 (前端切会话 / 刷新仍能看到, 不丢). answer 空则跳过.
+        """
+        if not answer:
+            return
+        try:
+            self._save_state_safe(
+                session_id=session_id,
+                state={
+                    "status": status,
+                    "task": task,
+                    "answer": answer,
+                    "execution_mode": "agent",
+                    "updated_at": time.time(),
+                },
+                trace_id=trace_id,
+            )
+        except Exception as _se:
+            self.logger.warning(f"[agent-stream] 持久化失败(忽略): {_se}")
+
     def _run_stream_direct(self, task, trace_id, request, extra_params, start_time):
         """默认真 token 流式: 注入 memory + system_prompt, 调 chat_stream 逐 token yield.
 
@@ -56,35 +79,39 @@ class StreamingMixin:
                "citations": [], "retrieved_chunks": []}
         got_any = False
         buf = []
+        sid = request.get("session_id")
         try:
             for token in self.llm_client.chat_stream(prompt=prompt, trace_id=trace_id):
                 if token:
                     got_any = True
                     buf.append(str(token))
                     yield {"type": "chunk", "text": str(token)}
+        except GeneratorExit:
+            # ZZ-4: 用户点停止 → WS 断开 → 上层 gen.close() 在此 yield 处抛 GeneratorExit.
+            # 把已经流给用户的半截答案落库 (后端单一数据源, 切会话/刷新不丢), 再重新抛出.
+            # 注意: GeneratorExit 处理块内不能再 yield, 只能做无 yield 的 IO 后 raise.
+            if got_any:
+                self._persist_stream_answer(sid, task, "".join(buf), trace_id,
+                                            status="interrupted")
+            raise
         except Exception as e:
-            self.logger.warning(f"[agent-stream] chat_stream 异常, 降级: {e}")
+            # ZZ-4: chat_stream 中途异常. 若已吐出部分 token, 存半截 + 报错, 不再降级重跑
+            # (否则用户先看到半截答案, 又冒出第二个完整答案, 很迷惑). 一个 token 都没产出
+            # 才返回 False 让上层降级 (ReAct / execute) 真正重试.
+            self.logger.warning(f"[agent-stream] chat_stream 异常: {e}")
+            if got_any:
+                self._persist_stream_answer(sid, task, "".join(buf), trace_id,
+                                            status="interrupted")
+                yield {"type": "error", "code": "STREAM_INTERRUPTED",
+                       "message": f"生成中断: {e}"}
+                return True
             return False
         if not got_any:
             return False
         # 关键 (后端单一数据源): 流式对话完成后, 持久化 user task + assistant answer
         # 到 state_store. _save_state_safe 会读老 events 并 append 这两条 (merge,
         # 不覆盖历史). 切会话/刷新页面时前端从后端拉, 不再丢失流式对话.
-        full_answer = "".join(buf)
-        try:
-            self._save_state_safe(
-                session_id=request.get("session_id"),
-                state={
-                    "status": "completed",
-                    "task": task,
-                    "answer": full_answer,
-                    "execution_mode": "agent",
-                    "updated_at": time.time(),
-                },
-                trace_id=trace_id,
-            )
-        except Exception as _save_err:
-            self.logger.warning(f"[agent-stream] 持久化失败(忽略): {_save_err}")
+        self._persist_stream_answer(sid, task, "".join(buf), trace_id)
         yield {"type": "done", "code": "SUCCESS",
                "cost_time": round(time.time() - start_time, 3)}
         return True

@@ -2101,6 +2101,14 @@
             body.extra_params.system_prompt = sysPrompt;
         }
 
+        // ZZ-4: 有图片附件 → 强制走 ReAct (执行 image_describe 工具做多模态识别).
+        // 默认直连流 (chat_stream) 是纯文本、不跑工具的, 模型根本看不到图; 图片识别
+        // 必须经 ReAct 调 image_describe 拿到描述再回答. 仅附件场景注入, 不影响纯文本对话.
+        if (hasAttachments) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.execution_strategy = 'react';
+        }
+
         // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
         let finalText = text;
         if (hasAttachments) {
