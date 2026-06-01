@@ -209,7 +209,8 @@
             });
         }
 
-        // Task TTTT-2 (#139): workflow 模板按钮 + 列表
+        // Task TTTT-2 (#139) + XXXX-9 (#156): workflow 模板按钮 + 列表 + IDB 初始化
+        _initWorkflowsStore().catch((e) => console.warn('[workflows] IDB init failed:', e));
         document.getElementById('workflow-save-btn')?.addEventListener('click', _saveCurrentAsWorkflow);
         document.getElementById('workflow-list-btn')?.addEventListener('click', () => {
             _refreshWorkflowsList();
@@ -2810,19 +2811,50 @@
         }
     }
 
-    // ---------- Task TTTT-2 (#139): Workflow 模板 (localStorage) ----------
+    // ---------- Task TTTT-2 (#139) + XXXX-9 (#156): Workflow 模板 (IndexedDB mirror) ----------
     const _WORKFLOWS_KEY = 'anything_workflows';
+    // XXXX-9: IDB mirror — 同步 API + 后台异步刷盘. 初始化在 init() 完成后赋值.
+    let _idbMirror = null;
+
+    async function _initWorkflowsStore() {
+        if (!window.IdbStore) return;  // idb-store.js 没加载就降级
+        _idbMirror = await IdbStore.openMirror('anything', 'kv', [_WORKFLOWS_KEY]);
+        // 一次性迁移: 老 localStorage 有数据但 IDB 没有 → 搬过去
+        try {
+            const idbVal = _idbMirror.get(_WORKFLOWS_KEY);
+            const lsRaw = localStorage.getItem(_WORKFLOWS_KEY);
+            if ((!idbVal || !idbVal.length) && lsRaw) {
+                const parsed = JSON.parse(lsRaw);
+                if (Array.isArray(parsed) && parsed.length) {
+                    _idbMirror.set(_WORKFLOWS_KEY, parsed);
+                    console.info('[workflows] migrated', parsed.length, 'items from localStorage to IndexedDB');
+                }
+            }
+        } catch (_) {}
+        // 渲一次 count, 让 header 数字正确
+        const list = _loadWorkflows();
+        const countEl = document.getElementById('workflow-count');
+        if (countEl) countEl.textContent = String(list.length);
+    }
 
     function _loadWorkflows() {
+        // 优先 IDB mirror; 没初始化好就 fallback localStorage
+        if (_idbMirror) {
+            const v = _idbMirror.get(_WORKFLOWS_KEY);
+            return Array.isArray(v) ? v : [];
+        }
         try {
             const raw = localStorage.getItem(_WORKFLOWS_KEY);
             return raw ? JSON.parse(raw) : [];
         } catch (_) { return []; }
     }
     function _saveWorkflows(list) {
-        try {
-            localStorage.setItem(_WORKFLOWS_KEY, JSON.stringify(list));
-        } catch (_) {}
+        if (_idbMirror) {
+            _idbMirror.set(_WORKFLOWS_KEY, list);
+        } else {
+            // mirror 没就绪时同时写 localStorage 当兜底
+            try { localStorage.setItem(_WORKFLOWS_KEY, JSON.stringify(list)); } catch (_) {}
+        }
         const countEl = document.getElementById('workflow-count');
         if (countEl) countEl.textContent = String(list.length);
     }
