@@ -59,6 +59,7 @@ class SimpleAgent(
             llm_planner: Optional[Callable[[str], str]] = None,
             deps: Optional[BasicDeps] = None,
             long_term_memory=None,  # Task FFF (#92): 注入 LongTermMemoryImpl, None 时关闭
+            llm_client=None,  # 真流式: 有 chat_stream 的 LLMService (跟 RAG 同一个)
     ):
         # 基础依赖优先走 DI 注入; 未注入时构造一套(向后兼容)
         deps = deps or build_basic_deps()
@@ -86,6 +87,9 @@ class SimpleAgent(
         # LLM 规划器: 可显式注入 callable (prompt -> str);
         # 未注入时回退到 tool_registry["llm_generate"]
         self.llm_planner = llm_planner
+        # 真流式直连 LLMService (有 chat_stream). RAG 用同一个对象做 token 流;
+        # Agent run_stream 默认直接 chat_stream 真 token 流 (TTFT 快, 逐字).
+        self.llm_client = llm_client
 
         self.state_store = state_store
         self.tool_registry = tool_registry

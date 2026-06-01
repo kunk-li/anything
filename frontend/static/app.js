@@ -3063,6 +3063,21 @@
                 Markdown.escapeHtml(hint) +
                 ' <span class="loading-elapsed" data-started="' + startTs + '">0s</span></span>';
             _ensureElapsedTicker();
+        } else if (msg.streaming) {
+            // 流式中: 纯文本逐字显示 + 闪烁光标. content 空时显"正在生成"动画.
+            // 关键: 流式态不加反馈条/复制/重新生成/折叠 (那些等 done 后才出现).
+            if (msg.content) {
+                body.textContent = msg.content;
+            } else {
+                body.innerHTML =
+                    '<span class="message-loading">' +
+                    '<span class="dot"></span><span class="dot"></span><span class="dot"></span> ' +
+                    Markdown.escapeHtml(t('msg.processing')) + '</span>';
+            }
+            const cur = document.createElement('span');
+            cur.className = 'stream-cursor';
+            cur.textContent = '▍';
+            body.appendChild(cur);
         } else if (msg.role === 'assistant' && !msg.error && window.Markdown) {
             // 助手成功响应走 markdown 渲染 (用户消息保持 plain text 防 XSS)
             body.innerHTML = window.Markdown.render(msg.content || '');

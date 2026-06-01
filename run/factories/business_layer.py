@@ -250,6 +250,7 @@ def build_business_layer(
         session_prefix="session",
         deps=deps,
         long_term_memory=long_term_memory,   # Task FFF (#92): 注入到 Agent
+        llm_client=llm_client,               # 真流式: Agent run_stream 直连 chat_stream
     )
 
     # Task EE (#65): spawn_subagent — 需要拿到 parent agent 引用, 所以在 new

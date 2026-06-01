@@ -20,6 +20,43 @@ from typing import Any, Dict, List, Optional
 class StreamingMixin:
     """Agent 流式 generator (Task #48 + Task V/W 集成版)."""
 
+    def _run_stream_direct(self, task, trace_id, request, extra_params, start_time):
+        """默认真 token 流式: 注入 memory + system_prompt, 调 chat_stream 逐 token yield.
+
+        作为 generator 用 `yield from` 调用; return True 表示成功流完 (调用方 return),
+        return False 表示 chat_stream 不可用/失败 (调用方降级到 ReAct/execute).
+        """
+        # 1. 注入长期记忆 (跟 execute 一致, 让多轮对话有上下文)
+        augmented = task
+        try:
+            if getattr(self, "memory_enabled", False):
+                augmented, _hits = self._inject_long_term_memory(
+                    task, self._memory_tenant(request), trace_id,
+                )
+        except Exception:
+            augmented = task
+        # 2. per-session system prompt (PM-7-3)
+        sys_prompt = (extra_params.get("system_prompt") or "").strip()
+        prompt = (f"[系统指令]\n{sys_prompt}\n\n[用户]\n{augmented}"
+                  if sys_prompt else augmented)
+        # 3. 先发空 meta (前端清 trace 区), 再逐 token
+        yield {"type": "meta", "steps": [], "tool_results_summary": [],
+               "citations": [], "retrieved_chunks": []}
+        got_any = False
+        try:
+            for token in self.llm_client.chat_stream(prompt=prompt, trace_id=trace_id):
+                if token:
+                    got_any = True
+                    yield {"type": "chunk", "text": str(token)}
+        except Exception as e:
+            self.logger.warning(f"[agent-stream] chat_stream 异常, 降级: {e}")
+            return False
+        if not got_any:
+            return False
+        yield {"type": "done", "code": "SUCCESS",
+               "cost_time": round(time.time() - start_time, 3)}
+        return True
+
     def run_stream(self, request: Dict[str, Any]):
         """Agent 流式 generator: yield ReAct 每一步 + final answer.
 
@@ -43,6 +80,24 @@ class StreamingMixin:
         trace_id = request.get("trace_id")
         session_id = request.get("session_id")
         extra_params = request.get("extra_params") or {}
+
+        # ============ 默认: 真 token 流式 (直连 llm_client.chat_stream) ============
+        # 覆盖对话/写作/问答主场景 — TTFT 快, 逐字吐. 跟 RAG 真流式同一套 chat_stream.
+        # 工具调用场景 (plan_only / 显式 execution_strategy=react) 跳过此分支, 走下面
+        # ReAct 多轮 (能看到 thought/action/observation + 工具结果).
+        _want_react = (
+            extra_params.get("execution_strategy") == "react"
+            or (bool(extra_params.get("plan_only")) and not bool(extra_params.get("approve_plan")))
+        )
+        if (not _want_react and getattr(self, "llm_client", None) is not None
+                and hasattr(self.llm_client, "chat_stream")):
+            _ok = yield from self._run_stream_direct(
+                task=task, trace_id=trace_id, request=request,
+                extra_params=extra_params, start_time=start_time,
+            )
+            if _ok:
+                return
+            # chat_stream 失败 → 落到下面原逻辑兜底
 
         if self.execution_strategy != "react":
             # single_shot 不支持真实流, 直接降级 execute + 一次性 chunk
