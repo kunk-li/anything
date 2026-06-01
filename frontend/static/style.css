@@ -154,7 +154,7 @@ body {
     flex: 1;
     display: grid;
     /* Task VVVV (#108): 三列 — 左 sessions 260 | 中 chat 弹性 | 右 tabs 360 */
-    grid-template-columns: 256px 1fr 312px;
+    grid-template-columns: 248px 1fr 284px;
     min-height: 0;
 }
 
@@ -173,20 +173,21 @@ body {
 }
 .new-session-btn {
     width: 100%;
-    /* Task XXXX (#112): 从 10px 12px / 39px 高 → 7px 12px / 32px 高, 视觉减重 */
-    padding: 7px 12px;
-    background: var(--primary, #4f8cff);
-    color: white;
-    border: 0;
-    border-radius: 6px;
+    /* 降视觉权重: 浅橙底 + 橙字描边, hover 才实心 (不再亮橙大块抢戏) */
+    padding: 8px 12px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid transparent;
+    border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 120ms;
-    box-shadow: var(--shadow-sm);
+    transition: all 120ms;
 }
 .new-session-btn:hover {
-    background: var(--primary-hover, #3a78ed);
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
 }
 .sessions-sidebar-toolbar {
     display: flex;
@@ -1066,9 +1067,9 @@ body.has-drag .chat-pane::before {
 }
 /* 品牌焦点徽标 — 标题上方, 把视线聚住 */
 .welcome-badge {
-    width: 58px;
-    height: 58px;
-    margin: 0 auto 20px;
+    width: 50px;
+    height: 50px;
+    margin: 0 auto 16px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1099,8 +1100,8 @@ body.has-drag .chat-pane::before {
 .welcome-examples {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    margin-top: 34px;
+    gap: 10px;
+    margin-top: 24px;
     text-align: left;
     width: 100%;
 }
@@ -1112,11 +1113,11 @@ body.has-drag .chat-pane::before {
 .welcome-example {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 14px 16px;
+    gap: 11px;
+    padding: 12px 14px;
     background: var(--bg-elev2);
     border: 1px solid var(--border-strong);
-    border-radius: 12px;
+    border-radius: 10px;
     cursor: pointer;
     transition: all 140ms ease;
     color: var(--text);
@@ -1745,7 +1746,7 @@ body.share-readonly .msg-feedback {
 .composer {
     flex-shrink: 0;
     /* Task XXXX-16 (#163): 底部 safe-area-inset 让 iPhone 刘海屏底部安全区垫起来 */
-    padding: 12px 24px calc(16px + env(safe-area-inset-bottom));
+    padding: 9px 24px calc(11px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: var(--bg-elev);
 }
@@ -1755,7 +1756,7 @@ body.share-readonly .msg-feedback {
     align-items: center;
     gap: 12px;
 }
-.composer-row + .composer-row { margin-top: 8px; }
+.composer-row + .composer-row { margin-top: 5px; }
 
 .mode-tabs {
     display: inline-flex;
@@ -1938,22 +1939,23 @@ body.share-readonly .msg-feedback {
 .attachment-chip .att-remove:hover { color: var(--danger); }
 #input-text {
     flex: 1;
-    min-height: 44px;
-    max-height: 200px;
-    padding: 10px 12px;
+    min-height: 38px;
+    max-height: 180px;
+    padding: 9px 12px;
 }
 
 .send-btn {
     background: var(--primary);
     border: 1px solid var(--primary);
     color: white;
-    padding: 0 18px;
+    padding: 0 15px;
     border-radius: var(--radius-sm);
     font-weight: 600;
+    font-size: 13px;
     display: flex;
     align-items: center;
     gap: 6px;
-    box-shadow: 0 2px 10px rgba(194, 96, 62, 0.45);
+    box-shadow: 0 2px 8px rgba(194, 96, 62, 0.42);
     transition: all var(--transition);
 }
 .send-btn:hover:not(:disabled) {

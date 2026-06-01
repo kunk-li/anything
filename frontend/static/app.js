@@ -1499,6 +1499,9 @@
         els.inputText.addEventListener('input', () => {
             _slashPaletteOnInput();
             _updateCostEstimate();  // PM-7-6
+            // 自动增高: 单行起步, 随内容长高到上限 (输入区不再固定占 2 行)
+            els.inputText.style.height = 'auto';
+            els.inputText.style.height = Math.min(els.inputText.scrollHeight, 180) + 'px';
         });
 
         // ========== 📷 文件选择按钮 (拖拽永远 fallback) ==========
@@ -2165,6 +2168,7 @@
         _optimisticAddCurrentSession(capturedSid, displayContent);
         state.activePlaceholderId = placeholderId;
         els.inputText.value = '';
+        els.inputText.style.height = 'auto';  // 发送后重置回单行高
         els.inputText.focus();
 
         try {
