@@ -37,6 +37,7 @@ from .routers import (
     SchedulerRoutesMixin,
     SessionsRoutesMixin,
     AgentRoutesMixin,  # Task FFFF (#123)
+    FeedbackRoutesMixin,  # Task PM-2
     FrontendRoutesMixin,
 )
 
@@ -51,6 +52,7 @@ class ApiService(
     SchedulerRoutesMixin,
     SessionsRoutesMixin,
     AgentRoutesMixin,  # Task FFFF (#123)
+    FeedbackRoutesMixin,  # Task PM-2
     FrontendRoutesMixin,
 ):
     """标准 API 服务实现: 只负责 HTTP 协议层, 不承载业务语义校验.
@@ -437,6 +439,7 @@ class ApiService(
         self._register_scheduler_routes()  # Task PPP (#102): /scheduler/* 3 路由
         self._register_sessions_routes()  # Task SSS (#105): /sessions/* 3 路由
         self._register_agent_routes()  # Task FFFF (#123): /agent/tools 1 路由
+        self._register_feedback_routes()  # Task PM-2: /feedback 3 路由
         # Task VV (#82): 在前端路由之前, 把所有现有 API 路由复制一份到 /v1/<path>
         # 让客户端可逐步迁到带版本的 URL; 老 path 保留无限期 (打 deprecated 头).
         self._register_v1_aliases()

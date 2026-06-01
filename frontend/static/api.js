@@ -469,7 +469,23 @@ const ApiClient = (() => {
         deleteSession,
         createSession,
         getSession,  // ZZZZ (#117)
+        // Task PM-2: feedback
+        submitFeedback,
+        getFeedbackStats,
+        getRecentFeedback,
     };
+
+    async function submitFeedback(body) {
+        return _doFetch('POST', '/feedback', { body });
+    }
+    async function getFeedbackStats() {
+        return _doFetch('GET', '/feedback/stats');
+    }
+    async function getRecentFeedback(limit = 50, rating = null) {
+        const q = new URLSearchParams({ limit: String(limit) });
+        if (rating === 1 || rating === -1) q.set('rating', String(rating));
+        return _doFetch('GET', `/feedback/recent?${q.toString()}`);
+    }
 })();
 
 // 显式挂到 window (const 在 browser global 脚本不会自动 attach)

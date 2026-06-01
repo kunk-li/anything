@@ -2074,6 +2074,87 @@
         body.appendChild(btn);
     }
 
+    // Task PM-2: assistant 消息底部加 👍 / 👎 反馈条. 点 👎 弹评语 textarea.
+    // 这是产品迭代的"地基"数据 — 没这个就没法知道哪种回答不好.
+    function _attachFeedbackButtons(body, msg) {
+        if (!body || !msg) return;
+        // 已经反馈过的不重复显 (前端 state, 不查后端)
+        if (msg.feedback_submitted) return;
+        const bar = document.createElement('div');
+        bar.className = 'msg-feedback';
+        bar.innerHTML = `
+            <span class="msg-feedback-hint">这个回答?</span>
+            <button class="msg-fb-btn msg-fb-up" type="button" title="有用">👍</button>
+            <button class="msg-fb-btn msg-fb-down" type="button" title="不够好">👎</button>
+        `;
+        const upBtn = bar.querySelector('.msg-fb-up');
+        const downBtn = bar.querySelector('.msg-fb-down');
+
+        async function _submit(rating, comment) {
+            const userMsg = (function () {
+                // 找上一条 user message 当 preview
+                const idx = state.history.findIndex(m => m.id === msg.id);
+                for (let i = idx - 1; i >= 0; i--) {
+                    if (state.history[i].role === 'user') return state.history[i].content || '';
+                }
+                return '';
+            })();
+            const toolsUsed = (msg.data?.steps || [])
+                .filter(s => s.success !== false)
+                .map(s => s.tool_name)
+                .filter(Boolean);
+            try {
+                const { payload, status } = await ApiClient.submitFeedback({
+                    trace_id: msg.meta?.traceId || null,
+                    session_id: state.settings.sessionId,
+                    tenant_id: state.settings.tenant || 'default',
+                    rating,
+                    comment: comment || null,
+                    user_msg_preview: userMsg,
+                    assistant_msg_preview: msg.content || '',
+                    mode: msg.mode || null,
+                    tools_used: toolsUsed,
+                });
+                if (status === 200 && payload?.code === 'SUCCESS') {
+                    msg.feedback_submitted = rating;
+                    bar.innerHTML = rating === 1
+                        ? '<span class="msg-feedback-done">✓ 已记录, 谢谢反馈</span>'
+                        : '<span class="msg-feedback-done">✓ 收到, 我们会改进</span>';
+                } else {
+                    toast('error', '反馈提交失败', payload?.message || '');
+                }
+            } catch (e) {
+                toast('error', '反馈提交失败', e.message);
+            }
+        }
+
+        upBtn.addEventListener('click', () => _submit(1, null));
+        downBtn.addEventListener('click', () => {
+            // 点 👎 → 在 bar 下方塞 textarea + 提交按钮
+            if (bar.querySelector('.msg-fb-comment-wrap')) return;  // 已展开
+            const wrap = document.createElement('div');
+            wrap.className = 'msg-fb-comment-wrap';
+            wrap.innerHTML = `
+                <textarea class="msg-fb-comment" rows="2"
+                          placeholder="哪里不对? (可选, 帮我们改进)"></textarea>
+                <div class="msg-fb-actions">
+                    <button class="small-btn primary msg-fb-send" type="button">提交</button>
+                    <button class="small-btn ghost msg-fb-skip" type="button">跳过</button>
+                </div>
+            `;
+            bar.appendChild(wrap);
+            wrap.querySelector('textarea').focus();
+            wrap.querySelector('.msg-fb-send').addEventListener('click', () => {
+                const txt = wrap.querySelector('textarea').value.trim();
+                _submit(-1, txt);
+            });
+            wrap.querySelector('.msg-fb-skip').addEventListener('click', () => {
+                _submit(-1, null);
+            });
+        });
+        body.appendChild(bar);
+    }
+
     // Task VVVV (#146): 给消息里每张图加 hover 出现的下载按钮
     function _attachImageDownloadButtons(root) {
         if (!root) return;
@@ -2353,6 +2434,10 @@
             _attachImageDownloadButtons(body);
             // Task XXXX-3 (#150): 加单条复制按钮
             _attachMessageCopyButton(body, msg.content || '');
+            // Task PM-2: 加 👍/👎 反馈按钮 (assistant message + 非 error 才显)
+            if (!msg.error) {
+                _attachFeedbackButtons(body, msg);
+            }
             // Task XXXX-6 (#153): 长答案折叠 — 渲完后 next tick 量高度
             _maybeFoldLongMessage(body);
         } else {
