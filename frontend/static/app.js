@@ -1729,6 +1729,46 @@
         return baseAnswer;
     }
 
+    // Task XXXX-1 (#148): 长任务进度提示
+    // 根据相邻 user message 推断要做啥 (画图 / 抓网页 / 等), 给更贴切 hint
+    function _loadingHintFor(msg) {
+        // 找上一条 user message 看用户问啥
+        const idx = state.history.findIndex(m => m.id === msg.id);
+        let lastUser = '';
+        for (let i = idx - 1; i >= 0; i--) {
+            if (state.history[i].role === 'user') {
+                lastUser = state.history[i].content || '';
+                break;
+            }
+        }
+        const lower = lastUser.toLowerCase();
+        if (/画|生成图|draw|generate.*image|image.*of/.test(lower)) return '🎨 正在生成图片… (约 30-60s)';
+        if (/抓|爬|截图|browser|screenshot/.test(lower)) return '🌐 正在打开浏览器…';
+        if (/搜索|search|查一下/.test(lower)) return '🔍 正在搜索…';
+        if (/pdf|读文件|excel|表格/.test(lower)) return '📄 正在读文件…';
+        return t('msg.processing');
+    }
+
+    let _elapsedTickerId = null;
+    function _ensureElapsedTicker() {
+        if (_elapsedTickerId) return;
+        _elapsedTickerId = setInterval(() => {
+            const nodes = document.querySelectorAll('.loading-elapsed');
+            if (nodes.length === 0) {
+                clearInterval(_elapsedTickerId);
+                _elapsedTickerId = null;
+                return;
+            }
+            const now = Date.now();
+            nodes.forEach(n => {
+                const start = parseInt(n.dataset.started || '0', 10);
+                if (!start) return;
+                const secs = Math.floor((now - start) / 1000);
+                n.textContent = secs + 's';
+            });
+        }, 1000);
+    }
+
     // Task VVVV (#146): 给消息里每张图加 hover 出现的下载按钮
     function _attachImageDownloadButtons(root) {
         if (!root) return;
@@ -1985,10 +2025,16 @@
         if (msg.error) body.classList.add('error');
 
         if (msg.loading) {
+            // Task XXXX-1 (#148): 长任务显 elapsed 秒数, 避免卡死错觉
+            const startTs = msg.loadingStartedAt || Date.now();
+            msg.loadingStartedAt = startTs;
+            const hint = _loadingHintFor(msg);  // 检测输入推断"图片生成"等
             body.innerHTML =
                 '<span class="message-loading">' +
                 '<span class="dot"></span><span class="dot"></span><span class="dot"></span> ' +
-                Markdown.escapeHtml(t('msg.processing')) + '</span>';
+                Markdown.escapeHtml(hint) +
+                ' <span class="loading-elapsed" data-started="' + startTs + '">0s</span></span>';
+            _ensureElapsedTicker();
         } else if (msg.role === 'assistant' && !msg.error && window.Markdown) {
             // 助手成功响应走 markdown 渲染 (用户消息保持 plain text 防 XSS)
             body.innerHTML = window.Markdown.render(msg.content || '');
