@@ -16,7 +16,7 @@ from llm_adapter_module.utils.tool_functions import (
     ensure_file_content_splits,
 )
 
-from ._http_mixin import _BaseHTTPAdapterMixin
+from ._http_mixin import _BaseHTTPAdapterMixin, _sanitize_api_base
 
 
 class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
@@ -28,7 +28,11 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         self.common_cfg = common_cfg
         self.logger = logger
         self.api_key = str(model_cfg.get("api_key", "") or "")
-        self.api_base = str(model_cfg.get("api_base", "https://api.openai.com/v1") or "").rstrip("/")
+        # Task XXXX-19: api_base 走 _sanitize_api_base 兜底, 不再让 "undefined"
+        # 这种脏值变成 https://undefined/... (会导致 host=undefined 神秘超时)
+        self.api_base = _sanitize_api_base(
+            model_cfg.get("api_base"), model_name=model_name, logger=logger,
+        )
         self.timeout = int(common_cfg.get("timeout", 30))
         self.max_retry = int(common_cfg.get("max_retry", 3))
 

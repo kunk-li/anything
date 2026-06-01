@@ -7,9 +7,70 @@ Task NN (#74): 从 impl.py 1261 行单文件拆出, 让 5 个适配器各自单�
 """
 from __future__ import annotations
 
+import os
+import re
 from typing import Dict, Any
 
 import requests
+
+
+# Task XXXX-19: api_base sanitize + 智能默认
+# 当 model_cfg 给的 api_base 是空 / "undefined" / "null" / 不带 http(s)://
+# 时, 不再让 requests 拼出 "https://undefined/..." 然后 host 超时,
+# 而是按优先级选个合理的默认:
+#   1. 环境变量 (OPENAI_API_BASE / DASHSCOPE_API_BASE)
+#   2. 模型名启发 (qwen* → DashScope, 其他 → OpenAI)
+#   3. 硬编码 OpenAI 兼容默认
+_INVALID_API_BASE_PATTERN = re.compile(r"^\s*(undefined|null|none|nan|)\s*$", re.I)
+
+
+def _sanitize_api_base(api_base: str, model_name: str = "", logger=None) -> str:
+    """把 api_base 归一化成合法 https URL. 失败值走启发式默认.
+
+    Returns:
+        always a valid http(s):// URL (rstrip "/" 后), 永不为空 / "undefined".
+    """
+    raw = str(api_base or "").strip()
+    bad = False
+    if not raw or _INVALID_API_BASE_PATTERN.match(raw):
+        bad = True
+    elif not (raw.startswith("http://") or raw.startswith("https://")):
+        bad = True
+    elif "//undefined" in raw or "//null" in raw:  # 防 "https://undefined" 这种
+        bad = True
+
+    if not bad:
+        return raw.rstrip("/")
+
+    # 1. 环境变量 — 用户在 .env 里如果配了就生效
+    env_base = (os.environ.get("OPENAI_API_BASE") or "").strip()
+    if env_base.startswith(("http://", "https://")):
+        if logger:
+            try:
+                logger.warning(f"[llm_adapter] api_base 非法 ({api_base!r}), fallback to env OPENAI_API_BASE={env_base!r}")
+            except Exception:
+                pass
+        return env_base.rstrip("/")
+    ds_env = (os.environ.get("DASHSCOPE_API_BASE") or "").strip()
+    # 2. 模型名启发 — qwen* / dashscope* → 通义千问 OpenAI 兼容
+    name_lower = (model_name or "").lower()
+    if name_lower.startswith(("qwen", "dashscope", "qwq", "qvq")):
+        target = ds_env if ds_env.startswith(("http://", "https://")) else \
+                 "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if logger:
+            try:
+                logger.warning(f"[llm_adapter] api_base 非法 ({api_base!r}), 启发 model={model_name} → {target!r}")
+            except Exception:
+                pass
+        return target.rstrip("/")
+    # 3. 硬编码 OpenAI 默认
+    fallback = "https://api.openai.com/v1"
+    if logger:
+        try:
+            logger.warning(f"[llm_adapter] api_base 非法 ({api_base!r}), 用默认 {fallback!r}")
+        except Exception:
+            pass
+    return fallback
 
 
 class _BaseHTTPAdapterMixin:
