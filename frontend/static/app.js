@@ -513,9 +513,9 @@
         const wrap = document.createElement('div');
         wrap.className = 'toast toast-info undo-toast';
         wrap.innerHTML = `
-            <div class="toast-title">即将删除会话 ${escapeHtml(sid.slice(0,16))}</div>
-            <div class="toast-body">5 秒内可撤销</div>
-            <button class="toast-undo-btn" type="button">↩ 撤销</button>
+            <div class="toast-title">${t('session.undo.title')} ${escapeHtml(sid.slice(0,16))}</div>
+            <div class="toast-body">${t('session.undo.body')}</div>
+            <button class="toast-undo-btn" type="button">${t('session.undo.btn')}</button>
         `;
         const undoBtn = wrap.querySelector('.toast-undo-btn');
         undoBtn.addEventListener('click', () => {
@@ -1829,10 +1829,12 @@
             const toggle = document.createElement('button');
             toggle.type = 'button';
             toggle.className = 'msg-fold-toggle';
-            toggle.textContent = `▼ 展开全部 (${h}px)`;
+            const labelFolded = `${t('msg.fold.expand')} (${h}px)`;
+            const labelOpen = t('msg.fold.collapse');
+            toggle.textContent = labelFolded;
             toggle.addEventListener('click', () => {
                 const folded = body.classList.toggle('msg-folded');
-                toggle.textContent = folded ? `▼ 展开全部 (${h}px)` : '▲ 收起';
+                toggle.textContent = folded ? labelFolded : labelOpen;
             });
             body.appendChild(toggle);
         }, 100);

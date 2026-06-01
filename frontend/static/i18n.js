@@ -224,6 +224,49 @@ const I18n = (() => {
             'models.toast.defaultSet': '默认已设置',
             'models.confirm.delete': '确定删除模型 {name}?',
             'models.error': '操作失败',
+
+            // Task XXXX-7 (#154): 补漏 — 快捷键 modal / workflow / theme / welcome examples
+            'shortcuts.title': '键盘快捷键',
+            'shortcuts.section.chat': '聊天',
+            'shortcuts.section.sessions': '会话',
+            'shortcuts.section.ui': '界面',
+            'shortcuts.desc.send': '发送消息',
+            'shortcuts.desc.escape': '关闭弹窗 / 停止生成',
+            'shortcuts.desc.new_session': '新建会话',
+            'shortcuts.desc.focus_search': '聚焦会话搜索框',
+            'shortcuts.desc.help': '显示本帮助',
+            'shortcuts.desc.open_settings': '打开设置',
+            'shortcuts.hint': '提示: 这些快捷键不影响输入框内的正常打字',
+
+            'workflow.save_template': '💾 存为模板',
+            'workflow.my_templates': '📋 我的模板',
+            'workflow.modal.title': '📋 我的任务模板',
+            'workflow.modal.hint': '点模板回填到输入框. 模板存在浏览器 localStorage, 跨设备不同步.',
+
+            'theme.label': '主题',
+            'theme.dark': '🌙 暗色',
+            'theme.light': '☀️ 亮色',
+            'theme.auto': '🖥 跟系统',
+
+            'docs.section.upload': '📤 上传新文档',
+            'docs.section.indexed': '📚 已索引文档',
+            'docs.refresh_full': '🔁 刷新列表',
+
+            'agent.tools.title': 'Agent 可用工具',
+            'agent.tools.hint': '在 Agent 模式下让 LLM 调用',
+            'agent.tools.loading': '加载中…',
+
+            'sessions.empty': '无会话',
+            'sessions.search.placeholder': '🔍 搜索会话…',
+
+            // Task XXXX-3 / XXXX-4 / XXXX-6 复制按钮 / 撤销 / 折叠
+            'msg.copy': '📋',
+            'msg.copy.done': '✓',
+            'msg.fold.expand': '▼ 展开全部',
+            'msg.fold.collapse': '▲ 收起',
+            'session.undo.title': '即将删除会话',
+            'session.undo.body': '5 秒内可撤销',
+            'session.undo.btn': '↩ 撤销',
         },
         en: {
             'app.title': 'Anything',
@@ -424,6 +467,48 @@ const I18n = (() => {
             'models.toast.defaultSet': 'Default updated',
             'models.confirm.delete': 'Delete model {name}?',
             'models.error': 'Operation failed',
+
+            // Task XXXX-7 (#154): mirror — shortcuts / workflow / theme / welcome examples
+            'shortcuts.title': 'Keyboard shortcuts',
+            'shortcuts.section.chat': 'Chat',
+            'shortcuts.section.sessions': 'Sessions',
+            'shortcuts.section.ui': 'UI',
+            'shortcuts.desc.send': 'Send message',
+            'shortcuts.desc.escape': 'Close modal / stop generation',
+            'shortcuts.desc.new_session': 'New session',
+            'shortcuts.desc.focus_search': 'Focus session search',
+            'shortcuts.desc.help': 'Show this help',
+            'shortcuts.desc.open_settings': 'Open settings',
+            'shortcuts.hint': 'Tip: shortcuts do not interfere with normal typing in inputs',
+
+            'workflow.save_template': '💾 Save as template',
+            'workflow.my_templates': '📋 My templates',
+            'workflow.modal.title': '📋 My task templates',
+            'workflow.modal.hint': 'Click to fill back into input. Stored in browser localStorage, not synced across devices.',
+
+            'theme.label': 'Theme',
+            'theme.dark': '🌙 Dark',
+            'theme.light': '☀️ Light',
+            'theme.auto': '🖥 Follow system',
+
+            'docs.section.upload': '📤 Upload new docs',
+            'docs.section.indexed': '📚 Indexed docs',
+            'docs.refresh_full': '🔁 Refresh',
+
+            'agent.tools.title': 'Available agent tools',
+            'agent.tools.hint': 'Called by the LLM in Agent mode',
+            'agent.tools.loading': 'Loading…',
+
+            'sessions.empty': 'No sessions',
+            'sessions.search.placeholder': '🔍 Search sessions…',
+
+            'msg.copy': '📋',
+            'msg.copy.done': '✓',
+            'msg.fold.expand': '▼ Expand all',
+            'msg.fold.collapse': '▲ Collapse',
+            'session.undo.title': 'Deleting session',
+            'session.undo.body': 'Undo within 5 seconds',
+            'session.undo.btn': '↩ Undo',
         },
     };
 

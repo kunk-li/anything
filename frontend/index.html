@@ -53,27 +53,27 @@
         <div class="drawer-backdrop" data-close="shortcuts"></div>
         <div class="drawer-panel shortcuts-panel">
             <div class="drawer-header">
-                <h3>键盘快捷键</h3>
+                <h3 data-i18n="shortcuts.title">键盘快捷键</h3>
                 <button class="icon-btn" data-close="shortcuts" aria-label="close">✕</button>
             </div>
             <div class="drawer-body">
                 <div class="shortcuts-table">
                     <div class="shortcuts-section">
-                        <h4>聊天</h4>
-                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span class="kb-desc">发送消息</span></div>
-                        <div class="kb-row"><kbd>Esc</kbd><span class="kb-desc">关闭弹窗 / 停止生成</span></div>
+                        <h4 data-i18n="shortcuts.section.chat">聊天</h4>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd><span class="kb-desc" data-i18n="shortcuts.desc.send">发送消息</span></div>
+                        <div class="kb-row"><kbd>Esc</kbd><span class="kb-desc" data-i18n="shortcuts.desc.escape">关闭弹窗 / 停止生成</span></div>
                     </div>
                     <div class="shortcuts-section">
-                        <h4>会话</h4>
-                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>N</kbd><span class="kb-desc">新建会话</span></div>
-                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>/</kbd><span class="kb-desc">聚焦会话搜索框</span></div>
+                        <h4 data-i18n="shortcuts.section.sessions">会话</h4>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>N</kbd><span class="kb-desc" data-i18n="shortcuts.desc.new_session">新建会话</span></div>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>/</kbd><span class="kb-desc" data-i18n="shortcuts.desc.focus_search">聚焦会话搜索框</span></div>
                     </div>
                     <div class="shortcuts-section">
-                        <h4>界面</h4>
-                        <div class="kb-row"><kbd>?</kbd><span class="kb-desc">显示本帮助</span></div>
-                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>,</kbd><span class="kb-desc">打开设置</span></div>
+                        <h4 data-i18n="shortcuts.section.ui">界面</h4>
+                        <div class="kb-row"><kbd>?</kbd><span class="kb-desc" data-i18n="shortcuts.desc.help">显示本帮助</span></div>
+                        <div class="kb-row"><kbd>Ctrl</kbd><span>+</span><kbd>,</kbd><span class="kb-desc" data-i18n="shortcuts.desc.open_settings">打开设置</span></div>
                     </div>
-                    <p class="hint" style="margin-top:16px">提示: 这些快捷键不影响输入框内的正常打字</p>
+                    <p class="hint" style="margin-top:16px" data-i18n="shortcuts.hint">提示: 这些快捷键不影响输入框内的正常打字</p>
                 </div>
             </div>
         </div>
@@ -96,6 +96,7 @@
             <div class="sessions-search">
                 <input type="text" id="sessions-search-input"
                        placeholder="🔍 搜索会话…"
+                       data-i18n-attr="placeholder:sessions.search.placeholder"
                        aria-label="搜索会话" />
             </div>
             <ul class="session-list" id="session-list" aria-label="会话列表">
@@ -207,8 +208,8 @@
                 </div>
                 <!-- Task TTTT-2 (#139): workflow 保存模板 + 复用 -->
                 <div class="composer-row workflows-bar">
-                    <button type="button" class="small-btn ghost" id="workflow-save-btn" title="把当前输入保存为模板, 下次一键复用">💾 存为模板</button>
-                    <button type="button" class="small-btn ghost" id="workflow-list-btn" title="查看 / 加载已保存模板">📋 我的模板 <span class="badge" id="workflow-count">0</span></button>
+                    <button type="button" class="small-btn ghost" id="workflow-save-btn" title="把当前输入保存为模板, 下次一键复用" data-i18n="workflow.save_template">💾 存为模板</button>
+                    <button type="button" class="small-btn ghost" id="workflow-list-btn" title="查看 / 加载已保存模板"><span data-i18n="workflow.my_templates">📋 我的模板</span> <span class="badge" id="workflow-count">0</span></button>
                 </div>
             </div>
         </section>
@@ -218,11 +219,11 @@
             <div class="drawer-backdrop" data-close="workflows"></div>
             <div class="drawer-panel">
                 <div class="drawer-header">
-                    <h3>📋 我的任务模板</h3>
+                    <h3 data-i18n="workflow.modal.title">📋 我的任务模板</h3>
                     <button class="icon-btn" data-close="workflows" aria-label="close">✕</button>
                 </div>
                 <div class="drawer-body">
-                    <p class="hint">点模板回填到输入框. 模板存在浏览器 localStorage, 跨设备不同步.</p>
+                    <p class="hint" data-i18n="workflow.modal.hint">点模板回填到输入框. 模板存在浏览器 localStorage, 跨设备不同步.</p>
                     <ul class="workflows-list" id="workflows-list"></ul>
                 </div>
             </div>
@@ -261,11 +262,11 @@
                     <!-- 空态: 展示 Agent 全部已注册工具, 按 category 分组 -->
                     <div class="empty-state agent-tools-empty" id="steps-empty">
                         <div class="empty-state-header">
-                            <strong>Agent 可用工具</strong>
-                            <span class="hint">在 Agent 模式下让 LLM 调用</span>
+                            <strong data-i18n="agent.tools.title">Agent 可用工具</strong>
+                            <span class="hint" data-i18n="agent.tools.hint">在 Agent 模式下让 LLM 调用</span>
                         </div>
                         <div id="agent-tools-grid" class="agent-tools-grid">
-                            <div class="hint">加载中…</div>
+                            <div class="hint" data-i18n="agent.tools.loading">加载中…</div>
                         </div>
                     </div>
                 </div>
@@ -277,7 +278,7 @@
                 <div class="side-panel" data-panel="upload">
                     <!-- 上传区 (顶部 section) -->
                     <section class="docs-section">
-                        <h5 class="docs-section-title">📤 上传新文档</h5>
+                        <h5 class="docs-section-title" data-i18n="docs.section.upload">📤 上传新文档</h5>
                         <div class="upload-area" id="upload-area">
                             <input type="file" id="file-input" multiple hidden />
                             <label for="file-input" class="upload-label">
@@ -294,8 +295,8 @@
 
                     <!-- 已索引文档区 (底部 section, 视觉分割) -->
                     <section class="docs-section docs-list-section">
-                        <h5 class="docs-section-title">📚 已索引文档 <span class="hint" id="docs-count-hint" data-i18n="docs.hint">从 /documents 拉取</span></h5>
-                        <button id="docs-refresh-btn" class="small-btn ghost" data-i18n="docs.refresh">🔁 刷新列表</button>
+                        <h5 class="docs-section-title"><span data-i18n="docs.section.indexed">📚 已索引文档</span> <span class="hint" id="docs-count-hint" data-i18n="docs.hint">从 /documents 拉取</span></h5>
+                        <button id="docs-refresh-btn" class="small-btn ghost" data-i18n="docs.refresh_full">🔁 刷新列表</button>
                         <ul class="docs-list" id="docs-list"></ul>
                     </section>
                 </div>
@@ -373,11 +374,11 @@
 
                 <!-- Task NNNN (#131): 主题切换 -->
                 <div class="form-row">
-                    <label>主题</label>
+                    <label data-i18n="theme.label">主题</label>
                     <div class="lang-switch theme-switch">
-                        <button type="button" class="theme-opt" data-theme="dark">🌙 暗色</button>
-                        <button type="button" class="theme-opt" data-theme="light">☀️ 亮色</button>
-                        <button type="button" class="theme-opt" data-theme="auto">🖥 跟系统</button>
+                        <button type="button" class="theme-opt" data-theme="dark" data-i18n="theme.dark">🌙 暗色</button>
+                        <button type="button" class="theme-opt" data-theme="light" data-i18n="theme.light">☀️ 亮色</button>
+                        <button type="button" class="theme-opt" data-theme="auto" data-i18n="theme.auto">🖥 跟系统</button>
                     </div>
                 </div>
 
@@ -620,21 +621,21 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=152"></script>
-    <script src="/static/i18n.js?v=152"></script>
-    <script src="/static/markdown.js?v=152"></script>
+    <script src="/static/api.js?v=153"></script>
+    <script src="/static/i18n.js?v=153"></script>
+    <script src="/static/markdown.js?v=153"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=152"></script>
-    <script src="/static/modules/export.js?v=152"></script>
-    <script src="/static/modules/health.js?v=152"></script>
-    <script src="/static/modules/upload-manager.js?v=152"></script>
-    <script src="/static/modules/admin-panel.js?v=152"></script>
-    <script src="/static/modules/models-admin.js?v=152"></script>
+    <script src="/static/modules/ui-helpers.js?v=153"></script>
+    <script src="/static/modules/export.js?v=153"></script>
+    <script src="/static/modules/health.js?v=153"></script>
+    <script src="/static/modules/upload-manager.js?v=153"></script>
+    <script src="/static/modules/admin-panel.js?v=153"></script>
+    <script src="/static/modules/models-admin.js?v=153"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=152"></script>
+    <script src="/static/modules/memory-panel.js?v=153"></script>
 
-    <script src="/static/app.js?v=152"></script>
+    <script src="/static/app.js?v=153"></script>
 </body>
 </html>
