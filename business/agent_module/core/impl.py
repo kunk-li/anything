@@ -768,12 +768,55 @@ class SimpleAgent(
             state: Dict[str, Any],
             trace_id: Optional[str],
     ) -> None:
-        """安全保存聚合状态: 失败不阻断主任务."""
+        """安全保存聚合状态 + append 本轮 user/assistant 到 events 历史链.
+
+        之前 bug: save_state 是 full-replace, 每轮覆盖前轮, 切回历史只看到最后一条.
+        现在 merge:
+          1. 读老 state 拿到 events list
+          2. 把本轮 user_task + assistant_answer 各 append 一个 role event
+          3. 顶层 task/answer 仍存 (向后兼容; 也方便 list_sessions 抽 title)
+          4. save_state 写回, events 保留了完整对话历史
+        失败不阻断主任务.
+        """
         if self.state_store is None:
             return
         try:
+            new_state = dict(state) if isinstance(state, dict) else {}
+            # 1. 读老 events, 兼容首次 (无文件) 情况
+            old_events: list = []
+            if hasattr(self.state_store, "get_state"):
+                try:
+                    old = self.state_store.get_state(session_id) or {}
+                    if isinstance(old, dict):
+                        old_events = list(old.get("events") or [])
+                except Exception:
+                    old_events = []
+
+            # 2. 本轮 task / answer → 追加 2 个 role event
+            #    task 用 state.task (已经是 original_task, 不含长期记忆 prefix)
+            now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
+            user_task = new_state.get("task")
+            asst_answer = new_state.get("answer")
+            if user_task:
+                old_events.append({
+                    "role": "user",
+                    "content": str(user_task),
+                    "timestamp": now_iso,
+                    "trace_id": trace_id,
+                    "type": new_state.get("execution_mode") or "agent",
+                })
+            if asst_answer:
+                old_events.append({
+                    "role": "assistant",
+                    "content": str(asst_answer),
+                    "timestamp": now_iso,
+                    "trace_id": trace_id,
+                    "type": new_state.get("execution_mode") or "agent",
+                })
+            new_state["events"] = old_events
+
             if hasattr(self.state_store, "save_state"):
-                self.state_store.save_state(session_id, state)
+                self.state_store.save_state(session_id, new_state)
         except Exception as e:
             self.logger.warning(
                 f"状态保存失败(已忽略): session_id={session_id}, "
