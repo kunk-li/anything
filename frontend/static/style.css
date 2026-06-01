@@ -247,6 +247,24 @@ body {
     color: var(--text-strong, #fff);
     font-weight: 500;
 }
+/* Task XXXX-4 (#151): pending-delete 视觉淡化 + 删除线 */
+.session-item.pending-delete {
+    opacity: 0.4;
+    text-decoration: line-through;
+    pointer-events: none;
+}
+.undo-toast .toast-undo-btn {
+    margin-top: 8px;
+    background: var(--accent);
+    color: white;
+    border: 0;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.undo-toast .toast-undo-btn:hover { background: var(--accent-strong); }
+
 /* Task RRRR (#135): session 有 inflight 请求时显闪烁圆点 */
 .session-item.inflight::before {
     content: '';

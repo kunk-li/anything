@@ -487,9 +487,57 @@
         }
     }
 
+    // Task XXXX-4 (#151): 删除 session 走 5s 撤销窗口, 不立即 DELETE
+    // sid → {timer, sessionItem, listIndex}
+    const _pendingDeletes = new Map();
+
     async function deleteSessionById(sid) {
         if (!sid) return;
-        if (!confirm(`确认删除会话 ${sid}? 不可恢复.`)) return;
+        // 已经在待删队列 → 视为再点一次确认, 立即删
+        if (_pendingDeletes.has(sid)) {
+            _commitDelete(sid);
+            return;
+        }
+        // 不再 confirm 弹窗 — 改 toast + 撤销按钮
+        // 1. 视觉上 list item 立即变灰 / 划掉
+        const item = els.sessionList?.querySelector(`.session-item[data-sid="${sid}"]`);
+        if (item) item.classList.add('pending-delete');
+        // 2. 5s 后真删; 期间用户点 undo → 取消
+        const timer = setTimeout(() => _commitDelete(sid), 5000);
+        _pendingDeletes.set(sid, { timer });
+        // 3. toast 含 undo 按钮
+        _showUndoDeleteToast(sid);
+    }
+
+    function _showUndoDeleteToast(sid) {
+        const wrap = document.createElement('div');
+        wrap.className = 'toast toast-info undo-toast';
+        wrap.innerHTML = `
+            <div class="toast-title">即将删除会话 ${escapeHtml(sid.slice(0,16))}</div>
+            <div class="toast-body">5 秒内可撤销</div>
+            <button class="toast-undo-btn" type="button">↩ 撤销</button>
+        `;
+        const undoBtn = wrap.querySelector('.toast-undo-btn');
+        undoBtn.addEventListener('click', () => {
+            const entry = _pendingDeletes.get(sid);
+            if (entry?.timer) clearTimeout(entry.timer);
+            _pendingDeletes.delete(sid);
+            const item = els.sessionList?.querySelector(`.session-item[data-sid="${sid}"]`);
+            if (item) item.classList.remove('pending-delete');
+            wrap.remove();
+            toast('info', '已撤销删除', sid);
+        });
+        // 挂到 toast 容器
+        const host = document.querySelector('.toast-host') || document.body;
+        host.appendChild(wrap);
+        // 5s 后自动消失
+        setTimeout(() => wrap.remove(), 5200);
+    }
+
+    async function _commitDelete(sid) {
+        const entry = _pendingDeletes.get(sid);
+        if (entry?.timer) clearTimeout(entry.timer);
+        _pendingDeletes.delete(sid);
         try {
             const { payload, status } = await ApiClient.deleteSession(sid);
             if (status === 200 && payload?.code === 'SUCCESS') {
