@@ -13,7 +13,9 @@ evaluation/
 │   ├── rag_basic.jsonl        # RAG 中文 (5 cases)
 │   ├── rag_english.jsonl      # RAG 英文 (5 cases)
 │   ├── agent_basic.jsonl      # Agent 中文 (4 cases)
-│   └── agent_english.jsonl    # Agent 英文 (4 cases)
+│   ├── agent_english.jsonl    # Agent 英文 (4 cases)
+│   ├── agent_new_tools.jsonl  # 新工具 (pdf/excel/sql/browser/image_gen, 10 cases, Task XXXX-13)
+│   └── multi_tenancy.jsonl    # 多租户隔离 (17 cases)
 ├── sample_docs/               # 评测用样本文档(供索引到 vector_store)
 │   └── en/                    # 英文样本(logging_design + exception_handling)
 ├── run_eval.py                # 评测脚本入口
