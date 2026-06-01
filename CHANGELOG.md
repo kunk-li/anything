@@ -5,7 +5,67 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
-## Unreleased (2026-05-29)
+## Unreleased (2026-06-01)
+
+### XXXX-1..14 — 16 项 UX 优化批次 (XXXX-2/5 待真机验证 待结)
+
+**XXXX-1 (#148)** — 图片生成进度提示
+- `frontend/static/app.js`: `_loadingHintFor` 按 intent 推断 hint ("🎨 正在生成图片…"),
+  加 `_ensureElapsedTicker` 显 elapsed 秒数; 长任务不再"卡死错觉"
+
+**XXXX-3 (#150)** — 每条 assistant message 加复制按钮
+- `app.js`: `_attachMessageCopyButton(body, rawText)` 右上 hover 显 📋, 点击 navigator.clipboard
+- `style.css` `.msg-copy-btn` opacity 0 → hover 0.7 → click 1
+
+**XXXX-4 (#151)** — 删 session 加 5s 撤销窗口
+- `app.js`: `_pendingDeletes: Map`, `deleteSessionById` 不再立即 DELETE
+- `_showUndoDeleteToast` 5s 内可点 ↩ 撤销; 同 sid 第二次点 → 立刻 commit (skip 等待)
+- `style.css` `.pending-delete` (opacity 0.4 + 删除线), `.undo-toast .toast-undo-btn`
+
+**XXXX-6 (#153)** — 长答案 markdown 折叠
+- `app.js`: `_maybeFoldLongMessage(body)` 渲完 next tick 量 scrollHeight, >600px 给 msg-foldable
+- `style.css`: `.msg-folded` max-height 600 + 渐变蒙版 + 居中"▼ 展开全部"按钮
+
+**XXXX-7 (#154)** — i18n 补漏 (35+ 新键)
+- `i18n.js`: shortcuts.* / workflow.* / theme.* / docs.section.* / agent.tools.* / msg.* /
+  sessions.empty + .search.placeholder, zh + en 双向
+- `index.html`: 21 处加 data-i18n / data-i18n-attr (快捷键 modal / workflow drawer /
+  theme switcher / Agent 工具列空态 / 文档分区标题)
+- `app.js`: undo toast + fold toggle 文案走 `t()`
+
+**XXXX-8 (#155)** — session 列表分页 (默 30 + "加载更多")
+- `app.js`: `_sessionsVisibleLimit` (PAGE_SIZE=30), `listSessions(200)` 一次拉; `_renderSessionList`
+  slice 前 N 渲, 末尾追"▼ 加载更多 (N 个剩余)" 行; 搜索 input reset 分页
+- `style.css` `.session-list-loadmore` (dashed border)
+
+**XXXX-9 (#156)** — workflow 模板存 IndexedDB (脱离 localStorage 5MB)
+- 新 `frontend/static/idb-store.js`: 极简 IDB KV + `openMirror` (sync API + 异步刷盘)
+- `app.js`: `_initWorkflowsStore` 启动 await 一次, `_loadWorkflows/_saveWorkflows` 走 mirror;
+  保留 localStorage 兜底 + 一次性迁移 (localStorage→IDB)
+
+**XXXX-10 (#157)** — user 消息可编辑 + 重发 (✏ 按钮)
+- `app.js`: `buildMessageNode` user 角色追加 ✏ 浮动按钮; `_enterEditMode` 替 body 为 textarea
+- 保存 → state.history truncate 到该消息处 (砍后续 assistant) → renderHistory → send()
+- `style.css` `.msg-edit-btn / .msg-edit-textarea / .msg-edit-actions / .msg-editing`
+
+**XXXX-11 (#158)** — image_generate URL 走结构化字段
+- `tools_impl/image_generate.py`: `data.description` URL-free; URL 在 `data.images` / `image_url`
+- `core/impl.py`: 加 `_extract_image_urls(output)`; aggregate_results 给 `tool_results_summary[i]`
+  追加 `images` 数组
+- `core/components/streaming.py`: 同样给 stream meta 加 images
+- `app.js` `_collectGeneratedImages`: 优先读 s.images (结构), regex 扫保留兜底
+
+**XXXX-12 (#159)** — 5 新工具单测 ~25 cases
+- 新 `business/agent_module/tests/test_new_tools.py`: image_generate / pdf_read /
+  excel_read / sql_query / browser_visit 的 PARAM_MISSING / 路径安全 / SQL 关键字拦截 /
+  SSRF 防御 / scheme 校验
+
+**XXXX-13 (#160)** — evaluation set 加新工具 10 cases
+- 新 `evaluation/datasets/agent_new_tools.jsonl`: pdf / excel / sql (含 DELETE 拒绝) /
+  browser (含 SSRF) / image_gen + 2 组合场景 (sql→llm, web_search→llm)
+- run_eval.py 自动扫 *.jsonl 已覆盖
+
+**XXXX-14 (#161)** — README/CHANGELOG 同步本批
 
 ### Phase 2 商业化 — 让 Phase 1 抽象真的被消费
 
