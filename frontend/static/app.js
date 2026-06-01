@@ -1867,6 +1867,73 @@
         }, 100);
     }
 
+    // Task XXXX-10 (#157): 编辑 user 消息 → 替换 body 为 textarea + save/cancel.
+    // 保存 = state.history truncate 到该消息 (含) → inputText 填新内容 → send().
+    function _enterEditMode(msg, wrapper, body) {
+        if (!msg || msg.role !== 'user') return;
+        // 防重入
+        if (wrapper.classList.contains('msg-editing')) return;
+        wrapper.classList.add('msg-editing');
+
+        const origText = msg.content || '';
+        const origHtml = body.innerHTML;
+
+        // 渲编辑控件
+        const ta = document.createElement('textarea');
+        ta.className = 'msg-edit-textarea';
+        ta.value = origText;
+        ta.rows = Math.min(8, Math.max(2, origText.split('\n').length + 1));
+
+        const actions = document.createElement('div');
+        actions.className = 'msg-edit-actions';
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'small-btn primary';
+        saveBtn.textContent = '💾 保存并重发';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'small-btn ghost';
+        cancelBtn.textContent = '取消';
+        actions.appendChild(saveBtn);
+        actions.appendChild(cancelBtn);
+
+        body.innerHTML = '';
+        body.appendChild(ta);
+        body.appendChild(actions);
+        ta.focus();
+        ta.selectionStart = ta.value.length;
+
+        cancelBtn.addEventListener('click', () => {
+            body.innerHTML = origHtml;
+            wrapper.classList.remove('msg-editing');
+        });
+        saveBtn.addEventListener('click', () => {
+            const newText = ta.value.trim();
+            if (!newText) {
+                toast('warn', '内容为空', '取消或填新内容');
+                return;
+            }
+            if (newText === origText) {
+                // 没变化 — 视为取消
+                body.innerHTML = origHtml;
+                wrapper.classList.remove('msg-editing');
+                return;
+            }
+            // 找到这条 user message 在 state.history 的位置
+            const idx = state.history.findIndex(m => m.id === msg.id);
+            if (idx < 0) {
+                toast('error', '找不到原消息', '');
+                return;
+            }
+            // truncate: 砍掉本条 user 消息 + 后面所有 (包括对应的 assistant)
+            state.history = state.history.slice(0, idx);
+            renderHistory();
+            // 填到输入框 + send
+            els.inputText.value = newText;
+            send();
+        });
+    }
+
     // Task XXXX-3 (#150): 给 assistant message body 加单条复制按钮 (右上 hover 显)
     function _attachMessageCopyButton(body, rawText) {
         if (!body || !rawText) return;
@@ -2170,6 +2237,20 @@
             body.textContent = msg.content || '';
         }
         content.appendChild(body);
+
+        // Task XXXX-10 (#157): user 消息加 ✏ 编辑按钮 — 编辑后从该消息处 rewind + 重发
+        if (msg.role === 'user' && !msg.loading) {
+            const editBtn = document.createElement('button');
+            editBtn.type = 'button';
+            editBtn.className = 'msg-edit-btn';
+            editBtn.title = '编辑并重发';
+            editBtn.textContent = '✏';
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                _enterEditMode(msg, wrapper, body);
+            });
+            wrapper.appendChild(editBtn);  // 浮在右上 (CSS absolute)
+        }
 
         // citations
         if (msg.data && Array.isArray(msg.data.citations) && msg.data.citations.length) {
