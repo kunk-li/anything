@@ -1353,10 +1353,11 @@
             const raw = localStorage.getItem('anything_settings');
             if (raw) Object.assign(state.settings, JSON.parse(raw));
         } catch (_) {}
-        try {
-            const hist = localStorage.getItem('anything_history');
-            if (hist) state.history = JSON.parse(hist);
-        } catch (_) {}
+        // 修复: localStorage['anything_history'] 是全局唯一 key, 多会话场景下会把
+        // 老 session 的 history 装到新 session 形成"幽灵历史". 一律删除, 启动后
+        // _loadSessionHistory 从后端按 sid 拉, 没有就空白.
+        try { localStorage.removeItem('anything_history'); } catch (_) {}
+        state.history = [];
 
         // Task #46: 自动生成稳定 session_id (没显式配置时), 后端 RAG 据此读写会话历史
         if (!state.settings.sessionId) {
@@ -1404,11 +1405,9 @@
     }
 
     function persistHistory() {
-        try {
-            // 只保留最近 50 条, 避免 localStorage 爆掉
-            const recent = state.history.slice(-50);
-            localStorage.setItem('anything_history', JSON.stringify(recent));
-        } catch (_) {}
+        // 修复 (多会话幽灵历史): 不再写全局 anything_history key.
+        // 历史持久化交给后端 (state_store + events append). 切会话拉真实 history.
+        // 这个函数保留是为了避免到处删调用方; no-op.
     }
 
     // ---------- 事件绑定 ----------
