@@ -194,6 +194,10 @@
         setTimeout(_maybeShowFirstRunWizard, 800);
         _bindFirstRunWizard();
 
+        // Task PM-5: KB 面板初始化
+        _bindKbPanel();
+        setTimeout(_loadKbList, 700);
+
         // Task NNNN (#131): 主题切换按钮
         document.querySelectorAll('.theme-opt').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -460,6 +464,106 @@
     // XXXX-8: 搜索框值变化时, 把分页 limit 重置 (新过滤器要从第一页开始)
     function _resetSessionsPagination() {
         _sessionsVisibleLimit = _SESSIONS_PAGE_SIZE;
+    }
+
+    // Task PM-5: Knowledge Base 面板 + per-session attach
+    let _kbCache = [];
+
+    function _bindKbPanel() {
+        document.getElementById('kb-refresh-btn')?.addEventListener('click', _loadKbList);
+        document.getElementById('kb-create-btn')?.addEventListener('click', _createKbInteractive);
+        const sel = document.getElementById('kb-current-select');
+        if (sel) {
+            sel.addEventListener('change', () => {
+                const v = sel.value || '';
+                state.settings.currentKbId = v || null;
+                try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+                if (v) {
+                    const kb = _kbCache.find(k => k.id === v);
+                    toast('info', `当前 session 用知识库`, kb?.name || v);
+                } else {
+                    toast('info', '已切换到 (全部文档)', '');
+                }
+            });
+        }
+    }
+
+    async function _loadKbList() {
+        const ul = document.getElementById('kb-list');
+        const sel = document.getElementById('kb-current-select');
+        if (!ul) return;
+        try {
+            const tenant = state.settings.tenant || 'default';
+            const { payload, status } = await ApiClient.listKBs(tenant);
+            if (status !== 200 || payload?.code !== 'SUCCESS') {
+                ul.innerHTML = `<li class="empty-state">加载失败: ${payload?.code || status}</li>`;
+                return;
+            }
+            _kbCache = (payload.data?.items || []);
+            // 渲列表
+            if (!_kbCache.length) {
+                ul.innerHTML = '<li class="empty-state">还没有知识库, 点 "+新建 KB" 开始</li>';
+            } else {
+                ul.innerHTML = _kbCache.map(k => `
+                    <li class="kb-item" data-kbid="${escapeHtml(k.id)}">
+                        <div class="kb-item-main">
+                            <span class="kb-name">${escapeHtml(k.name)}</span>
+                            <span class="kb-meta">${k.doc_count || 0} 个文档</span>
+                        </div>
+                        ${k.description ? `<div class="kb-desc">${escapeHtml(k.description)}</div>` : ''}
+                        <div class="kb-actions">
+                            <button class="small-btn ghost kb-use-btn" data-kbid="${escapeHtml(k.id)}">用这个</button>
+                            <button class="small-btn ghost kb-del-btn" data-kbid="${escapeHtml(k.id)}">删</button>
+                        </div>
+                    </li>
+                `).join('');
+                ul.querySelectorAll('.kb-use-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        sel.value = btn.dataset.kbid;
+                        sel.dispatchEvent(new Event('change'));
+                    });
+                });
+                ul.querySelectorAll('.kb-del-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        if (!confirm('确定删除这个知识库?\n(只删 KB, 不删文档本身)')) return;
+                        try {
+                            await ApiClient.deleteKB(btn.dataset.kbid);
+                            toast('success', '已删除', '');
+                            await _loadKbList();
+                        } catch (e) {
+                            toast('error', '删除失败', e.message);
+                        }
+                    });
+                });
+            }
+            // 同步下拉
+            if (sel) {
+                const currentVal = state.settings.currentKbId || '';
+                sel.innerHTML = '<option value="">(全部文档)</option>' +
+                    _kbCache.map(k =>
+                        `<option value="${escapeHtml(k.id)}" ${k.id === currentVal ? 'selected' : ''}>${escapeHtml(k.name)} (${k.doc_count || 0})</option>`
+                    ).join('');
+            }
+        } catch (e) {
+            ul.innerHTML = `<li class="empty-state">异常: ${escapeHtml(e.message)}</li>`;
+        }
+    }
+
+    async function _createKbInteractive() {
+        const name = (prompt('知识库名字 (例: 产品手册 / 客服 FAQ):', '') || '').trim();
+        if (!name) return;
+        const desc = (prompt('描述 (可选):', '') || '').trim();
+        try {
+            const { payload, status } = await ApiClient.createKB(name, desc, state.settings.tenant || 'default');
+            if (status === 200 && payload?.code === 'SUCCESS') {
+                toast('success', '知识库已创建', name);
+                await _loadKbList();
+            } else {
+                toast('error', payload?.code || status, payload?.message || '');
+            }
+        } catch (e) {
+            toast('error', '创建失败', e.message);
+        }
     }
 
     // Task PM-4: Slash command palette — 输入框首字符 / 时弹工具选择
@@ -1835,6 +1939,13 @@
         if (reflectMode) {
             body.extra_params = body.extra_params || {};
             body.extra_params.enable_reflection = true;
+        }
+
+        // Task PM-5: 当前 session attach 的 KB → extra_params.kb_id
+        // 后端 RAG 看到这字段可以 filter retrieval; agent 模式也透传
+        if (state.settings.currentKbId) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.kb_id = state.settings.currentKbId;
         }
 
         // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task

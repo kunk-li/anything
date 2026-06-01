@@ -473,6 +473,13 @@ const ApiClient = (() => {
         submitFeedback,
         getFeedbackStats,
         getRecentFeedback,
+        // Task PM-5: Knowledge Base
+        listKBs,
+        createKB,
+        getKB,
+        deleteKB,
+        addDocsToKB,
+        removeDocFromKB,
     };
 
     async function submitFeedback(body) {
@@ -485,6 +492,28 @@ const ApiClient = (() => {
         const q = new URLSearchParams({ limit: String(limit) });
         if (rating === 1 || rating === -1) q.set('rating', String(rating));
         return _doFetch('GET', `/feedback/recent?${q.toString()}`);
+    }
+
+    // Task PM-5: Knowledge Base
+    async function listKBs(tenant = 'default') {
+        return _doFetch('GET', `/kb?tenant=${encodeURIComponent(tenant)}`);
+    }
+    async function createKB(name, description = '', tenant = 'default') {
+        return _doFetch('POST', '/kb', { body: { name, description, tenant_id: tenant } });
+    }
+    async function getKB(kbId) {
+        return _doFetch('GET', `/kb/${encodeURIComponent(kbId)}`);
+    }
+    async function deleteKB(kbId) {
+        return _doFetch('DELETE', `/kb/${encodeURIComponent(kbId)}`);
+    }
+    async function addDocsToKB(kbId, docIds) {
+        return _doFetch('POST', `/kb/${encodeURIComponent(kbId)}/docs`,
+                        { body: { doc_ids: docIds } });
+    }
+    async function removeDocFromKB(kbId, docId) {
+        return _doFetch('DELETE',
+            `/kb/${encodeURIComponent(kbId)}/docs/${encodeURIComponent(docId)}`);
     }
 })();
 

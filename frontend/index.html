@@ -347,7 +347,25 @@
 
                 <!-- 文档上传 (Task P: 多文件批量队列) | Task YYYY-J (#115): 视觉分区 -->
                 <div class="side-panel" data-panel="upload">
-                    <!-- 上传区 (顶部 section) -->
+                    <!-- Task PM-5: Knowledge Base 区 (顶部) -->
+                    <section class="docs-section kb-section">
+                        <h5 class="docs-section-title">📚 知识库 <span class="hint">把文档分组, 让 RAG 只在某一组里搜</span></h5>
+                        <div class="kb-current" id="kb-current">
+                            <span class="hint">当前 session 用: </span>
+                            <select id="kb-current-select">
+                                <option value="">(全部文档)</option>
+                            </select>
+                        </div>
+                        <div class="kb-toolbar">
+                            <button class="small-btn" id="kb-refresh-btn">🔁 刷新</button>
+                            <button class="small-btn primary" id="kb-create-btn">+ 新建 KB</button>
+                        </div>
+                        <ul class="kb-list" id="kb-list">
+                            <li class="empty-state">还没有知识库, 点 "+新建 KB" 开始</li>
+                        </ul>
+                    </section>
+
+                    <!-- 上传区 (中间 section) -->
                     <section class="docs-section">
                         <h5 class="docs-section-title" data-i18n="docs.section.upload">📤 上传新文档</h5>
                         <div class="upload-area" id="upload-area">
@@ -704,23 +722,23 @@
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
-    <script src="/static/api.js?v=165"></script>
-    <script src="/static/i18n.js?v=165"></script>
-    <script src="/static/markdown.js?v=165"></script>
+    <script src="/static/api.js?v=166"></script>
+    <script src="/static/i18n.js?v=166"></script>
+    <script src="/static/markdown.js?v=166"></script>
     <!-- Task XXXX-9 (#156): IndexedDB KV mirror (workflows / drafts 用) -->
-    <script src="/static/idb-store.js?v=165"></script>
+    <script src="/static/idb-store.js?v=166"></script>
 
     <!-- Task SS (#79): app.js 拆出的 6 个模块, 走 IIFE + window.AnythingApp 注册.
          加载顺序必须先于 app.js (app.js init 时调 window.AnythingApp.X 工厂注入 deps). -->
-    <script src="/static/modules/ui-helpers.js?v=165"></script>
-    <script src="/static/modules/export.js?v=165"></script>
-    <script src="/static/modules/health.js?v=165"></script>
-    <script src="/static/modules/upload-manager.js?v=165"></script>
-    <script src="/static/modules/admin-panel.js?v=165"></script>
-    <script src="/static/modules/models-admin.js?v=165"></script>
+    <script src="/static/modules/ui-helpers.js?v=166"></script>
+    <script src="/static/modules/export.js?v=166"></script>
+    <script src="/static/modules/health.js?v=166"></script>
+    <script src="/static/modules/upload-manager.js?v=166"></script>
+    <script src="/static/modules/admin-panel.js?v=166"></script>
+    <script src="/static/modules/models-admin.js?v=166"></script>
     <!-- Task KKK (#97): 长期记忆面板 -->
-    <script src="/static/modules/memory-panel.js?v=165"></script>
+    <script src="/static/modules/memory-panel.js?v=166"></script>
 
-    <script src="/static/app.js?v=165"></script>
+    <script src="/static/app.js?v=166"></script>
 </body>
 </html>

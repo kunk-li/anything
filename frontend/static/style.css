@@ -1159,6 +1159,47 @@ body.has-drag .chat-pane::before {
 .message:hover .msg-copy-btn { opacity: 0.7; }
 .msg-copy-btn:hover { opacity: 1 !important; background: var(--bg-elev2); }
 
+/* Task PM-5: Knowledge Base UI */
+.kb-section { background: var(--bg-elev); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+.kb-current {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+}
+.kb-current select {
+    flex: 1;
+    background: var(--bg-elev2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.kb-toolbar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.kb-list { list-style: none; padding: 0; margin: 0; }
+.kb-item {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 6px;
+    background: var(--bg-elev2);
+}
+.kb-item-main {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+.kb-name { font-weight: 600; }
+.kb-meta { font-size: 11px; color: var(--text-dim); }
+.kb-desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.kb-actions { display: flex; gap: 4px; margin-top: 6px; }
+.kb-actions .small-btn { font-size: 11px; padding: 2px 8px; }
+
 /* Task PM-4: Slash command palette (浮在 input 上方) */
 .composer { position: relative; }
 .slash-palette {
