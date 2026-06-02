@@ -370,6 +370,16 @@ class ApiService(
             request.state.trace_id = trace_id
             request.state.start_time = time.time()
 
+            # 安全 (生产冒烟发现真 bug): 在此 enforce 鉴权. 之前 _check_auth 定义了却
+            # 从没在 HTTP middleware 调用 → 即使 security.auth_enabled=true, 所有 REST
+            # 端点 (/invoke /documents /sessions /config /admin ...) 也全部裸奔.
+            # public 路径 (前端静态 / 健康检查 / API 文档) 豁免, 否则浏览器打不开 UI.
+            if not self._is_public_path(request.url.path):
+                _auth_fail = self._check_auth(request, trace_id)
+                if _auth_fail is not None:
+                    _auth_fail.headers["X-Request-Id"] = trace_id
+                    return _auth_fail
+
             try:
                 response = await call_next(request)
                 response.headers["X-Request-Id"] = trace_id
@@ -653,6 +663,16 @@ class ApiService(
 
         # 其他认证方式先保留占位
         return None
+
+    @staticmethod
+    def _is_public_path(path: str) -> bool:
+        """鉴权豁免的 public 路径: 前端静态资源 / 健康检查 / API 文档.
+        其余 (业务 API) 在 auth_enabled 时都需带 X-API-Key. dev 模式 auth 本就关, 不受影响.
+        """
+        p = path or "/"
+        if p in ("/", "/health", "/favicon.ico", "/openapi.json", "/docs", "/redoc"):
+            return True
+        return p.startswith(("/static/", "/docs/", "/redoc/"))
 
     def _generate_trace_id(self) -> str:
         return uuid.uuid4().hex
