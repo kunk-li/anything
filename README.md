@@ -82,6 +82,7 @@ docker-compose up                          # 服务 + 必要后端
 
 ## 关键文档
 
+- [DEPLOYMENT.md](./DEPLOYMENT.md) — 生产上线 checklist (安全 / 配额 / 冒烟验证)
 - [doc/](./doc/) — 模块设计说明书 (v2.0+)
 - [CHANGELOG.md](./CHANGELOG.md) — 按 task ID 倒序的变更
 - [AGENTS.md](./AGENTS.md) — Agent system prompt / 项目级记忆
