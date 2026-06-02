@@ -397,6 +397,11 @@ class SimpleRAG(BaseRAG):
                         "file_name": item.get("file_name"),
                         "chunk_index": item.get("chunk_index"),
                         "score": item.get("score"),
+                        # ZZ-7: 补 content + start/end_char — 之前漏传, 导致前端检索结果
+                        # 列表显示"无 content"、"查看原文"抠不到正确片段 (溯源链路断在数据层).
+                        "content": item.get("content"),
+                        "start_char": item.get("start_char"),
+                        "end_char": item.get("end_char"),
                         # 可观察性: 透传 rerank_source 让调用方知道 score 是
                         # 来自 vector_db 原始相似度还是 rerank 加工后的分数
                         "rerank_source": item.get("rerank_source"),
@@ -509,6 +514,10 @@ class SimpleRAG(BaseRAG):
                             "file_name": item.get("file_name"),
                             "chunk_index": item.get("chunk_index"),
                             "score": item.get("score"),
+                            # ZZ-7: 补 content + start/end_char (同流式分支, 溯源链路完整)
+                            "content": item.get("content"),
+                            "start_char": item.get("start_char"),
+                            "end_char": item.get("end_char"),
                             # 可观察性: 透传 rerank_source 让调用方知道 score 是
                             # 来自 vector_db 原始相似度还是 rerank 加工后的分数
                             "rerank_source": item.get("rerank_source"),
