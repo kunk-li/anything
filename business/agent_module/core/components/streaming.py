@@ -195,6 +195,13 @@ class StreamingMixin:
                    "message": "LLM 或 tool_registry 不可用"}
             return
 
+        # ZZ-5: 多轮上下文 — 流式 ReAct / plan 也注入对话历史 (默认流式 _run_stream_direct 已有,
+        # 这里补上工具/计划场景, 否则 ReAct 仍是金鱼记忆).
+        if task:
+            _hist_prefix = self._history_prefix(session_id)
+            if _hist_prefix:
+                task = _hist_prefix + task
+
         # Task V (#56) 流式版: plan_only=true → 跑一遍拿 plan, yield 给前端就停
         plan_only = bool(extra_params.get("plan_only", False)) and not bool(
             extra_params.get("approve_plan", False)

@@ -258,6 +258,13 @@ class SimpleAgent(
                     f"trace_id={trace_id} err={_mem_err}"
                 )
 
+        # ZZ-5: 多轮对话上下文 — 给 ReAct / single_shot 等非流式路径补历史 (默认流式已有).
+        # 放在 long_term_memory 注入之后, 让 [对话历史] 块位于 (memory + 当前任务) 之上.
+        if task:
+            _hist_prefix = self._history_prefix(session_id)
+            if _hist_prefix:
+                task = _hist_prefix + task
+
         # ReAct 模式优先 (hybrid 由文档定义为固定流水线, 不走 ReAct)
         if strategy == "react" and execution_mode != "hybrid":
             react_result = self._react_execute(
@@ -793,6 +800,26 @@ class SimpleAgent(
                 if role in ("user", "assistant") and isinstance(content, str) and content:
                     msgs.append({"role": role, "content": content})
         return msgs
+
+    def _history_prefix(self, session_id, max_turns: int = 6) -> str:
+        """ZZ-5: 把最近 N 轮对话拼成可注入 prompt 顶部的 [对话历史] 块. 无/失败返回 ''.
+
+        ZZ-1 只给默认流式 (_run_stream_direct) 注入了历史; ReAct / plan / 非流式 execute
+        / single_shot 仍是金鱼记忆. 这个 helper 给那几条路径统一补多轮上下文.
+        """
+        try:
+            history = self._load_history(session_id, max_turns=max_turns)
+        except Exception:
+            return ""
+        lines = []
+        for h in history:
+            who = "用户" if h.get("role") == "user" else "助手"
+            c = (h.get("content") or "").strip()
+            if c:
+                lines.append(f"{who}: {c}")
+        if not lines:
+            return ""
+        return "[对话历史]\n" + "\n".join(lines) + "\n\n---\n\n"
 
     def _save_state_safe(
             self,
