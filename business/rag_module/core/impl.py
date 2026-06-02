@@ -310,6 +310,13 @@ class SimpleRAG(BaseRAG):
         session_id = request.get("session_id")
 
         context_chunks = self._assemble_context(retrieved_chunks)
+        # A1: 检索 0 结果 → 不调 LLM, 直接诚实回复 (杜绝无依据幻觉 + 省一次 LLM 调用).
+        if not context_chunks:
+            no_ctx = "根据现有知识库, 没有找到与该问题相关的内容。可以换个说法, 或先上传相关文档再问。"
+            self._save_turn(session_id=session_id, user_query=query,
+                            assistant_answer=no_ctx, trace_id=trace_id)
+            self.logger.info(f"RAG 检索 0 结果, 返回诚实兜底 (不调 LLM): trace_id={trace_id}")
+            return {"answer": no_ctx, "citations": []}
         # Task #46: 注入历史
         history = self._load_history(session_id)
         prompt = self._build_prompt(query=query, context_chunks=context_chunks, history=history)
@@ -412,6 +419,16 @@ class SimpleRAG(BaseRAG):
                 ],
                 "citations": citations,
             }
+
+            # A1: 流式 RAG 检索 0 结果 → 直接诚实回复 + done, 不调 LLM (与非流式对称, 杜绝幻觉)
+            if not context_chunks:
+                no_ctx = "根据现有知识库, 没有找到与该问题相关的内容。可以换个说法, 或先上传相关文档再问。"
+                yield {"type": "chunk", "text": no_ctx}
+                self._save_turn(session_id=session_id, user_query=query,
+                                assistant_answer=no_ctx, trace_id=trace_id)
+                yield {"type": "done", "cost_time": round(time.time() - start_time, 3),
+                       "answer_length": len(no_ctx), "code": "SUCCESS"}
+                return
 
             # 4. LLM 真实流式
             with trace_span(
@@ -799,12 +816,15 @@ class SimpleRAG(BaseRAG):
 
         prompt = (
             f"{memory_block}"
-            "你是一个基于知识片段回答问题的助手。\n"
-            "请严格依据提供的上下文回答，并尽量保留引用标记。\n"
-            "如果用户问题涉及之前对话内容, 也可参考下面的历史。\n"
+            "你是一个严格基于「知识片段」回答问题的助手。请遵守:\n"
+            "1. 只依据下面提供的上下文回答, 不得使用上下文之外的知识, 不得编造.\n"
+            "2. 若上下文中没有与问题相关的信息, 必须直接回答: "
+            "「根据现有知识库, 没有找到与该问题相关的内容。」并停止, 不要编造答案.\n"
+            "3. 回答中保留引用标记 (如 [chunk_id]) 方便溯源.\n"
+            "如果用户问题涉及之前对话内容, 可参考下面的历史。\n"
             f"{history_block}"
             f"当前问题: {query}\n\n"
-            f"上下文:\n{context_text}\n\n"
+            f"上下文:\n{context_text or '(无相关上下文)'}\n\n"
             "请给出中文回答。"
         )
         return prompt
