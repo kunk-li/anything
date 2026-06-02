@@ -67,6 +67,9 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         for attempt in range(self.max_retry):
             try:
                 data = self._post_json(url, headers, payload, timeout=self.timeout)
+                # ZZ-8: 提取真实 token usage (OpenAI/DashScope/DeepSeek 响应都含 usage 字段),
+                # 存实例供 call() 填进 LLMResponse — 不再只靠 字符数//4 估算.
+                self._last_usage = data.get("usage") or {}
                 choices = data.get("choices", [])
                 if not choices:
                     return ""
@@ -81,6 +84,7 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
     def call(self, request: LLMRequest) -> LLMResponse:
         start = now_ts()
         trace_id = gen_trace_id()
+        self._last_usage = {}  # ZZ-8: 每次调用 reset, 避免上次真实 usage 残留
         try:
             if request.input_text:
                 out = self.generate(request.input_text, request)
@@ -95,7 +99,14 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
                 out = self.generate(prompt, request)
             else:
                 out = ""
-            return LLMResponse(code="SUCCESS", message="ok", chat_result=out, cost_time=now_ts()-start, trace_id=trace_id)
+            _u = getattr(self, "_last_usage", None) or {}
+            return LLMResponse(
+                code="SUCCESS", message="ok", chat_result=out,
+                prompt_tokens=_u.get("prompt_tokens"),
+                completion_tokens=_u.get("completion_tokens"),
+                total_tokens=_u.get("total_tokens"),
+                cost_time=now_ts()-start, trace_id=trace_id,
+            )
         except Exception as e:
             return LLMResponse(code="RAG_RUN_FAILED", message=str(e), cost_time=now_ts()-start, trace_id=trace_id)
 
