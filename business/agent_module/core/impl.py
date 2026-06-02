@@ -634,6 +634,10 @@ class SimpleAgent(
                 success_summaries = [x["summary"] for x in summaries if not x["summary"].startswith("失败")]
                 final_answer = success_summaries[0] if success_summaries else "任务执行完成, 但未生成可展示内容."
 
+        # ZZ-6 (#122): final_answer 若是裸工具名 (LLM 幻觉) → 兜底, 别把工具名吐给用户
+        if final_answer and not self._sanitize_final_answer(final_answer):
+            final_answer = "任务执行完成, 但未生成可展示内容."
+
         # Task SSSS: 工具直接输出 raw JSON 时 (例如 datetime / calculator 都返 dict),
         # 用一次 LLM 合成自然语言. 检测条件: final_answer 看起来是 JSON / dict 字面值.
         if final_answer and self._looks_like_raw_json(final_answer):
@@ -1155,6 +1159,30 @@ class SimpleAgent(
                 return str(output["content"])[:_LIMIT]
             return str(output)[:_LIMIT]
         return str(output)[:_LIMIT]
+
+    def _sanitize_final_answer(self, answer: Any) -> str:
+        """ZZ-6 (#122): 防 Agent 偶发把裸工具名 (如 'llm_generate') 当最终答案返回.
+
+        根因: LLM 偶尔幻觉直接输出 {"final_answer": "llm_generate"} (把工具名当答案);
+        _parse_react_response 会原样透传. 这里检测 final answer 是否恰好是某已注册工具名,
+        是则返回 '' (无效), 调用方走兜底文案 — 用户不再看到裸工具名.
+        """
+        if not isinstance(answer, str):
+            return answer
+        stripped = answer.strip().strip('`"\' .。\n\t')
+        if not stripped:
+            return answer
+        try:
+            tools = set(self._available_tool_names() or [])
+        except Exception:
+            tools = set()
+        tools |= {"llm_generate", "rag_search"}  # registry 为空时也兜底
+        if stripped in tools:
+            self.logger.warning(
+                f"[#122] final_answer 命中裸工具名 {stripped!r}, 判为无效输出, 走兜底"
+            )
+            return ""
+        return answer
 
     def _handle_exception(
             self,

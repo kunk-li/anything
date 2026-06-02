@@ -292,6 +292,9 @@ class ReActEngineMixin:
                 final_answer = str(output)
         if not final_answer:
             final_answer = "ReAct 循环未产出可用答案"
+        elif not self._sanitize_final_answer(final_answer):
+            # ZZ-6 (#122): final_answer 是裸工具名 (LLM 幻觉) → 兜底, 不把工具名吐给用户
+            final_answer = "抱歉, 这次没能正确组织出答案, 换个说法再试一次。"
 
         self._append_state_event(
             session_id=session_id, event_type="react_completed", trace_id=trace_id,

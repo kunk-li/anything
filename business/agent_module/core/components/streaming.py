@@ -327,6 +327,9 @@ class StreamingMixin:
                     final_answer = str(output)
             if not final_answer:
                 final_answer = "ReAct 循环未产出可用答案"
+            elif not self._sanitize_final_answer(final_answer):
+                # ZZ-6 (#122): 裸工具名 (LLM 幻觉) → 兜底
+                final_answer = "抱歉, 这次没能正确组织出答案, 换个说法再试一次。"
 
             # yield meta + final answer chunks + done
             yield {
