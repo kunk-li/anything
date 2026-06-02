@@ -3134,6 +3134,10 @@
             window.Markdown.bindCopyButtons(body);
             // Task VVVV (#146): 给每张 <img> 包 wrapper + 下载按钮
             _attachImageDownloadButtons(body);
+            // A2: 答案正文里的 [N] 渲染成可点击角标 → 跳对应 citation 来源
+            if (msg.data && Array.isArray(msg.data.citations) && msg.data.citations.length) {
+                _attachCitationRefs(body, msg.data.citations);
+            }
             // Task XXXX-3 (#150): 加单条复制按钮
             _attachMessageCopyButton(body, msg.content || '');
             // Task PM-7-2: 重新生成按钮 (非 error 都加)
@@ -3366,6 +3370,52 @@
             els.previewMeta.innerHTML = `<span class="chip" style="color:var(--danger);border-color:var(--danger);">ERROR</span>`;
             els.previewText.textContent = err.message || t('preview.error');
         }
+    }
+
+    function _attachCitationRefs(body, citations) {
+        // A2: 把答案正文里的 [N] (N≤citations 数) 换成可点击角标 → 跳对应来源 chunk.
+        // 安全: 跳过 code/pre/a/sup 内文本, 只处理普通文本节点, 范围外的 [N] 原样保留.
+        if (!citations || !citations.length) return;
+        const n = citations.length;
+        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                let p = node.parentElement;
+                while (p && p !== body) {
+                    const tg = p.tagName;
+                    if (tg === 'CODE' || tg === 'PRE' || tg === 'A' || tg === 'SUP') return NodeFilter.FILTER_REJECT;
+                    p = p.parentElement;
+                }
+                return /\[\d+\]/.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+            },
+        });
+        const targets = [];
+        while (walker.nextNode()) targets.push(walker.currentNode);
+        targets.forEach((node) => {
+            const text = node.nodeValue;
+            const frag = document.createDocumentFragment();
+            let last = 0, m;
+            const re = /\[(\d+)\]/g;
+            while ((m = re.exec(text)) !== null) {
+                const num = parseInt(m[1], 10);
+                if (num < 1 || num > n) continue;
+                if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+                const sup = document.createElement('sup');
+                sup.className = 'cite-ref';
+                sup.textContent = `[${num}]`;
+                const c = citations[num - 1];
+                sup.title = (c && (c.file_name || c.doc_id)) || '';
+                sup.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (e.shiftKey) openPreview(c); else focusChunk(c.chunk_id);
+                });
+                frag.appendChild(sup);
+                last = m.index + m[0].length;
+            }
+            if (last > 0) {
+                if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+                node.parentNode.replaceChild(frag, node);
+            }
+        });
     }
 
     function focusChunk(chunkId) {

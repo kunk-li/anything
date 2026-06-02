@@ -1689,6 +1689,17 @@ body.share-readonly .msg-feedback {
     flex-wrap: wrap;
     gap: 4px;
 }
+/* A2: 答案内联引用角标 [N] — 可点击跳来源 */
+.cite-ref {
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.72em;
+    padding: 0 1px;
+    vertical-align: super;
+}
+.cite-ref:hover { text-decoration: underline; }
+
 .citation-chip {
     background: var(--accent-soft);
     border: 1px solid var(--accent);

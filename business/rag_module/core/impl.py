@@ -788,10 +788,10 @@ class SimpleRAG(BaseRAG):
         history: [{role:"user"|"assistant", content:str}, ...] 按时间顺序, 已经截断到 N 轮。
         """
         context_parts = []
-        for chunk in context_chunks:
-            context_parts.append(
-                f"[{chunk.get('chunk_id')}] {chunk.get('content', '')}"
-            )
+        for idx, chunk in enumerate(context_chunks, start=1):
+            # A2: 用序号 [1][2] 标资料 (对应 citations 顺序), 让 LLM 引用时输出 [1][2]
+            # 而非裸 chunk_id UUID; 前端把 [N] 渲染成可点击角标跳对应来源.
+            context_parts.append(f"[{idx}] {chunk.get('content', '')}")
         context_text = "\n\n".join(context_parts)
 
         history_block = ""
@@ -820,7 +820,7 @@ class SimpleRAG(BaseRAG):
             "1. 只依据下面提供的上下文回答, 不得使用上下文之外的知识, 不得编造.\n"
             "2. 若上下文中没有与问题相关的信息, 必须直接回答: "
             "「根据现有知识库, 没有找到与该问题相关的内容。」并停止, 不要编造答案.\n"
-            "3. 回答中保留引用标记 (如 [chunk_id]) 方便溯源.\n"
+            "3. 若回答用到某条资料, 在该句末尾用 [序号] 标注 (序号对应上面资料的 [1][2] 编号), 方便溯源.\n"
             "如果用户问题涉及之前对话内容, 可参考下面的历史。\n"
             f"{history_block}"
             f"当前问题: {query}\n\n"
@@ -859,17 +859,16 @@ class SimpleRAG(BaseRAG):
         return citations
 
     def _ensure_citation_marker(self, answer_text: str, citations: List[Dict[str, Any]]) -> str:
-        """确保 answer 中至少带一个引用标记"""
-        if not answer_text:
-            answer_text = ""
-        if "[CIT:" in answer_text:
-            return answer_text
+        """A2: 不再往正文硬塞 [CIT:chunk_id] 裸标记 (前端不识别 + 露出丑陋 UUID).
 
-        if citations:
-            marker = citations[0].get("chunk_id")
-            if marker:
-                return f"{answer_text}\n[CIT:{marker}]".strip()
-        return answer_text.strip()
+        溯源靠 citations 数组 → 前端右栏 chunk 列表 + 答案下方 citation chip;
+        LLM 若按 prompt 用 [1][2] 编号引用, 原样保留 (前端渲染成可点击角标).
+        历史遗留的 [CIT:...] 也清掉, 避免老答案残留丑标记.
+        """
+        import re as _re
+        text = (answer_text or "").strip()
+        text = _re.sub(r"\s*\[CIT:[^\]]+\]", "", text).strip()
+        return text
 
     def _handle_exception(
         self,
