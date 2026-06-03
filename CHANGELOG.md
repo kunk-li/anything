@@ -7,8 +7,21 @@
 
 ## Unreleased (2026-06-03)
 
-> 补记: 以下 方向1/2/3 + 审计 工作此前未入 CHANGELOG, 2026-06-03 "代码↔设计文档审计"时补齐
-> (对应 commit `0d78f4a`..`5a24097`)。战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"。
+> 补记: 以下 方向1/2/3/4 + 审计 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`4e20332`)。
+> 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
+
+### 方向4 自主维护 第一级 — 行为自反思 (建议性自主) (`4e20332`)
+- 终极目标"自动思考/自更新维护"的第一档, **务必分级**: 只提议不自动执行, 全程 human-in-loop
+- `core/components/self_reflection.py`: `aggregate_audit_signals`(确定性聚合审计日志 per-tool 成败率/错误码/成本) + `SelfReflectionInspector.reflect`(LLM **元级**反思跨多任务行为模式→结构化改进提议, fail-open)
+- agent `self_reflect()`: 按需读审计日志尾部→聚合→反思→提议(**dry-run 零改动**), 默认关(`agent.enable_self_reflection`)
+- agent `apply_reflection_proposals()`: 仅把**人审批**的 `record_lesson` 落长期记忆(`content_type=convention` 反哺画像), 非审批/非 lesson 不动, **绝不自动改配置/代码** → 闭环 反思→提议→人批→教训进记忆→画像注入
+- 区别于 `_reflect_revise`(单答案反思); 测试 `test_self_reflection` 14 例
+
+### 代码↔设计文档审计校准 (`30ac2e3`)
+- 3 路并行只读审计(结构合规/Agent 文档缺口/架构文档时效) + 亲自复核
+- 架构总览事实修正: ABC 配对 10→19、测试规模、Cross-encoder Reranker 已默认、chunker 分层; Agent 设计说明书加「v2.2 能力实现状态校准」节; 横切说明书补 long_term_memory 方向2/方向1 升级; `doc/README` 状态页同步
+- `.gitignore` 补运行时产物忽略(`/uploads` `/run/uploads` `/run/source_docs` `/run/*.sqlite3` `/run/_*.py` 等), 防 `git add -A` 误纳入
+- 规则合规复核: 依赖方向零反向依赖、命名零违规、ABC 19 对全绿
 
 ### 方向2 记忆升级 — 被动 fact 库 → 主动认知系统 (`0d78f4a` `6a90a00` `88f0c66`)
 - `Fact` 加 `mutability`(canonical 固定权威/refinable 可提炼) / `digest`(精炼层) / `content_type` / `encrypted`
