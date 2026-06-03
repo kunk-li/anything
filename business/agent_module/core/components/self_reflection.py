@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-自主维护 / 行为自反思 (方向4 / 第一级: 建议性自主).
+自主维护 (方向4 / 第一级: 建议性自主) — 两个域: 行为自反思 + 记忆健康自维护.
 
 设计 (务必分级, 全程 human-in-loop):
     THINK    只读检视 agent 自身历史执行 (审计日志聚合), 推断哪些行为问题反复出现
@@ -169,3 +169,96 @@ class SelfReflectionInspector:
             return obj if isinstance(obj, list) else []
         except Exception:
             return []
+
+
+# ============================================================
+# 记忆健康域 (方向4 扩域): 只读检视长期记忆 → 确定性维护提议 (不调 LLM)
+# ============================================================
+
+# 须与 LongTermMemoryImpl.degrade_stale_refinable 的降级哨兵一致
+_DEGRADED_SENTINEL = "[原始已清理, 仅保留精炼摘要]"
+_CONSOLIDATE_MIN_REFINABLE = 5
+
+
+def aggregate_memory_signals(
+    facts: List[Any],
+    now_ts: float,
+    max_age_days: int = 90,
+    min_access_count: int = 1,
+) -> Dict[str, Any]:
+    """只读统计长期记忆健康。facts 为 Fact-like 对象列表 (duck-typed: superseded_by /
+    mutability / pinned / last_accessed / access_count / digest / content)。
+
+    prune/degrade 候选谓词须与 LongTermMemoryImpl.prune_stale / degrade_stale_refinable 一致
+    (变更那两处时同步此处)。不改任何状态。
+    """
+    cutoff = now_ts - max_age_days * 86400.0
+    total = len(facts)
+    active = superseded = refinable_active = canonical = 0
+    prune_candidates = degrade_candidates = 0
+    for f in facts:
+        is_active = getattr(f, "superseded_by", None) is None
+        active += 1 if is_active else 0
+        superseded += 0 if is_active else 1
+        mut = getattr(f, "mutability", "refinable")
+        pinned = bool(getattr(f, "pinned", False))
+        if mut == "canonical":
+            canonical += 1
+        if is_active and mut == "refinable":
+            refinable_active += 1
+        is_old = float(getattr(f, "last_accessed", 0.0) or 0.0) < cutoff
+        ac = int(getattr(f, "access_count", 0) or 0)
+        not_protected = (not pinned) and mut != "canonical"
+        # prune_stale 谓词: 非 pinned, 非 canonical, 老, access < min
+        if not_protected and is_old and ac < min_access_count:
+            prune_candidates += 1
+        # degrade_stale_refinable 谓词: 非 pinned, 非 canonical, 有 digest, 未降级过, 老
+        digest = getattr(f, "digest", "") or ""
+        content = getattr(f, "content", "") or ""
+        if not_protected and digest and content != _DEGRADED_SENTINEL and is_old:
+            degrade_candidates += 1
+    return {
+        "total": total, "active": active, "superseded": superseded,
+        "refinable_active": refinable_active, "canonical": canonical,
+        "prune_candidates": prune_candidates, "degrade_candidates": degrade_candidates,
+        "max_age_days": max_age_days, "min_access_count": min_access_count,
+    }
+
+
+def propose_from_memory_signals(signals: Dict[str, Any]) -> List[ReflectionProposal]:
+    """确定性规则: 记忆健康统计 → 维护提议 (dry-run, 不调 LLM)。
+    action_type 映射现成算子: run_prune / run_degrade / run_reconcile / run_consolidate。"""
+    props: List[ReflectionProposal] = []
+    age = signals.get("max_age_days", 90)
+    n_prune = signals.get("prune_candidates", 0)
+    if n_prune > 0:
+        props.append(ReflectionProposal(
+            id=f"mm{len(props) + 1}", problem=f"{n_prune} 条陈旧 fact (>{age}天 且 低访问)",
+            evidence=f"prune_candidates={n_prune}",
+            proposed_action="运行 prune_stale 清理这些陈旧 fact",
+            action_type="run_prune", severity="info",
+        ))
+    n_deg = signals.get("degrade_candidates", 0)
+    if n_deg > 0:
+        props.append(ReflectionProposal(
+            id=f"mm{len(props) + 1}", problem=f"{n_deg} 条陈旧但有精炼的 fact 可降级 (丢原始留 digest)",
+            evidence=f"degrade_candidates={n_deg}",
+            proposed_action="运行 degrade_stale_refinable 释放原始内容",
+            action_type="run_degrade", severity="info",
+        ))
+    n_ref = signals.get("refinable_active", 0)
+    if n_ref >= 2:
+        props.append(ReflectionProposal(
+            id=f"mm{len(props) + 1}", problem=f"{n_ref} 条有效可提炼偏好, 可能存在对立 (需 LLM 检测)",
+            evidence=f"refinable_active={n_ref}",
+            proposed_action="运行 reconcile_conflicts 消解对立偏好",
+            action_type="run_reconcile", severity="info",
+        ))
+    if n_ref >= _CONSOLIDATE_MIN_REFINABLE:
+        props.append(ReflectionProposal(
+            id=f"mm{len(props) + 1}", problem=f"{n_ref} 条可提炼偏好, 可能有重复可归纳",
+            evidence=f"refinable_active={n_ref}",
+            proposed_action="运行 consolidate 归纳相关/重复条目",
+            action_type="run_consolidate", severity="info",
+        ))
+    return props

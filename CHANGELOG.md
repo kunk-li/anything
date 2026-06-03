@@ -10,7 +10,9 @@
 > 补记: 以下 方向1/2/3/4 + 审计 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`4e20332`)。
 > 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
 
-### 方向4 自主维护 第一级 — 行为自反思 (建议性自主) (`4e20332`)
+### 方向4 自主维护 第一级 — 建议性自主 (`4e20332` 行为自反思 + 扩域·记忆自维护)
+**扩域·记忆健康自维护**: `aggregate_memory_signals`(只读统计陈旧/可降级/对立/冗余, 谓词对齐 prune/degrade) + `propose_from_memory_signals`(确定性规则→提议, 不调 LLM); agent `propose_memory_maintenance()`(dry-run) + `apply_memory_maintenance()`(仅人审批的提议映射到现成算子 prune_stale/degrade/reconcile/consolidate 执行); `test_memory_maintenance` 9 例。
+**行为自反思**:
 - 终极目标"自动思考/自更新维护"的第一档, **务必分级**: 只提议不自动执行, 全程 human-in-loop
 - `core/components/self_reflection.py`: `aggregate_audit_signals`(确定性聚合审计日志 per-tool 成败率/错误码/成本) + `SelfReflectionInspector.reflect`(LLM **元级**反思跨多任务行为模式→结构化改进提议, fail-open)
 - agent `self_reflect()`: 按需读审计日志尾部→聚合→反思→提议(**dry-run 零改动**), 默认关(`agent.enable_self_reflection`)

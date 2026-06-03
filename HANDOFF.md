@@ -15,7 +15,7 @@
 | **方向 3** 自我验证闭环 | 执行类任务"做到位"验证 + 自纠正 | ✅ 阶段1-2 + GoalVerifier done (plan 分组可选深化) |
 | **方向 2** 记忆升级 | 被动 fact 库 → 主动认知系统 | ✅ 阶段1-3 done (用户 5 点需求全兑现) |
 | **方向 1** 用户模型 | "更懂你" — 画像 + 主动应用 | ✅ MVP(UP-1/2/3)+UP-4+阶段3 done (收尾) |
-| **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 第一级(建议性自主·行为自反思)done; 更高档待做 |
+| **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 第一级(建议性自主)done: 行为自反思 + 记忆健康自维护; 更高档待做 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
 0. **本次会话 (方向1→2→3→4 + 文档审计, 全在 origin/main)** —
@@ -47,6 +47,7 @@
 - **query refinement (UP-4)**: 默认 **off** (`agent.enable_query_refine` / env `ANYTHING_AGENT_QUERY_REFINE`)。用户问得含糊时 `_refine_query()` 基于画像 + LLM 判含糊并改写问题(只补"知道偏好就能定的缺省"=语言/技术栈/格式/范围, 严格保留原意), 再走记忆/画像/历史注入与规划。**只改 task(规划输入), `original_task` 保持用户原话**(history 展示/记忆抽取用)。三重 gate(长问题>`query_refine_max_len`默认200 / 无画像 / 无 LLM) + 安全阀(改写非空且不比原问题短太多) + 全程 fail-open(用原问题)。改写记 `details["query_refinement"]={original,refined,reason}` 透明可回溯; 纠正递归跳过; 单次可 `extra_params.enable_query_refine` 覆盖。区别于 `_inject_user_profile`(画像当上下文附前面): 这里直接改写"问题本身"。
 - **画像冲突消解 + 时效 (方向1阶段3)**: `Fact.superseded_by`(被哪条新 fact 取代; `None`=有效, 非破坏性标记**不删数据**保审计链)。`reconcile_conflicts(tenant_id)` 用 LLM 找对立偏好分组→组内 `created_at` 最新者胜、其余标 `superseded_by`(无 `llm_client` 返 0; 循 `consolidate` 的独立 LLM 批处理模式, **不在每轮 add_fact 跑**, 现由外部手动调)。`get_user_profile` 时效排序 `(pinned, created_at, access_count)` → 新偏好领先(用 `created_at` 不受 `mark_accessed` bump 污染), 且只取有效项。`search_facts` 三阶段都跳过 superseded(旧偏好不再作为"当前上下文"注入)。`reconcile`(消解对立) vs `consolidate`(归纳重复) 是两件事。
 - **自主维护 / 行为自反思 (方向4 第一级)**: 默认 **off** (`agent.enable_self_reflection`)。`self_reflect()` 按需读审计日志(`run/audit.log.jsonl`)聚合 per-tool 成败率/错误码/成本 → `SelfReflectionInspector` LLM **元级反思** → 结构化改进提议(**dry-run 零改动**)。`apply_reflection_proposals(proposals, approved_ids)` 仅把**人审批**的 `record_lesson` 落长期记忆(`content_type=convention` 反哺画像→改进未来行为), 非审批/非 lesson 一律不动, **绝不自动改配置/代码**。建议性自主全程 human-in-loop; 区别于 `_reflect_revise`(单答案反思)——这是**跨多任务行为模式**。组件 `core/components/self_reflection.py`。
+- **自主维护·记忆健康 (方向4 扩域)**: 默认 **off** (同 `enable_self_reflection`)。`propose_memory_maintenance(tenant)` 只读检视记忆健康(陈旧/可降级/对立/冗余, **确定性**不调 LLM)→ dry-run 提议; `apply_memory_maintenance(proposals, approved_ids)` 仅把**人审批**的提议映射到**现成算子**执行(`run_prune→prune_stale` / `run_degrade→degrade_stale_refinable` / `run_reconcile→reconcile_conflicts` / `run_consolidate→consolidate`)。候选谓词须与那些算子一致(改算子时同步 `aggregate_memory_signals`)。
 - **敏感加密**: `content_type=secret` 的 content 用 Fernet 加密(`SENSITIVE_CONFIG_SECRET`)，`reveal_fact()` 显式解密；无密钥则丢明文(绝不明文落库)。
 - **ABC 守护**: `scripts/check_abc_alignment.py` (19 对 base↔impl)。pre-commit 未实际安装(`.git/hooks` 当前只有 post-commit)。
 

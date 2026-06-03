@@ -26,6 +26,7 @@ from .components import (
 from .components.verifier import collect_specs, make_registry, run_verifiers
 from .components.self_reflection import (
     SelfReflectionInspector, aggregate_audit_signals,
+    aggregate_memory_signals, propose_from_memory_signals,
 )
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
@@ -1396,6 +1397,82 @@ class SimpleAgent(
             f"[self_reflect] apply: {applied} 落记忆 / {skipped} 跳过: trace_id={trace_id}"
         )
         return {"applied": applied, "skipped": skipped, "details": details}
+
+    def propose_memory_maintenance(
+        self,
+        tenant_id: str = "default",
+        max_age_days: int = 90,
+        min_access_count: int = 1,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """方向4 扩域·记忆域: 只读检视长期记忆健康 → 确定性维护提议 (dry-run 零改动)。
+
+        提议须经 apply_memory_maintenance 人审批后才执行 (复用现成算子)。区别于行为自反思
+        (self_reflect, 审计日志 + LLM): 记忆健康是**确定性**的 (计数 → 算子), 不调 LLM。
+        gate enable_self_reflection; 无 long_term_memory → 空提议 (fail-safe, 绝不抛/改)。
+        """
+        if not self.enable_self_reflection:
+            return {"enabled": False, "signals": {}, "proposals": [],
+                    "note": "self_reflection 未启用 (开: agent.enable_self_reflection)"}
+        if self.long_term_memory is None:
+            return {"enabled": True, "signals": {}, "proposals": [], "note": "未接长期记忆"}
+        try:
+            facts = self.long_term_memory.list_facts(tenant_id, limit=500)
+            signals = aggregate_memory_signals(facts, time.time(), max_age_days, min_access_count)
+            proposals = propose_from_memory_signals(signals)
+        except Exception as e:
+            self.logger.warning(f"[mem_maint] 检视失败 (返回空): trace_id={trace_id} err={e}")
+            return {"enabled": True, "signals": {}, "proposals": [], "note": f"检视异常: {e}"}
+        self.logger.info(
+            f"[mem_maint] tenant={tenant_id} → {len(proposals)} 条提议: trace_id={trace_id}"
+        )
+        return {"enabled": True, "signals": signals,
+                "proposals": [p.to_dict() for p in proposals],
+                "note": "dry-run 提议; 审批后调 apply_memory_maintenance 执行"}
+
+    def apply_memory_maintenance(
+        self,
+        proposals: List[Dict[str, Any]],
+        approved_ids: List[str],
+        tenant_id: str = "default",
+        max_age_days: int = 90,
+        min_access_count: int = 1,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """方向4 扩域·记忆域: 仅把【人审批】的提议映射到现成维护算子执行。
+        run_prune→prune_stale / run_degrade→degrade_stale_refinable /
+        run_reconcile→reconcile_conflicts / run_consolidate→consolidate。
+        未审批 / 未知 action_type 一律不动。返回各 op 的执行结果计数。
+        """
+        approved = set(approved_ids or [])
+        ltm = self.long_term_memory
+        if ltm is None:
+            return {"applied": 0, "details": [{"result": "skip_no_memory"}]}
+        op_map = {
+            "run_prune": lambda: ltm.prune_stale(
+                tenant_id, max_age_days=max_age_days, min_access_count=min_access_count),
+            "run_degrade": lambda: ltm.degrade_stale_refinable(tenant_id, max_age_days=max_age_days),
+            "run_reconcile": lambda: ltm.reconcile_conflicts(tenant_id),
+            "run_consolidate": lambda: ltm.consolidate(tenant_id),
+        }
+        applied = 0
+        details: List[Dict[str, Any]] = []
+        for p in (proposals or []):
+            if not isinstance(p, dict) or p.get("id") not in approved:
+                continue
+            at = p.get("action_type")
+            op = op_map.get(at)
+            if op is None:
+                details.append({"id": p.get("id"), "result": f"skip_unknown_action:{at}"})
+                continue
+            try:
+                n = op()
+                details.append({"id": p.get("id"), "op": at, "result": n})
+                applied += 1
+            except Exception as e:
+                details.append({"id": p.get("id"), "op": at, "result": f"error: {e}"})
+        self.logger.info(f"[mem_maint] apply: {applied} ops 执行: trace_id={trace_id}")
+        return {"applied": applied, "details": details}
 
     def _extract_and_store_memory(
         self,
