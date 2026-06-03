@@ -1,11 +1,14 @@
-# 外部工具连接 — 设计方案 (RFC · 待拍板)
+# 外部工具连接 — 设计方案 (RFC)
 
-| 状态 | **RFC / 待决** (2026-06-03) — 仅设计, 未写实现代码 |
+| 状态 | **Stage1 已实现** (2026-06-03) — 用户拍板"推进 RFC", 按推荐从 Stage1(HTTP) 起步 |
 |---|---|
-| 背景 | agent 缺失同外部工具的连接 (用户提出) |
+| 背景 | agent 缺失同外部工具的连接 (用户提出; 对标 codex/claude 验证为最大短板) |
 | 决策人 | 用户 |
 
-> 本文给出"让 agent 接入外部工具生态"的详细方案与取舍, 供拍板。决策点见 §8。
+> **进度**: **Stage1 (HTTP/OpenAPI 连接器) 已落地** (commit `33dcc6b`) — `business/agent_module/tools/external/`
+> (`ExternalToolProvider` 抽象 + `HttpToolProvider` + `make_http_tool` + 工厂接线), 复用 SSRF 防御 + 默认审批,
+> 配置 `agent.external_tools` 声明; test_external_tools 13 例。取的默认决策见 §8 下方批注。
+> **Stage2 (MCP 客户端) 待做** — 接同一 `ExternalToolProvider` 抽象; §8 Q2(SDK vs 自写) 待定。
 
 ---
 
@@ -91,9 +94,11 @@
 - 审批: 默认并入 `tool_approval_required`。
 - 文档/测试: `doc/` + `CHANGELOG` + `tools/external/tests/`。
 
-## 8. 待拍板的问题
-1. **先 Stage 1(HTTP 连接器) 还是直接上 MCP?** (推荐 Stage 1 先行)
-2. **MCP 若做**: 官方 `mcp` SDK(加依赖) vs 最小自实现(符合少依赖)?
-3. **默认安全姿态**: 外部工具全部默认需审批? egress 白名单是否强制?
-4. **配置形式**: `config.yaml` 段 / 独立 `external_tools.yaml` / 运行时 API 动态注册?
-5. **范围**: 你有具体想连的外部工具/服务吗? (决定 Stage 1 首批 spec)
+## 8. 待拍板的问题 + 已取决策 (2026-06-03)
+1. **先 Stage 1(HTTP) 还是直接上 MCP?** → ✅ **Stage 1 先行**(已实现); MCP 作 Stage 2 接同一抽象。
+2. **MCP 若做**: 官方 `mcp` SDK vs 最小自实现? → ⏳ **Stage 2 再定**。
+3. **默认安全姿态**: → ✅ 外部工具**默认需审批**(并入 `tool_approval_required`) + SSRF 私网防御(复用 http_get); egress 限于声明的 host。
+4. **配置形式**: → ✅ **`config.yaml` 的 `agent.external_tools`**(HttpToolSpec dict 列表) + 兼容运行时 `register_tool`。
+5. **范围**: → ✅ 先建**机制 + 测试 spec**(用户之后填真实 API; 凭据建议走 env/加密 secret, 勿明文入配置)。
+
+> 用户拍板"推进 RFC"; Q1/Q3/Q4/Q5 取上述默认, Q2 留 Stage 2。如需调整(如改先做 MCP / egress 强白名单), 说一声。

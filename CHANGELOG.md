@@ -7,8 +7,16 @@
 
 ## Unreleased (2026-06-03)
 
-> 补记: 以下 方向1/2/3/4 + 审计 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`4e20332`)。
+> 补记: 以下 方向1/2/3/4 + 审计 + 外部工具 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`33dcc6b`)。
 > 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
+
+### 外部工具连接 Stage1 — HTTP/OpenAPI 连接器 (`33dcc6b`)
+补 agent "无外部工具接入" 缺口(对标 codex/claude 验证为最大短板)。RFC `doc/外部工具连接-设计方案(RFC).md` Stage1:
+- `business/agent_module/tools/external/`: `ExternalToolProvider` 抽象 + `ExternalToolDef`(MCP Stage2 也实现此契约, 统一接入点)
+- `HttpToolProvider` + `HttpToolSpec`(声明式 url占位/query/JSON body/auth/`response_path`) + `make_http_tool`(复用 `http_get` SSRF 私网防御, fetch 可注入测试)
+- `register_external_tools` + `build_providers_from_config`(`agent.external_tools`); `business_layer.py` 启动注册, 默认并入 `tool_approval_required`(human-in-loop), fail-safe
+- 安全: SSRF 防御 + 默认需审批 + 凭据走 spec(建议 env/加密); **零新依赖**(stdlib urllib); `test_external_tools` 13 例
+- **Stage2 (MCP 客户端) 待做** — 接同一抽象
 
 ### 方向4 自主维护 — 建议性自主全档 (`4e20332` 行为反思 / `7361885` 记忆 / `409c2fb` 代码文档 / `935edb7` 定时 / `e9a086b` 预授权)
 **全程 human-in-loop, 默认全关; 安全分级 — 只提议为主, 自动执行严格受限。**

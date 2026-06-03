@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `e9a086b` · 分支: `main`(已同步 origin)
+> 最后更新: 2026-06-03 · 最新 commit: `33dcc6b` · 分支: `main`(已同步 origin)
 
 ---
 
@@ -18,13 +18,14 @@
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 建议性自主全档 done: 行为自反思/记忆健康/代码文档/定时提议通知/预授权自动(默认空); 终极目标持续演进 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
-0. **本次会话 (方向1→2→3→4 + 文档审计, 全在 origin/main)** —
+0. **本次会话 (方向1→2→3→4 + 文档审计 + 外部工具 Stage1, 全在 origin/main)** —
    ① **方向4 自主维护 (建议性自主全档)** — a) 行为自反思 (`4e20332`: `self_reflect`/`apply_reflection_proposals`, 审计日志+LLM 元级反思); b) 扩域·记忆健康 (`7361885`: `propose/apply_memory_maintenance`, 确定性+复用 prune/degrade/reconcile/consolidate); c) 扩域·代码文档 (`409c2fb`: `propose_code_doc_maintenance`, advisory 只读不自动改); d) 定时提议+通知 (`935edb7`: `run_maintenance_scan` 聚合三域+审计通知, `execute` 的 `maintenance_scan` 钩子可被 TaskScheduler 周期触发); e) 更高自主档 (`e9a086b`: `auto_approve_maintenance` 预授权策略**默认空**=零自动, 仅安全确定性算子 run_prune/run_degrade 可自动)。**全程 human-in-loop, 默认全关**
    ② **代码↔设计文档审计校准** (`30ac2e3`): 3 路并行审计 + 亲验; 架构总览事实修正(ABC 10→19/测试规模/reranker 默认/chunker 分层)、Agent 文档加 v2.2 能力校准节、横切文档补记忆升级、CHANGELOG 补方向1/2/3、`.gitignore` 加固(防 `git add -A` 误纳入运行时产物); 规则合规复核(依赖/命名零违规)
    ③ **方向3 GoalVerifier** (`5a24097`): 子目标级验收, opt-in, 不动规划核心
    ④ **方向1阶段3** (`4fde8f7`): 画像冲突消解(`reconcile_conflicts`/`superseded_by`) + 时效排序
    ⑤ **UP-4 query refinement** (`c15380d`): 含糊问题基于画像改写, 默认关, fail-open
-   全程 test 共 70 例 + agent 410/long_term_memory 全套 passed + ABC 19 全绿
+   ⑥ **外部工具连接 Stage1** (`33dcc6b`): HTTP/OpenAPI 连接器 — `ExternalToolProvider` 抽象 + `HttpToolProvider` + 工厂接线; 配置 `agent.external_tools` 声明; 复用 SSRF 防御 + 默认审批; 补 codex/claude 对标出的最大短板; MCP 作 Stage2 接同一抽象
+   全程 test 共 83 例 + agent 322/long_term_memory 全套 passed + ABC 19 全绿
 1. **全项目审计** — 5 个并行 agent 扫描代码 vs 设计规范，亲自复核 3 条 CRITICAL (修正 2 处误报)
 2. **AUDIT 1-4** (`ab6f1ae` `3297e26`) — exception 补 import json、check_abc Win 编码、`AGENT_TIMEOUT` 真 enforce、deps 反向依赖消除、ABC 检查覆盖 10→19、console_app 设计文档重写(原错挂)、架构图模块清单校准、横切模块文档、`doc/README.md` 文档状态校准页
 3. **自动推送双保险** (`7feb32f`) — `MEMORY.md` 规则 + `.git/hooks/post-commit`(由 `scripts/install-git-hooks.sh` 装)
@@ -33,7 +34,7 @@
 6. **方向 1 用户画像 MVP** (`8cd577b`) — `get_user_profile` 5 维度聚合 + agent always-on 注入
 
 ## 4. 未完成 backlog (按优先级)
-- **外部工具连接 (用户提出 · RFC 待决)** — agent 无外部工具接入机制 (23 个工具全是启动时硬编码内置 callable, 无 MCP/外部 API 接入)。详细方案见 `doc/外部工具连接-设计方案(RFC).md`; 推荐**分阶段**(Stage1 HTTP/OpenAPI 连接器 零依赖快速见效 → Stage2 MCP 客户端 标准/生态); §8 列了 5 个待用户拍板的决策点 (先 HTTP 还是先 MCP / MCP 用 SDK 还是自写 / 安全姿态 / 配置形式 / 首批要连哪些)。**本轮只出方案未写实现**。
+- **外部工具连接 Stage2 (MCP) 待做** — Stage1 (HTTP/OpenAPI 连接器) **已落地** (`33dcc6b`, `business/agent_module/tools/external/`: `ExternalToolProvider` 抽象 + `HttpToolProvider` + 工厂接线; 配置 `agent.external_tools` 声明; 默认审批 + SSRF 防御; test 13 例)。剩 **Stage2 MCP 客户端** — 接同一 `ExternalToolProvider` 抽象; RFC §8 Q2 (官方 `mcp` SDK vs 最小自实现) 待定。详见 `doc/外部工具连接-设计方案(RFC).md`。
 - **方向 4 续探 (可选)** — 建议性自主全档已落地(行为/记忆/代码文档自维护 + 定时提议通知 + 预授权自动, **默认全关**)。再往前: (a) 把 `maintenance_scan` 真正注册进 `TaskScheduler` 定时任务(现是能力就绪, 未默认注册); (b) 真正"执行性自主"(超出预授权安全算子, 如自动改配置/代码)——**风险高, 须专门设计 + 强护栏(沙箱/审批/可回滚), 不轻易做**
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
 - **方向 1 可选增强**: `reconcile_conflicts`/`consolidate`/`prune` 接入调度定期触发 (现都只外部手动调, 无定时); 给 UP-4 加 "ask 模式"(歧义大反问澄清而非静默改写) + 默认开启策略
@@ -51,6 +52,7 @@
 - **自主维护·记忆健康 (方向4 扩域)**: 默认 **off** (同 `enable_self_reflection`)。`propose_memory_maintenance(tenant)` 只读检视记忆健康(陈旧/可降级/对立/冗余, **确定性**不调 LLM)→ dry-run 提议; `apply_memory_maintenance(proposals, approved_ids)` 仅把**人审批**的提议映射到**现成算子**执行(`run_prune→prune_stale` / `run_degrade→degrade_stale_refinable` / `run_reconcile→reconcile_conflicts` / `run_consolidate→consolidate`)。候选谓词须与那些算子一致(改算子时同步 `aggregate_memory_signals`)。
 - **自主维护·代码文档 (方向4 扩域, advisory)**: `propose_code_doc_maintenance(root)` 只读扫项目(缺 README 模块 / TODO·FIXME 计数)→ advisory 清单; **代码/文档改动绝不自动执行, 无 apply**(仅供人处理)。
 - **自主维护·定时提议+通知 + 更高自主档 (方向4)**: `run_maintenance_scan(scope, auto_apply)` 聚合 行为/记忆/代码文档 三域提议 + `_notify_maintenance` 写审计(通知); `execute` 的 `extra_params.maintenance_scan=true` 钩子可被 **TaskScheduler** 周期触发(`maintenance_scope` 选域)。**更高自主档**: 配置 `agent.auto_approve_maintenance`(预授权 action_type 名单, **默认空**=零自动=纯提议); `auto_apply` 时仅对 (名单 ∩ **安全天花板** `{run_prune,run_degrade}`) 自动执行+审计; reconcile/consolidate(LLM)/code_doc(advisory) **永不**自动。人设名单=预授权、被通知、清空=撤销 → 仍全程 human-in-loop。
+- **外部工具连接 (RFC Stage1)**: `business/agent_module/tools/external/` — `ExternalToolProvider` 抽象(MCP Stage2 也实现) + `HttpToolProvider`(`HttpToolSpec` 声明式: url占位/query/JSON body/auth/`response_path` 抽取) + `make_http_tool`(复用 `http_get` SSRF 私网防御, fetch 可注入)。配置 `agent.external_tools`(spec dict 列表) → 启动 `business_layer.py` 注册进 tool_registry, **默认并入 `tool_approval_required`**(human-in-loop)。零新依赖。凭据走 spec(建议 env/加密 secret, 勿明文)。MCP 是 Stage2 接同一抽象。
 - **敏感加密**: `content_type=secret` 的 content 用 Fernet 加密(`SENSITIVE_CONFIG_SECRET`)，`reveal_fact()` 显式解密；无密钥则丢明文(绝不明文落库)。
 - **ABC 守护**: `scripts/check_abc_alignment.py` (19 对 base↔impl)。pre-commit 未实际安装(`.git/hooks` 当前只有 post-commit)。
 
@@ -79,7 +81,8 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 用途 | 路径 |
 |---|---|
 | 自我验证器 (方向3, 含 GoalVerifier) | `business/agent_module/core/components/verifier.py` |
-| 自反思 (方向4 第一级) | `business/agent_module/core/components/self_reflection.py` |
+| 自反思 / 自维护 (方向4) | `business/agent_module/core/components/self_reflection.py` |
+| 外部工具连接 (Stage1 HTTP; Stage2 MCP 待做) | `business/agent_module/tools/external/` (base/http_provider/__init__) + `run/factories/business_layer.py` 接线 |
 | Agent 核心(验证接入 `_post_verify` / 画像注入 `_inject_user_profile` / 超时 enforce) | `business/agent_module/core/impl.py` |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
@@ -90,5 +93,5 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 ## 9. 下个会话建议第一步
 1. 读本文件 + `MEMORY.md`(自动注入) — 5 分钟接上上下文
 2. 确认 `git status` 干净、`git log origin/main..HEAD` 为空
-3. 问用户: 推进 **外部工具连接**(RFC 已就绪待拍板, 见 §4 + `doc/外部工具连接-设计方案(RFC).md`), 还是新需求 (方向1/2/3 全收尾; 方向4 建议性自主全档已落地, 续探见 §4)
+3. 问用户: 上 **外部工具 Stage2 (MCP 客户端)**(Stage1 HTTP 连接器已落地), 还是新需求 (方向1/2/3 收尾; 方向4 建议性自主全档已落地; 续探见 §4)
 4. 任何 commit 后会由 git hook 自动 push (无需手动)
