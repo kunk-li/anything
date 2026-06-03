@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `4e20332` · 分支: `main`(已同步 origin)
+> 最后更新: 2026-06-03 · 最新 commit: `7361885` · 分支: `main`(已同步 origin)
 
 ---
 
@@ -33,6 +33,7 @@
 6. **方向 1 用户画像 MVP** (`8cd577b`) — `get_user_profile` 5 维度聚合 + agent always-on 注入
 
 ## 4. 未完成 backlog (按优先级)
+- **外部工具连接 (用户提出 · RFC 待决)** — agent 无外部工具接入机制 (23 个工具全是启动时硬编码内置 callable, 无 MCP/外部 API 接入)。详细方案见 `doc/外部工具连接-设计方案(RFC).md`; 推荐**分阶段**(Stage1 HTTP/OpenAPI 连接器 零依赖快速见效 → Stage2 MCP 客户端 标准/生态); §8 列了 5 个待用户拍板的决策点 (先 HTTP 还是先 MCP / MCP 用 SDK 还是自写 / 安全姿态 / 配置形式 / 首批要连哪些)。**本轮只出方案未写实现**。
 - **方向 4 下一档** — 第一级"建议性自主·行为自反思"已落地(`self_reflect`/`apply_reflection_proposals`, 默认关)。后续: (a) **扩域**(记忆健康/代码文档自维护, 复用现成 reconcile/consolidate/prune); (b) **定时提议+通知**(复用 `TaskScheduler` 周期检视, 仍须人审批); (c) 更高自主档**仍须 human-in-loop, 绝不一上来执行性自主**
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
 - **方向 1 可选增强**: `reconcile_conflicts`/`consolidate`/`prune` 接入调度定期触发 (现都只外部手动调, 无定时); 给 UP-4 加 "ask 模式"(歧义大反问澄清而非静默改写) + 默认开启策略
