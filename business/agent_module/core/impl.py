@@ -164,6 +164,17 @@ class SimpleAgent(
             "agent.enable_self_reflection", env_var="ANYTHING_AGENT_SELF_REFLECTION",
             default=False, value_type=bool,
         )
+        # 方向4 更高自主档 (建议性→预授权): standing-approval 名单 = 人预先授权可"自动执行"的
+        # 维护 action_type (默认**空**=零自动执行=完全 human-in-loop)。run_maintenance_scan
+        # 在 auto_apply 时, 仅对 (名单 ∩ 安全确定性算子) 自动 apply + 审计通知; 人设名单(预授权)
+        # + 被通知 + 可随时清空(撤销)→ 更高自主档仍 human-in-loop。
+        _env_aam = os.environ.get("ANYTHING_AGENT_AUTO_APPROVE_MAINTENANCE", "")
+        if _env_aam:
+            self.auto_approve_maintenance = set(t.strip() for t in _env_aam.split(",") if t.strip())
+        else:
+            _aam = self.config.get_config("agent.auto_approve_maintenance", [])
+            self.auto_approve_maintenance = (
+                set(str(t) for t in _aam if t) if isinstance(_aam, list) else set())
 
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
@@ -270,6 +281,7 @@ class SimpleAgent(
                     tenant_id=self._memory_tenant(request), trace_id=trace_id,
                     scope=tuple(extra_params.get("maintenance_scope")
                                 or ("behavior", "memory", "code_doc")),
+                    auto_apply=extra_params.get("auto_apply"),
                 ),
                 "trace_id": trace_id, "retryable": False, "details": None,
                 "cost_time": round(time.time() - start_time, 3),
@@ -1531,11 +1543,14 @@ class SimpleAgent(
         root: Optional[str] = None,
         trace_id: Optional[str] = None,
         scope=("behavior", "memory", "code_doc"),
+        auto_apply: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """方向4 定时提议+通知: 聚合各自维护域的提议(dry-run) + 写审计通知。**不自动 apply**
-        (仍人审批才执行)。可由 TaskScheduler 周期触发 (extra_params.maintenance_scan=true 的请求)。
+        """方向4 定时提议+通知 (+更高自主档): 聚合各自维护域的提议(dry-run) + 写审计通知。
+        可由 TaskScheduler 周期触发 (extra_params.maintenance_scan=true 的请求)。
 
-        各域子调用失败不互相影响 (fail-safe)。返回汇总 {total_proposals, by_domain, proposals}。
+        auto_apply: None=按 standing-approval 名单(`auto_approve_maintenance`)决定; True/False 强制。
+        自动执行**仅限** (名单 ∩ 安全确定性算子 run_prune/run_degrade); 默认名单空=零自动=纯提议。
+        reconcile/consolidate(LLM 不确定) 与 code_doc(advisory) **永不**自动。各域 fail-safe 互不影响。
         """
         if not self.enable_self_reflection:
             return {"enabled": False, "proposals": [], "note": "self_reflection 未启用"}
@@ -1559,12 +1574,33 @@ class SimpleAgent(
             for p in props:
                 all_proposals.append({**p, "domain": dom})
         self._notify_maintenance(all_proposals, by_domain, tenant_id, trace_id)
-        return {
+        result = {
             "enabled": True, "tenant_id": tenant_id,
             "total_proposals": len(all_proposals), "by_domain": by_domain,
             "proposals": all_proposals,
             "note": "dry-run 提议已通知(审计); 须人审批后调对应 apply_* 执行",
         }
+
+        # 更高自主档: standing-approval 预授权自动执行 (默认名单空 → 跳过, 纯提议)
+        do_auto = auto_apply if auto_apply is not None else bool(self.auto_approve_maintenance)
+        if do_auto:
+            # 安全天花板: 只有这两个确定性 memory 算子可自动; reconcile/consolidate/code_doc 永不自动
+            eligible = self.auto_approve_maintenance & {"run_prune", "run_degrade"}
+            mem_props = [p for p in all_proposals
+                         if p.get("domain") == "memory" and p.get("action_type") in eligible]
+            if mem_props:
+                applied = self.apply_memory_maintenance(
+                    mem_props, approved_ids=[p["id"] for p in mem_props],
+                    tenant_id=tenant_id, trace_id=trace_id,
+                )
+                result["auto_applied"] = {"policy": sorted(eligible), **applied}
+                result["note"] = (f"预授权自动执行 {applied.get('applied', 0)} 项(policy={sorted(eligible)}); "
+                                  "其余仍须人审批")
+                self.logger.info(
+                    f"[maint_scan] 预授权自动执行 {applied.get('applied', 0)} 项: "
+                    f"policy={sorted(eligible)} trace_id={trace_id}"
+                )
+        return result
 
     def _notify_maintenance(self, proposals, by_domain, tenant_id, trace_id) -> None:
         """通知渠道: 写一条 maintenance_scan 审计记录 (admin/运维可见)。失败静默, 不阻断。"""
