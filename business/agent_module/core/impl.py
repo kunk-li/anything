@@ -261,6 +261,20 @@ class SimpleAgent(
         trace_id = request.get("trace_id")
         extra_params = request.get("extra_params") or {}
 
+        # 方向4 定时提议+通知: maintenance_scan 请求 (可由 TaskScheduler 周期触发) → 早退,
+        # 跑自维护检视聚合提议 + 通知, 不走正常任务执行。默认关 (须 enable_self_reflection)。
+        if extra_params.get("maintenance_scan") and getattr(self, "enable_self_reflection", False):
+            return {
+                "code": "SUCCESS", "message": "maintenance_scan",
+                "data": self.run_maintenance_scan(
+                    tenant_id=self._memory_tenant(request), trace_id=trace_id,
+                    scope=tuple(extra_params.get("maintenance_scope")
+                                or ("behavior", "memory", "code_doc")),
+                ),
+                "trace_id": trace_id, "retryable": False, "details": None,
+                "cost_time": round(time.time() - start_time, 3),
+            }
+
         # 契约: session_id 应由 RequestHandler._standardize_request 统一补齐
         #       trace_id  应由 ApiService middleware / ConsoleApp 应用层入口生成
         session_id = request.get("session_id")
@@ -1510,6 +1524,64 @@ class SimpleAgent(
         return {"enabled": True, "signals": signals,
                 "proposals": [p.to_dict() for p in proposals],
                 "note": "advisory; 代码/文档改动须人工处理, 不自动执行"}
+
+    def run_maintenance_scan(
+        self,
+        tenant_id: str = "default",
+        root: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        scope=("behavior", "memory", "code_doc"),
+    ) -> Dict[str, Any]:
+        """方向4 定时提议+通知: 聚合各自维护域的提议(dry-run) + 写审计通知。**不自动 apply**
+        (仍人审批才执行)。可由 TaskScheduler 周期触发 (extra_params.maintenance_scan=true 的请求)。
+
+        各域子调用失败不互相影响 (fail-safe)。返回汇总 {total_proposals, by_domain, proposals}。
+        """
+        if not self.enable_self_reflection:
+            return {"enabled": False, "proposals": [], "note": "self_reflection 未启用"}
+        all_proposals: List[Dict[str, Any]] = []
+        by_domain: Dict[str, int] = {}
+        runners = {
+            "behavior": lambda: self.self_reflect(trace_id=trace_id),
+            "memory": lambda: self.propose_memory_maintenance(tenant_id=tenant_id, trace_id=trace_id),
+            "code_doc": lambda: self.propose_code_doc_maintenance(root=root, trace_id=trace_id),
+        }
+        for dom in scope:
+            run = runners.get(dom)
+            if run is None:
+                continue
+            try:
+                props = run().get("proposals", []) or []
+            except Exception as e:
+                self.logger.warning(f"[maint_scan] 域 {dom} 检视失败 (跳过): trace_id={trace_id} err={e}")
+                props = []
+            by_domain[dom] = len(props)
+            for p in props:
+                all_proposals.append({**p, "domain": dom})
+        self._notify_maintenance(all_proposals, by_domain, tenant_id, trace_id)
+        return {
+            "enabled": True, "tenant_id": tenant_id,
+            "total_proposals": len(all_proposals), "by_domain": by_domain,
+            "proposals": all_proposals,
+            "note": "dry-run 提议已通知(审计); 须人审批后调对应 apply_* 执行",
+        }
+
+    def _notify_maintenance(self, proposals, by_domain, tenant_id, trace_id) -> None:
+        """通知渠道: 写一条 maintenance_scan 审计记录 (admin/运维可见)。失败静默, 不阻断。"""
+        try:
+            from datetime import datetime, timezone
+            al = getattr(getattr(self, "deps", None), "audit_logger", None)
+            if al is None:
+                from audit_module import get_audit_logger
+                al = get_audit_logger()
+            al.write({
+                "timestamp_iso": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "event": "maintenance_scan",
+                "tenant_id": tenant_id, "trace_id": trace_id,
+                "proposal_count": len(proposals), "by_domain": by_domain,
+            })
+        except Exception:
+            pass
 
     def _extract_and_store_memory(
         self,
