@@ -12,10 +12,12 @@ from typing import Any, List, Optional, Set
 
 from .base import ExternalToolDef, ExternalToolProvider
 from .http_provider import HttpToolProvider, HttpToolSpec, make_http_tool
+from .mcp_provider import McpServerSpec, McpStdioClient, McpToolProvider
 
 __all__ = [
     "ExternalToolProvider", "ExternalToolDef",
     "HttpToolProvider", "HttpToolSpec", "make_http_tool",
+    "McpToolProvider", "McpServerSpec", "McpStdioClient",
     "register_external_tools", "build_providers_from_config",
 ]
 
@@ -45,23 +47,38 @@ def register_external_tools(
     return needing_approval
 
 
-def build_providers_from_config(config: Any) -> List[ExternalToolProvider]:
-    """从 config `agent.external_tools` (HttpToolSpec dict 列表) 构造 HttpToolProvider。
-    无配置 / 异常 → []。未知键自动过滤 (健壮)。"""
-    if config is None:
-        return []
+def _specs_from(config: Any, key: str, spec_cls: type, required: tuple) -> list:
+    """从 config[key] (dict 列表) 构造 spec_cls 实例列表; 缺必填键/未知键/异常自动过滤。"""
     try:
-        raw = config.get_config("agent.external_tools", []) or []
+        raw = config.get_config(key, []) or []
     except Exception:
         return []
     if not isinstance(raw, list):
         return []
-    fields = set(HttpToolSpec.__dataclass_fields__)
-    specs: List[HttpToolSpec] = []
+    fields = set(spec_cls.__dataclass_fields__)
+    out = []
     for item in raw:
-        if isinstance(item, dict) and item.get("name") and item.get("url"):
+        if isinstance(item, dict) and all(item.get(r) for r in required):
             try:
-                specs.append(HttpToolSpec(**{k: v for k, v in item.items() if k in fields}))
+                out.append(spec_cls(**{k: v for k, v in item.items() if k in fields}))
             except Exception:
                 continue
-    return [HttpToolProvider(specs)] if specs else []
+    return out
+
+
+def build_providers_from_config(config: Any) -> List[ExternalToolProvider]:
+    """从 config 构造外部工具 providers:
+      - `agent.external_tools` (HttpToolSpec dict 列表) → HttpToolProvider (Stage1)
+      - `agent.mcp_servers`    (McpServerSpec dict 列表) → McpToolProvider (Stage2)
+    无配置 / 异常 → []; 未知键自动过滤 (健壮)。
+    """
+    if config is None:
+        return []
+    providers: List[ExternalToolProvider] = []
+    http_specs = _specs_from(config, "agent.external_tools", HttpToolSpec, ("name", "url"))
+    if http_specs:
+        providers.append(HttpToolProvider(http_specs))
+    mcp_specs = _specs_from(config, "agent.mcp_servers", McpServerSpec, ("name", "command"))
+    if mcp_specs:
+        providers.append(McpToolProvider(mcp_specs))
+    return providers
