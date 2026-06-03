@@ -42,3 +42,16 @@ class AgentConfig:
             "agent.enable_state_persist",
             True
         )
+
+    # 方向3: 自我验证闭环配置
+    def is_self_verify_enabled(self) -> bool:
+        """是否启用自我验证闭环 (默认关)"""
+        return bool(self.config_manager.get_config("agent.enable_self_verify", False))
+
+    def get_verify_mode(self) -> str:
+        """验证模式: off | auto | ask"""
+        return str(self.config_manager.get_config("agent.verify_mode", "off")).lower()
+
+    def get_max_correction(self) -> int:
+        """自我纠正最大轮数 (预算护栏)"""
+        return int(self.config_manager.get_config("agent.max_correction", 2))
