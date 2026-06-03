@@ -271,6 +271,15 @@ class SimpleAgent(
                     f"trace_id={trace_id} err={_mem_err}"
                 )
 
+        # UP-3 (方向1): always-on 注入用户画像 (不依赖 query, "这个人怎么做事")。
+        # 纠正递归时跳过 (画像已在原 task, 避免叠加), 复用 _skip_history_prefix flag。
+        if (task and self.memory_enabled and self.long_term_memory is not None
+                and not extra_params.get("_skip_history_prefix")):
+            try:
+                task = self._inject_user_profile(task, memory_tenant)
+            except Exception as _prof_err:
+                self.logger.warning(f"[profile] inject 失败: trace_id={trace_id} err={_prof_err}")
+
         # ZZ-5: 多轮对话上下文 — 给 ReAct / single_shot 等非流式路径补历史 (默认流式已有).
         # 放在 long_term_memory 注入之后, 让 [对话历史] 块位于 (memory + 当前任务) 之上.
         # 方向3: 自我纠正递归时跳过 history 注入 (上下文已在原 task, 避免重复叠加)。
@@ -1118,6 +1127,22 @@ class SimpleAgent(
             f"tenant={tenant_id}, trace_id={trace_id}"
         )
         return augmented, summary
+
+    def _inject_user_profile(self, task: str, tenant_id: str) -> str:
+        """UP-3 (方向1): always-on 注入用户画像 ("这个人怎么做事"), 不依赖 query。
+        区别于 _inject_long_term_memory(只注入 query 相关 fact); 画像始终注入。
+        weakness 维度 → "需主动补位" 提示, 让 agent 主动 cover 使用者的不足 (规避缺陷)。"""
+        profile = self.long_term_memory.get_user_profile(tenant_id)
+        if not profile:
+            return task
+        labels = {"preference": "偏好", "style": "风格", "convention": "约定",
+                  "domain": "领域", "weakness": "需主动补位"}
+        lines = ["[关于使用者 — 始终遵循; 标 '需主动补位' 的项请主动替 ta cover]"]
+        for dim, items in profile.items():
+            for it in items:
+                lines.append(f"- [{labels.get(dim, dim)}] {it}")
+        lines.append("")
+        return "\n".join(lines) + task
 
     def _extract_and_store_memory(
         self,

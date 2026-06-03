@@ -449,6 +449,27 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         return added
 
     # ------------------------------------------------------------------
+    # UP-1 (方向1): 用户画像聚合 — 供 agent 任务前 always-on 注入
+    # ------------------------------------------------------------------
+
+    def get_user_profile(self, tenant_id: str = "default", per_dim: int = 3) -> Dict[str, List[str]]:
+        """聚合用户画像。按 5 维度(preference/style/convention/domain/weakness)取该 tenant
+        的 fact(pinned + 高 access 优先), 每维度 top per_dim 条精炼(digest 优先)。
+        返回 {维度: [精炼条目...]}, 空维度不含。用于"这个人怎么做事"的 always-on 注入。
+
+        weakness = 使用者需 agent 主动补位的点(客观中性), 注入后 agent 据此规避缺陷。
+        """
+        DIMS = ("preference", "style", "convention", "domain", "weakness")
+        facts = self.list_facts(tenant_id, limit=200)
+        profile: Dict[str, List[str]] = {}
+        for dim in DIMS:
+            matched = [f for f in facts if f.content_type == dim or dim in f.tags]
+            matched.sort(key=lambda f: (1 if f.pinned else 0, f.access_count), reverse=True)
+            if matched:
+                profile[dim] = [(f.digest or f.content)[:100] for f in matched[:per_dim]]
+        return profile
+
+    # ------------------------------------------------------------------
     # Task EEE (#91) — dedup helpers + LLM extraction
     # ------------------------------------------------------------------
 
@@ -547,14 +568,16 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             f"返回 JSON 数组, 最多 {self._extract_max_facts} 条. 每条形如:\n"
             '  {"content": "原始完整信息", "digest": "一句话精炼", '
             '"mutability": "canonical"|"refinable", '
-            '"content_type": "secret|path|config|preference|fact|decision|context", '
+            '"content_type": "secret|path|config|preference|style|convention|domain|weakness|fact|decision|context", '
             '"tags": [...], "confidence": 0.0-1.0}\n'
             "规则:\n"
             "- content: 完整原始信息; 密码/路径/配置要一字不差精确保留\n"
             "- digest: 一句话精炼, 用于快速检索'这是关于什么的'; 密码类写'X的密码'不要写出密码值本身\n"
             "- mutability: canonical=固定权威不该被改写(密码/路径/配置/ID/确定的决策); "
             "refinable=可随时间归纳提炼(偏好/习惯/做法)\n"
-            "- content_type: 内容细分类\n"
+            "- content_type: 内容细分类; 用户画像 5 维度=preference(偏好)/style(做事·沟通风格)/"
+            "convention(约定·规矩)/domain(领域·在做什么)/weakness(使用者需 agent 主动补位的点, "
+            "客观中性、不贬低)\n"
             "- confidence: 0-1 你的把握\n"
             "- 没值得记的就返回 []\n"
             "只返回 JSON 数组, 别加任何解释文字."

@@ -166,5 +166,50 @@ class TestConsolidate(unittest.TestCase):
         self.assertEqual(m.consolidate(), 0)   # 无 llm_client → 跳过
 
 
+class TestExtractToProfile(unittest.TestCase):
+    """UP-2: extract 识别 5 维度 → get_user_profile 聚合 (端到端)。"""
+
+    def test_extract_weakness_flows_into_profile(self):
+        class _LLM:
+            def generate(self, p):
+                return ('[{"content":"用户常忘记先跑测试就提交", "digest":"提醒先测试", '
+                        '"content_type":"weakness", "mutability":"refinable", "confidence":0.7}]')
+        m = LongTermMemoryImpl(backend=InMemoryBackend(), llm_client=_LLM())
+        for f in m.extract_facts([{"role": "user", "content": "直接提交了"}]):
+            m.add_fact(f)
+        p = m.get_user_profile()
+        self.assertIn("weakness", p)
+        self.assertIn("提醒先测试", p["weakness"][0])
+
+
+class TestUserProfile(unittest.TestCase):
+    """UP-1: 用户画像 5 维度聚合。"""
+
+    def test_aggregates_five_dimensions(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="偏好简洁直接的回答", content_type="preference", digest="简洁回答"))
+        m.add_fact(Fact.make(content="用中文沟通", content_type="style", digest="中文"))
+        m.add_fact(Fact.make(content="禁用'顺带/顺手'", content_type="convention", digest="禁顺带"))
+        m.add_fact(Fact.make(content="在做 RAG+Agent 项目", content_type="domain", digest="RAG项目"))
+        m.add_fact(Fact.make(content="易忽略先跑测试", content_type="weakness", digest="提醒先测试"))
+        p = m.get_user_profile()
+        for dim in ("preference", "style", "convention", "domain", "weakness"):
+            self.assertIn(dim, p)
+        self.assertIn("提醒先测试", p["weakness"][0])
+
+    def test_pinned_and_access_ranked_first(self):
+        m = _mem()
+        a = m.add_fact(Fact.make(content="低频偏好", content_type="preference", digest="低频"))
+        b = m.add_fact(Fact.make(content="高频偏好", content_type="preference", digest="高频", pinned=True))
+        p = m.get_user_profile(per_dim=1)
+        self.assertEqual(p["preference"], ["高频"])   # pinned 排第一
+
+    def test_non_profile_facts_excluded(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="某客观事实", content_type="fact"))
+        m.add_fact(Fact.make(content="数据库密码", content_type="secret", digest="某密码"))
+        self.assertEqual(m.get_user_profile(), {})   # fact/secret 不进画像
+
+
 if __name__ == "__main__":
     unittest.main()
