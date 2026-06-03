@@ -72,6 +72,10 @@ class Fact(BaseModel):
     content_type: str = ""          # 细分类: secret/path/config/preference/decision/fact/context...
     encrypted: bool = False         # content 是否加密存储 (敏感 canonical secret, 见 MEM-3)
 
+    # 方向1 阶段3 (画像冲突消解 + 时效): 被哪条更新的 fact 取代。
+    # None = 当前有效; 非空 = 已被取代(偏好变了), 不再进画像/检索。非破坏性: 保留审计链, 不删数据。
+    superseded_by: Optional[str] = None
+
     model_config = {"extra": "ignore"}
 
     def ensure_hash(self) -> "Fact":

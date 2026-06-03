@@ -224,7 +224,9 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         exact_fact_id = self._backend.get(self._hash_key(tenant, exact_hash))
         if exact_fact_id:
             f = self._load_fact(tenant, str(exact_fact_id))
-            if f and self._tag_filter_pass(f, query) and f.confidence >= query.min_confidence:
+            # 方向1 阶段3: superseded(被新偏好取代)的不作为当前上下文返回
+            if (f and f.superseded_by is None and self._tag_filter_pass(f, query)
+                    and f.confidence >= query.min_confidence):
                 hits.append(MemoryHit(fact=f, score=1.0, reason="content_hash_exact"))
                 seen_ids.add(f.fact_id)
                 self.mark_accessed(f.fact_id, tenant_id=tenant)
@@ -243,6 +245,8 @@ class LongTermMemoryImpl(BaseLongTermMemory):
                         continue
                     f = self._load_fact(tenant, str(fid))
                     if f is None or not f.embedding:
+                        continue
+                    if f.superseded_by is not None:   # 方向1 阶段3: 跳过被取代的旧偏好
                         continue
                     if not self._tag_filter_pass(f, query):
                         continue
@@ -272,7 +276,8 @@ class LongTermMemoryImpl(BaseLongTermMemory):
                 if fid in seen_ids:
                     continue
                 f = self._load_fact(tenant, str(fid))
-                if f is None or not self._tag_filter_pass(f, query) or f.confidence < query.min_confidence:
+                if (f is None or f.superseded_by is not None    # 方向1 阶段3: 跳过被取代的旧偏好
+                        or not self._tag_filter_pass(f, query) or f.confidence < query.min_confidence):
                     continue
                 hit_digest = bool(f.digest) and q_lower in f.digest.lower()    # L1 粗筛: 精炼层
                 hit_content = q_lower in f.content.lower()                     # L2 细比: 原始层
@@ -454,20 +459,75 @@ class LongTermMemoryImpl(BaseLongTermMemory):
 
     def get_user_profile(self, tenant_id: str = "default", per_dim: int = 3) -> Dict[str, List[str]]:
         """聚合用户画像。按 5 维度(preference/style/convention/domain/weakness)取该 tenant
-        的 fact(pinned + 高 access 优先), 每维度 top per_dim 条精炼(digest 优先)。
+        的有效 fact, 每维度 top per_dim 条精炼(digest 优先)。
         返回 {维度: [精炼条目...]}, 空维度不含。用于"这个人怎么做事"的 always-on 注入。
 
         weakness = 使用者需 agent 主动补位的点(客观中性), 注入后 agent 据此规避缺陷。
+
+        方向1 阶段3 (时效): 排序按 (pinned, created_at, access_count) — 新学到的偏好领先,
+        偏好变了时新 fact 挤掉旧的(per_dim 截断); 已被 reconcile_conflicts 标 superseded 的不取。
+        用 created_at(学到的时刻)而非 last_accessed(会被检索 bump 污染)作时效信号。
         """
         DIMS = ("preference", "style", "convention", "domain", "weakness")
-        facts = self.list_facts(tenant_id, limit=200)
+        facts = [f for f in self.list_facts(tenant_id, limit=200) if f.superseded_by is None]
         profile: Dict[str, List[str]] = {}
         for dim in DIMS:
             matched = [f for f in facts if f.content_type == dim or dim in f.tags]
-            matched.sort(key=lambda f: (1 if f.pinned else 0, f.access_count), reverse=True)
+            matched.sort(key=lambda f: (1 if f.pinned else 0, f.created_at, f.access_count), reverse=True)
             if matched:
                 profile[dim] = [(f.digest or f.content)[:100] for f in matched[:per_dim]]
         return profile
+
+    def reconcile_conflicts(self, tenant_id: str = "default", max_facts: int = 40) -> int:
+        """方向1 阶段3: 消解画像里自相矛盾的偏好 (用户偏好变了 → 旧的让位新的)。
+
+        取有效(未 superseded) refinable facts, 让 LLM 找出"互相对立"的分组
+        (如 '偏好详细解释' vs '偏好简洁回答')。每组里 created_at 最新的视为当前偏好(胜),
+        其余标 superseded_by=胜者 fact_id (不删, 保审计链; 此后不再进画像/检索)。
+
+        无 llm_client → 跳过返回 0 (时效排序仍让新偏好在 get_user_profile 领先, 见该方法)。
+        与 consolidate 的区别: consolidate 归纳"相关/重复"的多条成更高层; reconcile 消解"对立"的多条。
+        循 consolidate 的"独立 LLM 批处理"模式 (admin/scheduler 触发), 不塞进每轮 add_fact。
+        返回标记为 superseded 的条数。
+        """
+        if self._llm_client is None:
+            return 0
+        active = [f for f in self.list_facts(tenant_id, limit=max_facts)
+                  if f.mutability == "refinable" and f.superseded_by is None]
+        if len(active) < 2:
+            return 0
+        listing = "\n".join(f"[{i}] {f.digest or f.content}" for i, f in enumerate(active))
+        prompt = (
+            "下面是一个用户的若干长期偏好/做法记忆, 每条带编号。\n"
+            "找出其中【互相对立/矛盾】的分组(同一件事上前后说法相反, 说明用户改了主意), "
+            "例如 '偏好详细解释' 与 '偏好简洁回答' 对立。\n"
+            "只把【真的对立】的归到一组; 只是不同方面、并不矛盾的不要分组。\n\n"
+            f"{listing}\n\n"
+            "返回 JSON 数组, 每个元素是一组对立条目的编号数组, 如 [[0,3],[1,4]]。\n"
+            "没有任何对立 → 返回 []。只返回 JSON。"
+        )
+        try:
+            raw = self._llm_client.generate(prompt)
+        except Exception:
+            return 0
+        superseded = 0
+        for group in self._parse_extracted_json(raw or ""):
+            if not isinstance(group, list):
+                continue   # 防 LLM 把数组拍平 → 单个编号不构成"组", 跳过 (fail-safe)
+            idxs = list(dict.fromkeys(
+                int(i) for i in group
+                if isinstance(i, (int, float)) and 0 <= int(i) < len(active)
+            ))
+            if len(idxs) < 2:
+                continue
+            winner = max(idxs, key=lambda i: active[i].created_at)   # 组内最新者 = 当前偏好
+            for i in idxs:
+                if i == winner or active[i].superseded_by is not None:
+                    continue
+                active[i].superseded_by = active[winner].fact_id
+                self._save_fact(active[i])
+                superseded += 1
+        return superseded
 
     # ------------------------------------------------------------------
     # Task EEE (#91) — dedup helpers + LLM extraction
