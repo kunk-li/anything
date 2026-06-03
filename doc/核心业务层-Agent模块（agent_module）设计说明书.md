@@ -23,7 +23,7 @@
 
 > 本节由"代码↔设计文档审计"补入。下方正文(第 1–13 章)定格在**早期形态**(规则式单轮 +
 > dataclass 模型描述), 而代码已演进为 **LLM 驱动多轮 ReAct + 自我验证自纠正 + 长期记忆/画像 +
-> 流式 + 工具治理**。**真相源优先级**: `core/base.py` + `core/impl.py` + `core/components/*` +
+> 流式 + 工具治理 + 自主维护(方向4 建议性自主)**。**真相源优先级**: `core/base.py` + `core/impl.py` + `core/components/*` +
 > `CHANGELOG.md` > 本文档正文。深度逐章回灌是独立工程, 在那之前以本校准节为准。
 
 ### A. 已实现但正文未覆盖的能力 (代码位置为准)
@@ -43,9 +43,14 @@
 | **工具结果 LRU 缓存** | `tool_executor.py` (`_tool_cache_*`) | `cacheable_tools` 默 10 只读工具 |
 | **真流式 run_stream** generator | `core/components/streaming.py:run_stream()` | event: thought/action/observation/chunk/meta/plan/done/error |
 | **多轮历史注入 + 状态 events merge** | `impl.py:_history_prefix()` / `_save_state_safe()` | — |
+| **自主维护·行为自反思** (方向4) 元级反思审计→改进提议 | `core/components/self_reflection.py` + `impl.py:self_reflect()` / `apply_reflection_proposals()` | `agent.enable_self_reflection` 默认 **off** |
+| **自主维护·记忆健康** (方向4扩域) 确定性提议→复用算子 | `impl.py:propose_memory_maintenance()` / `apply_memory_maintenance()` | 同上; apply 仅人审批项映射 prune/degrade/reconcile/consolidate |
+| **自主维护·代码文档** (方向4扩域, advisory) | `self_reflection.py:scan_code_doc_health` + `impl.py:propose_code_doc_maintenance()` | 同上; **只读无 apply, 绝不自动改代码/文档** |
+| **自主维护·定时提议+通知** (方向4) | `impl.py:run_maintenance_scan()` + `execute` 的 `maintenance_scan` 钩子(可 TaskScheduler 触发) + `_notify_maintenance` 审计 | 同上 |
+| **更高自主档·预授权自动** (方向4) | `impl.py:auto_approve_maintenance` + `run_maintenance_scan(auto_apply)` | `agent.auto_approve_maintenance` 名单**默认空**=零自动; 仅 `{run_prune,run_degrade}` 可自动 |
 
 补充错误码(正文第 13 章错误码表未列): `TOOL_APPROVAL_REQUIRED`、`PLAN_PENDING`、`STREAM_INTERRUPTED`;
-补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`。
+补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`; 审计事件 `maintenance_scan`。
 
 ### B. 正文与代码的已知矛盾 (读正文时请以代码为准)
 
@@ -55,7 +60,7 @@
 4. **§6.5 规划**: 正文称 LLM 规划"后续可替换"; 实际 **LLM 规划已是默认主路径**(`use_llm_planner` 默认 True), 规则式仅 fallback。
 5. **README.md 实现说明表**称"与设计书完全匹配/dataclass"已过时, 4.1 示例(`SimpleAgent(tools=...)` + `AgentRequest`)与真实签名不符。
 
-### C. 建议(独立任务): 深度回灌时新增 §6.11 自我验证 / §6.12 ReAct 引擎 / §6.13 记忆与个性化 / §6.14 流式; 扩写 §6.7 工具治理; 对齐第 4/5/6 章数据模型与构造函数。
+### C. 建议(独立任务): 深度回灌时新增 §6.11 自我验证 / §6.12 ReAct 引擎 / §6.13 记忆与个性化 / §6.14 流式 / §6.15 自主维护(方向4: 行为反思·记忆/代码文档自维护·定时提议·预授权自动); 扩写 §6.7 工具治理; 对齐第 4/5/6 章数据模型与构造函数。
 
 ---
 

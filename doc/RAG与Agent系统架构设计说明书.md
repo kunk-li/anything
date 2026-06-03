@@ -48,7 +48,7 @@
 - ✅ **Citation 引用回溯** — chunk_id ↔ vector_id ↔ doc 三层映射稳定
 
 ### 工程化
-- ✅ **单测覆盖大幅扩展** — 约 69 个 `test_*.py` 文件 / 25+ 含测试模块目录 (早期为 122 单测 / 9 模块,
+- ✅ **单测覆盖大幅扩展** — 约 74 个 `test_*.py` 文件 / 25+ 含测试模块目录 (早期为 122 单测 / 9 模块,
   已远超; 历史测试规模见 `CHANGELOG.md` 测试规模表),`scripts/run_tests.sh` 本地回归,
   `.github/workflows/ci.yml` 矩阵(Python 3.10 / 3.12)
 - ✅ **业务质量评测集** — `evaluation/` 目录,RAG + Agent 数据集 + 评测脚本 + CI 阈值守护
