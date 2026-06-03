@@ -10,9 +10,13 @@
 > 补记: 以下 方向1/2/3/4 + 审计 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`4e20332`)。
 > 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
 
-### 方向4 自主维护 第一级 — 建议性自主 (`4e20332` 行为自反思 + 扩域·记忆自维护)
-**扩域·记忆健康自维护**: `aggregate_memory_signals`(只读统计陈旧/可降级/对立/冗余, 谓词对齐 prune/degrade) + `propose_from_memory_signals`(确定性规则→提议, 不调 LLM); agent `propose_memory_maintenance()`(dry-run) + `apply_memory_maintenance()`(仅人审批的提议映射到现成算子 prune_stale/degrade/reconcile/consolidate 执行); `test_memory_maintenance` 9 例。
-**行为自反思**:
+### 方向4 自主维护 — 建议性自主全档 (`4e20332` 行为反思 / `7361885` 记忆 / `409c2fb` 代码文档 / `935edb7` 定时 / `e9a086b` 预授权)
+**全程 human-in-loop, 默认全关; 安全分级 — 只提议为主, 自动执行严格受限。**
+**扩域·记忆健康自维护** (`7361885`): `aggregate_memory_signals`(只读统计陈旧/可降级/对立/冗余, 谓词对齐 prune/degrade) + `propose_from_memory_signals`(确定性规则→提议, 不调 LLM); agent `propose_memory_maintenance()`(dry-run) + `apply_memory_maintenance()`(仅人审批的提议映射到现成算子 prune_stale/degrade/reconcile/consolidate 执行); `test_memory_maintenance` 9 例。
+**扩域·代码文档自维护** (`409c2fb`, advisory): `scan_code_doc_health`(只读扫缺 README 模块 + TODO/FIXME) + `propose_code_doc_maintenance`; **代码/文档改动绝不自动执行, 无 apply**; `test_code_doc_maintenance` 6 例。
+**定时提议+通知** (`935edb7`): `run_maintenance_scan(scope)` 聚合三域提议 + `_notify_maintenance` 写审计; `execute` 的 `maintenance_scan` 钩子可被 TaskScheduler 周期触发; `test_maintenance_scan` 4 例。
+**更高自主档** (`e9a086b`): `agent.auto_approve_maintenance` 预授权名单(**默认空**=零自动); `run_maintenance_scan(auto_apply)` 仅对 (名单 ∩ 安全天花板 `{run_prune,run_degrade}`) 自动执行+审计, reconcile/consolidate/code_doc 永不自动; 人设名单=预授权、可清空撤销 → 仍 human-in-loop; `test_auto_approve_maintenance` 5 例。
+**行为自反思** (`4e20332`):
 - 终极目标"自动思考/自更新维护"的第一档, **务必分级**: 只提议不自动执行, 全程 human-in-loop
 - `core/components/self_reflection.py`: `aggregate_audit_signals`(确定性聚合审计日志 per-tool 成败率/错误码/成本) + `SelfReflectionInspector.reflect`(LLM **元级**反思跨多任务行为模式→结构化改进提议, fail-open)
 - agent `self_reflect()`: 按需读审计日志尾部→聚合→反思→提议(**dry-run 零改动**), 默认关(`agent.enable_self_reflection`)
