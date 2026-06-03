@@ -1,6 +1,6 @@
 # 外部工具连接 — 设计方案 (RFC)
 
-| 状态 | **Stage1 已实现** (2026-06-03) — 用户拍板"推进 RFC", 按推荐从 Stage1(HTTP) 起步 |
+| 状态 | **Stage1+2 已实现** (2026-06-03) — HTTP/OpenAPI 连接器 + MCP stdio 客户端均落地 |
 |---|---|
 | 背景 | agent 缺失同外部工具的连接 (用户提出; 对标 codex/claude 验证为最大短板) |
 | 决策人 | 用户 |
@@ -8,7 +8,10 @@
 > **进度**: **Stage1 (HTTP/OpenAPI 连接器) 已落地** (commit `33dcc6b`) — `business/agent_module/tools/external/`
 > (`ExternalToolProvider` 抽象 + `HttpToolProvider` + `make_http_tool` + 工厂接线), 复用 SSRF 防御 + 默认审批,
 > 配置 `agent.external_tools` 声明; test_external_tools 13 例。取的默认决策见 §8 下方批注。
-> **Stage2 (MCP 客户端) 待做** — 接同一 `ExternalToolProvider` 抽象; §8 Q2(SDK vs 自写) 待定。
+> **Stage2 (MCP stdio 客户端) 已落地** (`e08280e`) — 参考 codex/claude code 的标准 MCP 协议
+> (JSON-RPC 2.0 over stdio), **最小自实现无 `mcp` SDK 依赖**; `McpStdioClient` + `McpToolProvider` 接同一抽象,
+> 配置 `agent.mcp_servers`, 工具命名空间 `server.tool`, 默认审批, fail-safe; test_mcp_tools 10 例。
+> SSE/HTTP 传输留后续。
 
 ---
 
@@ -96,9 +99,9 @@
 
 ## 8. 待拍板的问题 + 已取决策 (2026-06-03)
 1. **先 Stage 1(HTTP) 还是直接上 MCP?** → ✅ **Stage 1 先行**(已实现); MCP 作 Stage 2 接同一抽象。
-2. **MCP 若做**: 官方 `mcp` SDK vs 最小自实现? → ⏳ **Stage 2 再定**。
+2. **MCP 若做**: 官方 `mcp` SDK vs 最小自实现? → ✅ **最小自实现** (stdio JSON-RPC 2.0, 无 SDK 依赖, 参考 codex/claude code; `e08280e`)。SSE/HTTP 传输待后续。
 3. **默认安全姿态**: → ✅ 外部工具**默认需审批**(并入 `tool_approval_required`) + SSRF 私网防御(复用 http_get); egress 限于声明的 host。
 4. **配置形式**: → ✅ **`config.yaml` 的 `agent.external_tools`**(HttpToolSpec dict 列表) + 兼容运行时 `register_tool`。
 5. **范围**: → ✅ 先建**机制 + 测试 spec**(用户之后填真实 API; 凭据建议走 env/加密 secret, 勿明文入配置)。
 
-> 用户拍板"推进 RFC"; Q1/Q3/Q4/Q5 取上述默认, Q2 留 Stage 2。如需调整(如改先做 MCP / egress 强白名单), 说一声。
+> 用户拍板"推进 RFC"+"参考 codex/claude code 实现"; Q1-Q5 均已定 + 落地 (Stage1 HTTP + Stage2 MCP stdio)。剩 SSE/HTTP 传输、真实 server 配置、定时连接管理等增量。
