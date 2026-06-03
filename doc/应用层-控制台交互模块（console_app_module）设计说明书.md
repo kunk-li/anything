@@ -1,226 +1,137 @@
-# 基础支撑层-通用工具模块（common_utils_module）设计文档
+# 应用层-控制台交互模块（console_app_module）设计说明书
 
-| 文档版本 | v1.1 |
+| 项 | 值 |
 | :--- | :--- |
-| 最后更新 | 2026-03-19 |
-| 维护责任人 | 通用工具模块开发负责人 |
-| 状态 | 修订版 |
+| 文档版本 | v2.0 |
+| 最后更新 | 2026-06-03 |
+| 维护责任人 | 控制台交互模块开发负责人 |
+| 状态 | 已与代码对齐（AUDIT-3 重写；原文件内容曾错挂为 common_utils 设计文档，本次按 `core/base.py` + `core/impl.py` 实际实现重写） |
 
-> 本修订版对齐《RAG与Agent系统架构设计说明书》v1.1 及各层修订版子设计，重点修正工具边界、文本/数据/参数校验/辅助能力分组、避免工具模块承载业务逻辑以及统一可复用规范。
+## 1. 模块概述
 
-# 1. 文档概述
+### 1.1 模块定位
+`console_app_module` 是**应用层**的命令行入口，与 `api_service_module`（HTTP / WebSocket 入口）平级。它把用户在终端的输入标准化成统一请求，交给**接口层** `RequestHandler` 处理，再把统一响应信封渲染成人类可读的终端输出。
 
-## 1.1 文档目的
+### 1.2 核心职责
+- 解析终端输入：区分**斜杠命令**（如 `/mode agent`）与普通 query / task
+- 维护**会话状态机**：mode / top_k / attachments / session_id / plan_only / approve_tools
+- 三种运行形态：单次（`run_once`）、交互式 REPL（`run_interactive`）、批处理（`run_batch`）
+- 把统一响应信封渲染为终端文本（friendly / plain 两种风格）
+- 记录与导出对话历史（json / jsonl / markdown）
 
-本文档为 RAG 与 Agent 系统基础支撑层-通用工具模块（`common_utils_module`）的独立设计说明书。
+### 1.3 不负责（边界）
+- 业务语义（检索 / Agent 执行）——交给 `RequestHandler` → `Orchestrator`
+- `trace_id` 生成——由应用层单层生成后透传（见第 8 章），本模块不重新生成业务 trace_id
+- 鉴权 / 配额——CLI 默认单用户本地场景，不做鉴权（与 HTTP 入口不同）
 
-本模块负责系统中的通用辅助能力，是“文本处理 -> 数据转换 -> 参数校验 -> 时间/哈希/编码等辅助函数”的核心工具集合模块。
+## 2. 架构与依赖
 
-# 2. 模块核心设计
-
-## 2.1 模块定位与职责
-
-本模块属于**基础支撑层**，负责提供跨模块复用的通用辅助能力，主要包括：
-
-- 文本处理工具
-- 数据转换工具
-- 参数校验工具
-- 时间/哈希/编码等辅助工具
-
-本模块不负责：
-
-- 不承载具体业务逻辑
-- 不负责请求路由、调度、存储、模型调用
-- 不将模块专属逻辑错误地沉到通用工具层
-
-## 2.2 工具分组规范（强制）
-
-建议至少拆分为：
-
-- `text_tool.py`
-  - 文本清洗
-  - 脱敏
-  - 格式检查
-
-- `data_tool.py`
-  - JSON 转换
-  - 类型转换
-  - 列表/字典辅助处理
-
-- `param_validate.py`
-  - 必填校验
-  - 范围校验
-  - 类型校验
-
-- `assist_tool.py`
-  - 哈希
-  - base64
-  - 时间格式化
-  - 时间范围辅助
-  - 简单标识生成
-
-## 2.3 工具边界约束
-
-- 工具函数必须保持无副作用或副作用可预期
-- 工具函数不得依赖业务模块实现细节
-- 不得把 RAG、Agent、API 等业务逻辑沉到 common_utils
-- 若某工具明显只服务某模块，应迁回对应模块 `utils/`
-
-# 3. 统一项目结构规范
-
-```text
-common_utils_module/
-├── __init__.py
-├── core/
-│   ├── __init__.py
-│   ├── base.py
-│   └── impl.py
-├── utils/
-│   ├── __init__.py
-│   ├── text_tool.py
-│   ├── data_tool.py
-│   ├── param_validate.py
-│   └── assist_tool.py
-├── config/
-│   ├── __init__.py
-│   └── config.py
-├── tests/
-│   ├── __init__.py
-│   └── test_impl.py
-├── README.md
-└── requirements.txt
+```
+用户终端
+   │  raw text / 批处理文件
+   ▼
+ConsoleApp (本模块)
+   │  parse_input → handle_command? → build_request
+   ▼
+RequestHandler.handle(request, trace_id)   # 接口层, 构造注入
+   ▼
+Orchestrator → RAG / Agent                 # 业务层
+   │  统一响应信封 {code,message,data,trace_id,...}
+   ▼
+ConsoleApp.render_response → 终端输出 + 写 history
 ```
 
-# 4. 核心接口设计（抽象基类）
+- **基础依赖走 DI**：构造时接收 `BasicDeps`（`deps.utils / logger / config / exception_handler`），未注入时回退 `build_basic_deps()`（向后兼容）。
+- **handler 构造注入**：`ConsoleApp(handler=...)`，`handler` 为 `RequestHandler` 实例，无状态调用 `handler.handle(...)`。
+- 可选注入：`input_provider`（输入源，便于测试 / 批处理）、`renderer`（自定义渲染器）、`history_store`（历史存储，默认进程内 `_InMemoryHistoryStore`）、`session`（初始会话状态）。
 
-可定义统一聚合入口：
+## 3. 数据模型（`model/data_model.py`）
 
-```python
-from abc import ABC, abstractmethod
+| 模型 | 关键字段 | 说明 |
+| :--- | :--- | :--- |
+| `ConsoleSessionConfig` | `mode='rag'` / `session_id` / `top_k=5` / `verbose` / `prompt_text` / `renderer='plain'` / `attachments[]` / `multiline` / `plan_only` / `approve_tools[]` | 会话状态机；`plan_only` / `approve_tools` 与 `SimpleAgent.extra_params` 对齐（Task X #58） |
+| `ConsoleInput` | `raw_text` / `cleaned_text` / `is_command` / `command_name` / `command_arg` / `attachment_paths[]` / `metadata` | `parse_input` 的输出；命令与普通输入的统一载体 |
+| `ConsoleRenderResult` | `success` / `title` / `body` / `footer` / `raw_response` | `render_response` 的输出 |
+| `ConsoleHistoryItem` | `timestamp` / `session_id` / `request` / `response` / `duration_ms` / `source` / `tags[]` | 一条历史记录 |
 
-class BaseCommonUtils(ABC):
-    @abstractmethod
-    def get_text_tool(self):
-        pass
+## 4. 接口定义
 
-    @abstractmethod
-    def get_data_tool(self):
-        pass
+### 4.1 抽象基类 `BaseConsoleApp`（`core/base.py`）
+7 个抽象方法，`ConsoleApp` 全部实现：
 
-    @abstractmethod
-    def get_param_validate(self):
-        pass
+| 方法 | 签名 | 职责 |
+| :--- | :--- | :--- |
+| `run` | `() -> None` | 启动入口（默认进交互式 REPL） |
+| `parse_input` | `(text: str) -> ConsoleInput` | 原始输入 → 结构化；识别 `/` 开头的命令 |
+| `build_request` | `(source: ConsoleInput \| Dict \| str) -> Dict` | 统一构造 request body，按 session 状态填默认值（mode/top_k/session_id 等） |
+| `render_response` | `(response: Dict) -> ConsoleRenderResult` | 统一响应信封 → 终端可读结构 |
+| `handle_command` | `(console_input: ConsoleInput) -> bool` | 执行斜杠命令；返回是否已被命令消费（True 则不发请求） |
+| `run_batch` | `(items: Iterable[Dict] \| str) -> List[Dict]` | 批处理：逐条执行，返回响应列表 |
+| `export_history` | `(export_path: str, fmt='json') -> str` | 导出历史到文件 |
 
-    @abstractmethod
-    def get_assist_tool(self):
-        pass
-```
+> 注：`build_request` 的 `source` 形参接受 `ConsoleInput / dict / str` 三种（AUDIT-2c 已让 base 签名与 impl 一致）。
 
-# 5. 核心实现设计（CommonUtils）
+### 4.2 `ConsoleApp` 扩展方法（非抽象）
+`run_once`（单次执行）、`run_interactive`（REPL 主循环）、`run_batch_file`（从文件批处理）、`execute_request`（build→handle→记 history 一站式）、`render_response` 的 `mode` 覆盖参数等。
 
-## 5.1 核心职责
+## 5. 命令系统
 
-- 聚合通用工具实例
-- 统一对外暴露工具入口
-- 保证工具能力边界清晰
-- 避免重复实现
+`parse_input` 把 `/` 开头的输入解析为命令；`handle_command` 按 `_COMMAND_HANDLERS` 表分派。支持同义词。
 
-## 5.2 文本工具规范
+| 命令（同义词） | 参数 | 作用 |
+| :--- | :--- | :--- |
+| `/mode` (`/m`) | `rag\|agent\|hybrid` | 切换执行模式 |
+| `/topk` (`/k`) | int | 设置检索 top_k |
+| `/attach` | 路径 | 给后续请求附加文件 |
+| `/clear` (`/clear_attach`) | — | 清空附件 |
+| `/help` (`/h`) | — | 显示帮助 |
+| `/history` | — | 显示本会话历史 |
+| `/exit` (`/quit`) | — | 退出 REPL |
+| `/session_id` (`/sid`) | str? | 查看 / 设置 session_id |
+| `/plan` | `on\|off\|toggle` | 切 plan_only（Agent 先规划后执行，Task V #56） |
+| `/approve` | `tool1,tool2` | 给危险工具发白名单（Task W #57） |
+| `/unapprove` | `tool1` | 撤白名单 |
+| `/memory` | — | 显示当前生效的 ProjectMemory（AGENTS.md，Task U #55） |
 
-应支持：
+## 6. 运行模式
 
-- `clean_text`
-- `mask_sensitive_info`
-- `is_valid_text`
+- **`run_once(request, trace_id?)`**：单次执行一个 request，返回响应。脚本 / 一次性调用用。
+- **`run_interactive()`**：REPL 主循环——读输入 → `parse_input` → 命令则 `handle_command`，否则 `build_request` → `_call_handler` → `render_response` → 打印 + 记 history，直到 `/exit`。
+- **`run_batch(items | path)`**：批处理。`items` 可为请求列表，或 jsonl / 纯文本文件路径（`_load_jsonl_batch` / `_load_text_batch`）。逐条执行；`console_app.batch_fail_fast=true` 时遇错中止，否则跳过继续。
 
-约束：
+## 7. 渲染
 
-- 不做业务语义重写
-- 不做摘要生成
-- 不静默篡改原意
+`render_response(response, mode?)` 支持两种风格：
+- **friendly**（默认，`console_app.default_render_mode`）：带标题 / 正文 / footer 的结构化展示，正文走 `_render_text`。
+- **plain**：精简文本。
 
-## 5.3 数据工具规范
+渲染从统一响应信封的 `data` 抽取 `answer` / `citations` / `steps` 等；失败响应（非 SUCCESS code）渲染为错误提示。
 
-应支持：
+## 8. trace_id 与错误处理
 
-- `safe_json_loads`
-- `safe_json_dumps`
-- `to_int / to_float / to_bool`
-- `deduplicate_list`
+- **trace_id 单层生成**：`_generate_trace_id()` 仅在入口（无上游 trace_id 时）生成一次，之后透传给 `handler.handle(request, trace_id=...)`，与系统"应用层单层生成"约定一致（架构总图第 8 章）。
+- **异常兜底**：`_handle_exception` 走注入的 `exception_handler`，把异常包装成统一信封，CLI 不因单条请求异常而崩溃；批处理中单条失败按 `batch_fail_fast` 决定中止或继续。
 
-约束：
+## 9. 配置项（`config_module` 读取）
 
-- 转换失败要么返回默认值，要么显式抛异常
-- 行为必须可预测
+| 键 | 默认 | 说明 |
+| :--- | :--- | :--- |
+| `console_app.default_render_mode` | `friendly` | 默认渲染风格 |
+| `console_app.enable_history` | `true` | 是否记历史 |
+| `console_app.history_file` | `./console_history.jsonl` | 历史落盘路径 |
+| `console_app.batch_fail_fast` | `false` | 批处理遇错是否中止 |
 
-## 5.4 参数校验工具规范
+## 10. 历史与导出
 
-应支持：
+- `history_store` 默认 `_InMemoryHistoryStore`（进程内，暴露 `list_items()` 便于测试）。
+- `export_history(path, fmt)`：支持 `json` / `jsonl` / `md`（markdown）三种格式导出。
+- 交互模式下每条问答自动 `_save_history_safe`（best-effort，失败不影响主流程）。
 
-- 必填参数校验
-- 类型校验
-- 数值范围校验
-- 枚举值校验
+## 11. 测试
 
-约束：
+`tests/test_impl.py`（构造 / 单次执行 / 渲染）、`tests/test_commands.py`（命令解析 + plan/approve 进 extra_params）。`build_request` / `execute_request` 用注入的 stub handler 验证，无需真实业务层。
 
-- 只做通用校验，不硬编码模块专属规则
-- 复杂业务校验应留给对应业务模块
+## 12. 变更记录
 
-## 5.5 辅助工具规范
-
-应支持：
-
-- `md5 / sha256`
-- `base64_encode / decode`
-- `format_time`
-- `parse_time`
-- `is_in_range`
-- 常见时间起止辅助
-
-约束：
-
-- 不使用不必要的重依赖
-- 对时区、格式歧义要写清楚
-
-# 6. 测试规范
-
-必须覆盖：
-
-- 文本清洗
-- JSON 转换
-- 参数校验
-- 时间工具
-- 哈希工具
-- 边界值与异常输入
-
-# 7. 交付物清单
-
-- `core/base.py`
-- `core/impl.py`
-- `utils/text_tool.py`
-- `utils/data_tool.py`
-- `utils/param_validate.py`
-- `utils/assist_tool.py`
-- `tests/test_impl.py`
-- `README.md`
-- `requirements.txt`
-
-# 8. 可替换性约束
-
-- 上游模块只能依赖通用工具公开接口
-- 不得把业务逻辑固化到工具层
-- 工具命名与行为需稳定
-
-# 9. FAQ
-
-| 问题 | 说明 |
-| :--- | :--- |
-| 什么工具应该放到 common_utils？ | 跨多个模块复用、且不带明显业务语义的工具。 |
-| 什么工具不该放到 common_utils？ | 只服务某个模块、带明显业务规则的逻辑。 |
-
-# 10. 附录：系统错误码关联
-
-本模块一般不直接定义主业务错误码，参数校验失败可配合调用方使用 `PARAM_INVALID`、`PARAM_MISSING` 等统一错误码。
-
-返回[系统架构设计](./RAG与Agent系统架构设计说明书.md)
+- **v2.0 (2026-06-03, AUDIT-3)**：本文件原内容错挂为 common_utils 设计文档，按实际代码重写为真正的 console_app 设计说明书；`build_request` 签名（`source` 接受 ConsoleInput/dict/str）与 base/impl 对齐（AUDIT-2c）。
+- 历史能力沉淀：Task T（#54）session 状态机 + 批处理 + 历史导出；Task X（#58）`/plan` `/approve` `/memory` 命令。
