@@ -59,6 +59,7 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         llm_client: Any = None,           # Task EEE: BaseLLMService (generate -> str)
         similarity_threshold: float = 0.9,
         extract_max_facts: int = 5,
+        secret_key: Optional[str] = None,  # MEM-3: 敏感 secret 加密密钥
     ):
         if backend is None:
             raise ValueError("LongTermMemoryImpl 需要 backend (StateBackend), 不能为 None")
@@ -68,6 +69,9 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         self._llm_client = llm_client
         self._similarity_threshold = float(similarity_threshold)
         self._extract_max_facts = int(extract_max_facts)
+        # MEM-3: 敏感 secret 加密密钥 (DI 优先, 否则取环境 SENSITIVE_CONFIG_SECRET)
+        import os
+        self._secret_key = secret_key or os.environ.get("SENSITIVE_CONFIG_SECRET") or None
 
     # ------------------------------------------------------------------
     # 内部辅助
@@ -127,16 +131,22 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         # Task EEE (#91) — 二阶段语义查重 (cosine > threshold)
         if self._embedder is not None and fact.embedding is None:
             try:
-                fact.embedding = self._embedder.embed_text(fact.content)
+                # MEM-3: secret 用 digest 算 embedding (明文可检索), 不用即将加密的 content
+                embed_target = (fact.digest if (fact.content_type == "secret" and fact.digest)
+                                else fact.content)
+                fact.embedding = self._embedder.embed_text(embed_target)
             except Exception:
                 # embedder 失败不阻断 add, 直接落盘 (无 embedding 的 fact 仍可用 hash 路径)
                 fact.embedding = None
 
-        if fact.embedding:
+        # secret 的语义去重会因 digest 相似而误判不同的值 → secret 只靠 content_hash 精确去重
+        if fact.embedding and fact.content_type != "secret":
             semantic_match = self._find_semantic_match(tenant, fact)
             if semantic_match is not None:
                 return self._bump_existing(semantic_match, fact, reason="cosine")
 
+        # MEM-3: 敏感 secret 落盘前保护 content (加密 or 无密钥时丢弃明文)
+        fact = self._maybe_protect_secret(fact)
         # 新 fact 落盘
         self._save_fact(fact)
         # hash → fact_id 反查
@@ -155,6 +165,44 @@ class LongTermMemoryImpl(BaseLongTermMemory):
                 maxlen=self._max_facts_per_tenant,
             )
         return fact
+
+    # ------------------------------------------------------------------
+    # MEM-3: 敏感 secret 加密 / 解密 (复用 config_module 的 Fernet)
+    # ------------------------------------------------------------------
+
+    def _maybe_protect_secret(self, fact: Fact) -> Fact:
+        """敏感 canonical(content_type=secret) 落盘前保护 content。
+        有密钥 → 加密 + encrypted=True; 无密钥/加密失败 → 丢弃明文只留 digest
+        (绝不明文落库)。content_hash 已基于明文算过(去重不受影响)。"""
+        if fact.content_type != "secret" or fact.encrypted:
+            return fact
+        if self._secret_key:
+            try:
+                from config_module.utils.tool_functions import encrypt_value
+                fact.content = encrypt_value(fact.content, self._secret_key)
+                fact.encrypted = True
+                return fact
+            except Exception:
+                pass  # 加密失败 → 落到下面"绝不明文落库"分支
+        fact.content = "[敏感值未存储: 未配置加密密钥或加密失败]"
+        fact.encrypted = False
+        return fact
+
+    def reveal_fact(self, fact_id: str, tenant_id: str = "default") -> Optional[str]:
+        """显式解密一条加密 fact 的真实 content (需要真实值时才调)。
+        非加密 → 直接返回 content; 无密钥 / 解密失败 → None。"""
+        fact = self._load_fact(tenant_id, fact_id)
+        if fact is None:
+            return None
+        if not fact.encrypted:
+            return fact.content
+        if not self._secret_key:
+            return None
+        try:
+            from config_module.utils.tool_functions import decrypt_value
+            return decrypt_value(fact.content, self._secret_key)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # search_facts — DDD MVP 走子串匹配 (EEE 改 embedding cosine)
@@ -431,15 +479,20 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             return []
 
         prompt = (
-            "你是一个长期记忆抽取助手. 阅读下面的对话, 从中抽取值得 Agent 长期记住的"
-            "事实 / 用户偏好 / 决策 / 上下文. 跳过寒暄和确认.\n\n"
+            "你是一个长期记忆抽取助手. 阅读下面的对话, 抽取值得 Agent 长期记住的"
+            "事实 / 偏好 / 决策 / 关键信息(密码·路径·配置等). 跳过寒暄和确认.\n\n"
             f"对话:\n{formatted}\n\n"
             f"返回 JSON 数组, 最多 {self._extract_max_facts} 条. 每条形如:\n"
-            '  {"content": "...", "tags": ["preference"|"fact"|"decision"|"context"], '
-            '"confidence": 0.0-1.0}\n'
+            '  {"content": "原始完整信息", "digest": "一句话精炼", '
+            '"mutability": "canonical"|"refinable", '
+            '"content_type": "secret|path|config|preference|fact|decision|context", '
+            '"tags": [...], "confidence": 0.0-1.0}\n'
             "规则:\n"
-            "- content: 完整中文句子 (10-200 字)\n"
-            "- tags: 1-3 个标签\n"
+            "- content: 完整原始信息; 密码/路径/配置要一字不差精确保留\n"
+            "- digest: 一句话精炼, 用于快速检索'这是关于什么的'; 密码类写'X的密码'不要写出密码值本身\n"
+            "- mutability: canonical=固定权威不该被改写(密码/路径/配置/ID/确定的决策); "
+            "refinable=可随时间归纳提炼(偏好/习惯/做法)\n"
+            "- content_type: 内容细分类\n"
             "- confidence: 0-1 你的把握\n"
             "- 没值得记的就返回 []\n"
             "只返回 JSON 数组, 别加任何解释文字."
@@ -465,12 +518,18 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             except (TypeError, ValueError):
                 conf = 1.0
             conf = max(0.0, min(1.0, conf))
+            mutability = str(it.get("mutability") or "refinable").lower()
+            if mutability not in ("canonical", "refinable"):
+                mutability = "refinable"
             f = Fact.make(
                 content=content,
                 tenant_id=tenant_id,
                 tags=[str(t) for t in tags],
                 confidence=conf,
                 session_id=session_id,
+                mutability=mutability,
+                digest=str(it.get("digest") or "").strip(),
+                content_type=str(it.get("content_type") or "").strip(),
             )
             out.append(f)
         return out

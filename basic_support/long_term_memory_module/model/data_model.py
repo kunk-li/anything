@@ -66,6 +66,12 @@ class Fact(BaseModel):
     pinned: bool = False  # 用户手动置顶, prune 时不删
     embedding: Optional[List[float]] = None  # EEE 加入; DDD 阶段 None
 
+    # 方向2 (记忆升级): 可变性分层 + 精炼/原始双层
+    mutability: str = "refinable"   # canonical(固定权威:密码/路径/配置, 不改写不过期) | refinable(偏好/做法, 可提炼可丢原始)
+    digest: str = ""                # 精炼层: 一句话摘要, 两级检索的粗筛用; 空则回退 content
+    content_type: str = ""          # 细分类: secret/path/config/preference/decision/fact/context...
+    encrypted: bool = False         # content 是否加密存储 (敏感 canonical secret, 见 MEM-3)
+
     model_config = {"extra": "ignore"}
 
     def ensure_hash(self) -> "Fact":
