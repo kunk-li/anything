@@ -17,6 +17,48 @@
 > - **YY (#85)**: `ReActEngineMixin` 走 `self.deps.hook_registry` DI (PP #76 落地),
 >   支持单测注入隔离 HookRegistry. 详见 `CHANGELOG.md`.
 
+---
+
+## v2.2 能力实现状态校准 (2026-06-03)
+
+> 本节由"代码↔设计文档审计"补入。下方正文(第 1–13 章)定格在**早期形态**(规则式单轮 +
+> dataclass 模型描述), 而代码已演进为 **LLM 驱动多轮 ReAct + 自我验证自纠正 + 长期记忆/画像 +
+> 流式 + 工具治理**。**真相源优先级**: `core/base.py` + `core/impl.py` + `core/components/*` +
+> `CHANGELOG.md` > 本文档正文。深度逐章回灌是独立工程, 在那之前以本校准节为准。
+
+### A. 已实现但正文未覆盖的能力 (代码位置为准)
+
+| 能力 | 代码位置 | 开关/默认 |
+|---|---|---|
+| **执行策略分发** single_shot / react / reflect | `core/impl.py` `execute()` + `core/components/react_engine.py` | `agent.execution_strategy` 默认 `single_shot` |
+| **ReAct 多轮规划** observe→reflect→next + Plan Mode 早出 | `react_engine.py` `_react_execute()` | `=react`; `max_react_iterations` 默 15 |
+| **自我验证闭环** 五验证器 + 自纠正递归 | `core/components/verifier.py` + `impl.py:_post_verify()` | `agent.enable_self_verify` 默认 **off**; `verify_mode` off/auto/ask |
+| ├ ToolSuccess / Execution(pytest·sql·shell·lint) / Task 终态 / Compliance | `verifier.py` | `extra_params.verify=[...]` |
+| └ **GoalVerifier 子目标级验收** | `verifier.py:GoalVerifier` | `extra_params.verify_goals=True` opt-in |
+| **Reflection 反思环** critique→revise | `impl.py:_reflect_revise()` | `=reflect` 或 `extra_params.enable_reflection` |
+| **长期记忆** 注入 + 抽取落盘 | `impl.py:_inject_long_term_memory()` / `_extract_and_store_memory()` | `agent.memory_enabled` |
+| **用户画像 always-on 注入** 5 维度 | `impl.py:_inject_user_profile()` | 有 memory 即注入 |
+| **query refinement** 含糊问题基于画像改写 | `impl.py:_refine_query()` | `agent.enable_query_refine` 默认 **off** |
+| **工具审批白名单** | `impl.py` + `core/components/tool_executor.py:_needs_approval()` | `tool_approval_required` |
+| **工具结果 LRU 缓存** | `tool_executor.py` (`_tool_cache_*`) | `cacheable_tools` 默 10 只读工具 |
+| **真流式 run_stream** generator | `core/components/streaming.py:run_stream()` | event: thought/action/observation/chunk/meta/plan/done/error |
+| **多轮历史注入 + 状态 events merge** | `impl.py:_history_prefix()` / `_save_state_safe()` | — |
+
+补充错误码(正文第 13 章错误码表未列): `TOOL_APPROVAL_REQUIRED`、`PLAN_PENDING`、`STREAM_INTERRUPTED`;
+补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`。
+
+### B. 正文与代码的已知矛盾 (读正文时请以代码为准)
+
+1. **§6.3 执行流程**: 正文写死"parse_task→逐步执行→aggregate"单一线性流程; 实际是**策略分发**(react/reflect 优先, 失败降级 single_shot)。
+2. **第 4 / 5 章数据模型**: 正文用 `@dataclass`(AgentRequest/AgentResponse/TaskPlan/TaskStep/StateEvent); 实际**统一 dict 风格**(见 `base.py` 注释), `parse_task` 返回 dict, 响应信封多 `cost_time` 字段。
+3. **§6.2 构造函数**: 正文 5 参数; 实际 9 参数(多 `llm_planner` / `deps` / `long_term_memory` / `llm_client`)。
+4. **§6.5 规划**: 正文称 LLM 规划"后续可替换"; 实际 **LLM 规划已是默认主路径**(`use_llm_planner` 默认 True), 规则式仅 fallback。
+5. **README.md 实现说明表**称"与设计书完全匹配/dataclass"已过时, 4.1 示例(`SimpleAgent(tools=...)` + `AgentRequest`)与真实签名不符。
+
+### C. 建议(独立任务): 深度回灌时新增 §6.11 自我验证 / §6.12 ReAct 引擎 / §6.13 记忆与个性化 / §6.14 流式; 扩写 §6.7 工具治理; 对齐第 4/5/6 章数据模型与构造函数。
+
+---
+
 # 1. 文档概述
 
 ## 1.1 文档目的

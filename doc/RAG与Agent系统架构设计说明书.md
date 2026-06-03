@@ -15,6 +15,7 @@
 
 | 版本 | 日期 | 主要变更 |
 |---|---|---|
+| v2.1 | 2026-06-03 | 事实校准(代码↔文档审计): ABC 配对 10→19、测试规模、Cross-encoder Reranker 已默认、chunker 分层归属; 不含深度章节回灌 |
 | v2.0 | 2026-05-27 | 实现对齐第二轮:数据层 DI 统一 + StartupError fail-fast + 内部 schema 化 + ReAct + Rerank/Rewrite 接通 + 业务质量评测集 + 配置优先级文档化 |
 | v1.1 | 2026-03-19 | 第一轮修订:命名/索引链路/接口边界 |
 | v1.0 | 初版    | 系统整体架构、ABC 抽象接口、5 层分层模型 |
@@ -29,8 +30,9 @@
 - ✅ **deps_module** — BasicDeps DI 容器 + StartupError + is_dev_mode +
   handle_exception_to_envelope(共用异常包装)
 - ✅ **chunker_module** — 实现文档第 11 章 Chunking 规范
-- ✅ **ABC 契约严格对齐** — 10 个 (Base, Impl) 配对全部 aligned,有
-  `scripts/check_abc_alignment.py` 守护
+- ✅ **ABC 契约严格对齐** — 19 对 (Base, Impl) 配对全部 aligned,有
+  `scripts/check_abc_alignment.py` 守护 (2026-06-03 审计校准: 早期 10 → 现 19,
+  含基础支撑 4 + cross-cutting long_term_memory + state_backend 3 实现 + console_app 等)
 - ✅ **DI 注入贯通全链路** — bootstrap → data layer → business layer → interface → application,
   全程只构造一份 BasicDeps
 - ✅ **启动 fail-fast** — 默认严格模式,任一关键依赖初始化失败抛 StartupError;
@@ -46,16 +48,20 @@
 - ✅ **Citation 引用回溯** — chunk_id ↔ vector_id ↔ doc 三层映射稳定
 
 ### 工程化
-- ✅ **122 个单测 / 9 模块** — `scripts/run_tests.sh` 本地回归,`.github/workflows/ci.yml`
-  矩阵(Python 3.10 / 3.12)
+- ✅ **单测覆盖大幅扩展** — 约 69 个 `test_*.py` 文件 / 25+ 含测试模块目录 (早期为 122 单测 / 9 模块,
+  已远超; 历史测试规模见 `CHANGELOG.md` 测试规模表),`scripts/run_tests.sh` 本地回归,
+  `.github/workflows/ci.yml` 矩阵(Python 3.10 / 3.12)
 - ✅ **业务质量评测集** — `evaluation/` 目录,RAG + Agent 数据集 + 评测脚本 + CI 阈值守护
 - ✅ **配置优先级文档化** — `docs/configuration-priority.md` 5 个配置源 +
   推荐入口 `ConfigManager.get_effective_value`
 - 🔧 **GitHub Actions CI** — yml 已就绪,首次推送跑红,正在调试(详见 Task #13)
 
 ### 规划中(尚未做)
-- 📋 **Cross-encoder Reranker** — `BaseReranker` 抽象已就位,可直接换实现
-- 📋 **真实生产 LLM 接入** — 需要 API key 配置 + secrets 管理
+- ✅ **Cross-encoder Reranker** — (2026-06-03 校准: **已实现且为默认**, 本应移出本列表)
+  `business/rag_module/extensions/reranker.py:CrossEncoderReranker`, 由 `rag.reranker_type`
+  控制, 默认值 `cross_encoder` (见 `run/factories/business_layer.py`)
+- 🔧 **真实生产 LLM 接入** — 多家适配器已就位 (`llm_adapter_module/core/adapters/`:
+  anthropic / openai / ollama 等), 仍需 API key 配置 + secrets 管理
 - 📋 **业务质量指标进 CI** — 需要 nightly workflow 配 secrets
 - 📋 **ReAct 失败时强制重新规划** — 当前依赖 LLM 感知,未做硬约束
 - 📋 **ConfigManager 启动期打印生效配置摘要** — 便于排查"为什么 X 值不对"
@@ -127,7 +133,7 @@
 | 接口层   | 统一接口管理，实现各模块之间的通信，封装核心业务逻辑调用，提供标准化请求/响应格式 | 请求响应处理模块（注：早期规划的"接口封装模块"未独立实现，职责并入请求响应处理模块） | 中（核心模块开发完成后开发）  |
 | 核心业务层 | 实现RAG与Agent核心功能，是系统核心模块集合                 | RAG模块、Agent模块、Embedding模块、协同调度模块         | 高（优先开发）         |
 | 数据层   | 负责数据存储、读取、更新，包括文档数据、向量数据、Agent状态数据、大模型对接等 | 文档解析模块、文档存储模块、向量数据库模块、大模型对接模块、状态存储模块 | 高（与核心业务层同步开发）   |
-| 基础支撑层 | 提供系统通用能力，支撑所有上层模块，包含通用工具、配置管理、日志、异常处理等    | 通用工具、配置管理、日志、异常处理（4 核心）+ 横切模块：hooks/skills/quota/audit/state_backend/long_term_memory/project_memory/observability/schema/deps/chunker | 最高（最先开发，所有模块依赖） |
+| 基础支撑层 | 提供系统通用能力，支撑所有上层模块，包含通用工具、配置管理、日志、异常处理等    | 通用工具、配置管理、日志、异常处理（4 核心）+ 横切模块：hooks/skills/quota/audit/state_backend/long_term_memory/project_memory/observability/schema/deps（注：chunker_module 实际在**数据层**，见 §3 设计偏离表与 §11.x） | 最高（最先开发，所有模块依赖） |
 
 ## 2.3 系统交互流程
 

@@ -9,7 +9,9 @@
 - 标准化响应输出
 
 ## 2. 项目结构
-遵循系统统一规范，包含 core, model, prompt, utils, config, tests 目录。
+遵循系统统一规范，包含 core, prompt, utils, config, tests 目录，外加 `extensions/`。
+
+> **`extensions/` 偏离声明**：检索链路增强组件（`rewriter.py` 的 `LLMQueryRewriter`、`reranker.py` 的 `LLMReranker` / `CrossEncoderReranker`、`BM25Retriever`）采用单文件直接包含 Base + 默认实现，不强制 `core/base.py + impl.py` 二分（小组件二分冗余）。详见架构总览 §3 设计偏离声明。
 
 ## 3. 核心接口
 - `BaseRAG`: 抽象基类

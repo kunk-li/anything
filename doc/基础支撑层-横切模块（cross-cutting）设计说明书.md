@@ -34,6 +34,8 @@
 - **observability**：`UsageTracker` 统计 token / cost，metrics 端点数据源；可走 `StateBackend`（XX #84）。
 - **state_backend**：跨进程状态后端抽象。`InMemoryBackend`(默认) / `SqliteBackend`(跨进程持久化) / `RedisBackend`(高吞吐，需 redis-py)。让 UsageTracker / QuotaGuard / ModelHealthTracker 可在多实例间共享状态。
 - **long_term_memory**：长期记忆。LLM 抽取 fact + embedding 语义查重 + CRUD + pin / search（DDD/EEE/FFF #90-92）。
+  - *(2026-06-03 校准补)* **方向2 记忆升级**：`Fact` 加 `mutability`(canonical 固定权威/refinable 可提炼) / `digest`(精炼层) / `content_type` / `encrypted`；敏感 secret 用 Fernet 加密(`reveal_fact()` 显式解密，无密钥丢明文绝不明文落库)；两级检索(digest 粗筛→content 细比)；差异化清理(`prune_stale` 删 / `degrade_stale_refinable` 丢原始留精炼) + 反思整合(`consolidate`)。
+  - *(2026-06-03 校准补)* **方向1 用户画像 + 时效**：`get_user_profile()` 5 维度(preference/style/convention/domain/weakness)聚合，按 `created_at` 时效排序且只取有效项；`reconcile_conflicts()` 用 LLM 消解对立偏好(组内最新者胜、其余标 `superseded_by`)；`Fact.superseded_by` 非空者不进画像/检索。供 agent always-on 画像注入与 query refinement。
 
 ## 3. 共同模式
 

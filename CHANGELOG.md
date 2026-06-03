@@ -5,6 +5,35 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-03)
+
+> 补记: 以下 方向1/2/3 + 审计 工作此前未入 CHANGELOG, 2026-06-03 "代码↔设计文档审计"时补齐
+> (对应 commit `0d78f4a`..`5a24097`)。战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"。
+
+### 方向2 记忆升级 — 被动 fact 库 → 主动认知系统 (`0d78f4a` `6a90a00` `88f0c66`)
+- `Fact` 加 `mutability`(canonical 固定权威/refinable 可提炼) / `digest`(精炼层) / `content_type` / `encrypted`
+- 敏感 secret 用 Fernet 加密落盘(`SENSITIVE_CONFIG_SECRET`), `reveal_fact()` 显式解密; 无密钥则丢明文(绝不明文落库)
+- 两级检索(digest 粗筛→content 细比) + 差异化清理(`prune_stale`/`degrade_stale_refinable`) + 反思整合(`consolidate`)
+- 文件: `basic_support/long_term_memory_module/core/impl.py` + `model/data_model.py`
+
+### 方向1 用户模型 — "更懂你" (`8cd577b` `c15380d` `4fde8f7`)
+- **UP-1/2/3 画像 MVP**: `get_user_profile()` 5 维度(preference/style/convention/domain/weakness)聚合; agent `_inject_user_profile()` 任务前 always-on 注入(weakness→"需主动补位")
+- **UP-4 query refinement**: 含糊问题基于画像 LLM 判含糊+改写后再规划; 默认关(`agent.enable_query_refine`); 三重 gate + 安全阀 + 全程 fail-open; 记 `details["query_refinement"]` 透明
+- **阶段3 画像冲突消解+时效**: `Fact.superseded_by`(非破坏标记); `reconcile_conflicts()`(LLM 找对立偏好→`created_at` 最新者胜其余标 superseded); `get_user_profile` 时效排序 + 只取有效; `search_facts` 跳过 superseded
+- 文件: `business/agent_module/core/impl.py` + `basic_support/long_term_memory_module/core/impl.py`
+
+### 方向3 自我验证闭环 (`d838813` `6d163a6` `5a24097`)
+- `core/components/verifier.py`: ToolSuccess / Execution(pytest·sql·shell·lint) / **Goal(子目标级)** / Task 终态 / Compliance 五验证器 + 自纠正递归(`_post_verify`) + off/auto/ask 三模式; 默认关(`agent.enable_self_verify`)
+- 验证器故障一律 fail-open(放行); `extra_params.verify` / `verify_goals` / `verify_task` 控制
+- GoalVerifier(`5a24097`)走"验证时分解子目标", 不动规划核心; 留 `spec.args.goals` 接入点供未来 plan goal 分组
+
+### 全项目审计 + 自动推送 (`ab6f1ae` `3297e26` `7feb32f`)
+- AUDIT 1-4: exception import / check_abc Win 编码 / `AGENT_TIMEOUT` enforce / 分层反向依赖消除 / ABC 检查 10→19 / 文档校准(`doc/README.md` + cross-cutting 设计文档)
+- commit 后 `git push origin main` 自动化(`.git/hooks/post-commit` + `scripts/install-git-hooks.sh`)
+
+### 测试
+- 新增 `test_user_profile` / `test_query_refine` / `test_profile_reconcile` / `test_verifier` / `test_goal_verifier` / `test_memory_layering` 等; agent 模块 271 passed, long_term_memory 全绿, ABC 19 对对齐
+
 ## Unreleased (2026-06-01)
 
 ### XXXX-1..14 — 16 项 UX 优化批次 (XXXX-2/5 待真机验证 待结)

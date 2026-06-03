@@ -20,6 +20,15 @@ __pycache__/
 /run/vector_store/
 /run/documents/
 /run/benchmarks/
+# 运行时上传/索引/库/临时脚本 (历来未跟踪; 防 git add -A 误纳入 — 提交请显式 add 具体文件)
+/uploads/
+/run/uploads/
+/run/source_docs/
+/run/run/
+/run/bm25_index.json
+/run/*.sqlite3
+/run/_*.py
+/run/_*.log
 
 # Benchmark 结果 (机器 / Python 版本相关,不应进 git)
 /benchmarks/baseline*.json
