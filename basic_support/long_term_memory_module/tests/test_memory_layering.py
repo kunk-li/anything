@@ -107,5 +107,64 @@ class TestTwoLevelRetrieval(unittest.TestCase):
         self.assertEqual(m.search_facts(MemoryQuery(query="量子计算")), [])
 
 
+class TestDifferentialPrune(unittest.TestCase):
+    """MEM-6: 差异化清理 — canonical 永久 / refinable 老的删或降级。"""
+
+    def _age(self, m, fact, access=0):
+        f = m._load_fact(fact.tenant_id, fact.fact_id)
+        f.last_accessed = 0.0
+        f.access_count = access
+        m._save_fact(f)
+
+    def test_canonical_never_pruned(self):
+        m = _mem()
+        f = m.add_fact(Fact.make(content="路径 /etc/app", mutability="canonical", digest="配置路径"))
+        self._age(m, f)
+        m.prune_stale(max_age_days=1, min_access_count=1)
+        self.assertIsNotNone(m._load_fact(f.tenant_id, f.fact_id))   # 固定类没被删
+
+    def test_refinable_old_unused_pruned(self):
+        m = _mem()
+        f = m.add_fact(Fact.make(content="某临时信息内容", mutability="refinable"))  # 无 digest
+        self._age(m, f)
+        self.assertEqual(m.prune_stale(max_age_days=1, min_access_count=1), 1)  # 老+没用+无精炼 → 删
+
+    def test_degrade_refinable_drops_content_keeps_digest(self):
+        m = _mem()
+        f = m.add_fact(Fact.make(content="一段很长的原始偏好描述内容XYZ", mutability="refinable", digest="偏好摘要"))
+        self._age(m, f, access=3)  # 还在用, 但老
+        self.assertEqual(m.degrade_stale_refinable(max_age_days=1), 1)
+        d = m._load_fact(f.tenant_id, f.fact_id)
+        self.assertNotIn("很长的原始", d.content)   # 原始丢弃
+        self.assertEqual(d.digest, "偏好摘要")        # 精炼保留
+
+    def test_degrade_skips_canonical(self):
+        m = _mem()
+        f = m.add_fact(Fact.make(content="密码值", content_type="secret", mutability="canonical", digest="某密码"))
+        self._age(m, f)
+        self.assertEqual(m.degrade_stale_refinable(max_age_days=1), 0)  # canonical 不降级
+
+
+class TestConsolidate(unittest.TestCase):
+    """MEM-7: 反思整合 — 多条 refinable 归纳成更高层。"""
+
+    def test_consolidate_adds_higher_level(self):
+        class _LLM:
+            def generate(self, p):
+                return '[{"content":"用户倾向使用 SQLite 而非 Redis", "digest":"偏好SQLite", "tags":["preference"]}]'
+        m = LongTermMemoryImpl(backend=InMemoryBackend(), llm_client=_LLM())
+        m.add_fact(Fact.make(content="项目1 选了 SQLite", mutability="refinable"))
+        m.add_fact(Fact.make(content="项目2 也用 SQLite", mutability="refinable"))
+        self.assertGreaterEqual(m.consolidate(), 1)
+        hits = m.search_facts(MemoryQuery(query="SQLite"))
+        self.assertTrue(any("倾向" in h.fact.content for h in hits))
+
+    def test_consolidate_no_llm_returns_zero(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="偏好信息一", mutability="refinable"))
+        m.add_fact(Fact.make(content="偏好信息二", mutability="refinable"))
+        self.assertEqual(m.consolidate(), 0)   # 无 llm_client → 跳过
+
+
 if __name__ == "__main__":
     unittest.main()

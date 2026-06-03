@@ -380,9 +380,9 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         deleted = 0
         for fid in ids:
             f = self._load_fact(tenant_id, str(fid))
-            if f is None:
+            if f is None or f.pinned:
                 continue
-            if f.pinned:
+            if f.mutability == "canonical":   # MEM-6: 固定权威(密码/路径)永久保留, 永不删
                 continue
             if f.last_accessed >= cutoff_ts:
                 continue
@@ -391,6 +391,62 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             if self.delete_fact_in_tenant(fid, tenant_id):
                 deleted += 1
         return deleted
+
+    def degrade_stale_refinable(self, tenant_id: str = "default", max_age_days: int = 90) -> int:
+        """MEM-6: refinable 老 fact 丢弃 content 原始、保留 digest 精炼 (兑现用户需求⑤
+        "多余很久的可提炼部分原始信息可丢弃")。canonical / pinned / 无 digest 的不动。
+        返回 degrade 了几条。"""
+        DEGRADED = "[原始已清理, 仅保留精炼摘要]"
+        cutoff_ts = time.time() - max_age_days * 86400.0
+        ids = list(dict.fromkeys(self._backend.list_get(self._index_key(tenant_id))))
+        degraded = 0
+        for fid in ids:
+            f = self._load_fact(tenant_id, str(fid))
+            if f is None or f.pinned or f.mutability == "canonical":
+                continue
+            if not f.digest or f.content == DEGRADED:
+                continue  # 没精炼可留(留给 prune 删) 或已 degrade 过
+            if f.last_accessed >= cutoff_ts:
+                continue
+            f.content = DEGRADED
+            self._save_fact(f)
+            degraded += 1
+        return degraded
+
+    def consolidate(self, tenant_id: str = "default", max_facts: int = 20) -> int:
+        """MEM-7: 取 refinable facts, 用 LLM 把相关/重复的多条归纳成更高层精炼
+        (如多次"选 SQLite" → 偏好"倾向 SQLite")。无 llm_client → 跳过返回 0。
+        归纳结果走 add_fact (自带 dedup)。返回新增归纳条数。"""
+        if self._llm_client is None:
+            return 0
+        refinable = [f for f in self.list_facts(tenant_id, limit=max_facts)
+                     if f.mutability == "refinable"]
+        if len(refinable) < 2:
+            return 0
+        listing = "\n".join(f"- {f.content}" for f in refinable)
+        prompt = (
+            "下面是一批长期记忆事实。把语义相关/重复的归纳成更高层、更精炼的偏好或结论。\n\n"
+            f"{listing}\n\n"
+            '返回 JSON 数组, 每条 {"content":"归纳后的更高层结论", "digest":"一句话精炼", "tags":["preference"]}。\n'
+            "只归纳确实相关的多条; 没有可归纳的返回 []。只返回 JSON 数组。"
+        )
+        try:
+            raw = self._llm_client.generate(prompt)
+        except Exception:
+            return 0
+        added = 0
+        for it in self._parse_extracted_json(raw or ""):
+            content = str(it.get("content") or "").strip()
+            if len(content) < 4:
+                continue
+            self.add_fact(Fact.make(
+                content=content, tenant_id=tenant_id, mutability="refinable",
+                digest=str(it.get("digest") or "").strip(),
+                tags=[str(t) for t in (it.get("tags") or ["preference"])],
+                content_type="preference",
+            ))
+            added += 1
+        return added
 
     # ------------------------------------------------------------------
     # Task EEE (#91) — dedup helpers + LLM extraction
