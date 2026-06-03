@@ -11,6 +11,8 @@
     ToolSuccessVerifier  基线, 看 tool_result.success (零成本)
     ExecutionVerifier    pytest / sql / shell / lint 四场景, 跑验证命令判 exit/输出,
                          失败把 stderr/stdout 作为 self-correct 的 feedback
+    GoalVerifier         LLMJudge 子目标级 (三层模型的 Goal 层), 拆子目标逐个验收, 比
+                         Task 整体判定更细; 子目标可由调用方显式给 (留 plan goal 分组接入点)
     TaskVerifier         LLMJudge 终态确认, 对照原始目标判整个任务是否真完成
     (阶段 2) ComplianceVerifier  对照 AGENTS.md / MEMORY.md 规范验"过程是否合规"
 
@@ -168,6 +170,82 @@ class TaskVerifier(Verifier):
         )
 
 
+class GoalVerifier(Verifier):
+    """子目标级验收 (方向3 三层模型的 Goal 层): 把目标拆成若干子目标, 逐个对照执行结果
+    判是否达成 —— 比 TaskVerifier 的整体判定更细粒度, 给自纠正更准的缺口反馈
+    (能抓出"整体看着完成、实则漏了某子目标"的半成品)。
+
+    子目标来源: 优先用调用方显式给的 (spec.args['goals'] 或 ctx['sub_goals']), 否则让 LLM
+    现场从 goal 拆。这给"plan 真做了 goal 分组"留了无缝接入点(把分组喂进 spec.args 即可),
+    当前无需改动规划核心。
+
+    fail-open: LLM 不可用 / 输出无法解析时一律放行 (passed=True + 标注), 同 TaskVerifier ——
+    不因"验收这件事"失败而把已完成的任务判死。
+    """
+    name = "goal"
+
+    def __init__(self, llm_call: LLMCall):
+        self.llm_call = llm_call
+
+    @staticmethod
+    def _explicit_goals(spec: VerifySpec, ctx: Optional[Dict[str, Any]]) -> List[str]:
+        raw = (spec.args or {}).get("goals")
+        if not raw and isinstance(ctx, dict):
+            raw = ctx.get("sub_goals")
+        if isinstance(raw, (list, tuple)):
+            return [str(g).strip() for g in raw if str(g).strip()]
+        return []
+
+    def verify(self, *, goal, result, spec, ctx=None) -> VerifyResult:
+        answer = TaskVerifier._extract_answer(result)
+        explicit = self._explicit_goals(spec, ctx)
+        if explicit:
+            goals_block = ("【需逐项验收的子目标】\n"
+                           + "\n".join(f"{i + 1}. {g}" for i, g in enumerate(explicit)) + "\n\n")
+            instruction = "对照【执行结果】逐项判断上面列出的每个子目标是否达成。"
+        else:
+            goals_block = ""
+            instruction = "先把【总目标】拆成几个具体、可验收的子目标, 再对照【执行结果】逐个判断是否达成。"
+        prompt = (
+            "你是严格的验收员。" + instruction + "\n"
+            f"【总目标】\n{goal}\n\n" + goals_block + f"【执行结果】\n{answer}\n\n"
+            '只输出 JSON, 不要其他文字: '
+            '{"sub_goals": [{"goal": "子目标", "met": true/false, "missing": "未达成的缺口(达成则空串)"}], '
+            '"all_met": true/false}'
+        )
+        try:
+            raw = self.llm_call(prompt) or ""
+        except Exception as e:
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback=f"(goal 验证器 LLM 异常, 放行: {e})")
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback="(goal 验证器输出无 JSON, 放行)")
+        try:
+            data = json.loads(m.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback="(goal 验证器 JSON 解析失败, 放行)")
+        sub = data.get("sub_goals")
+        if not isinstance(sub, list) or not sub:
+            # 没拆出子目标 → 退回整体 all_met 判定, 不阻断
+            return VerifyResult(passed=bool(data.get("all_met", True)), fixable=False,
+                                verifier=self.name, feedback="(goal 未拆出子目标, 按整体判定)")
+        unmet = [sg for sg in sub if isinstance(sg, dict) and not sg.get("met", False)]
+        total = len(sub)
+        if not unmet:
+            return VerifyResult(passed=True, score=1.0, verifier=self.name)
+        gaps = "\n".join(
+            f"- 子目标未达成: {sg.get('goal', '')}; 缺口: {sg.get('missing', '')}" for sg in unmet
+        )
+        return VerifyResult(
+            passed=False, verifier=self.name,
+            score=round((total - len(unmet)) / total, 2),
+            feedback=f"{len(unmet)}/{total} 个子目标未达成:\n{gaps}",
+        )
+
+
 # 接入层注入: 返回当前生效的规范文本 (AGENTS.md / MEMORY.md / skills / 调用方传入)
 RulesProvider = Callable[[], str]
 
@@ -244,19 +322,25 @@ def run_verifiers(
 
 
 def collect_specs(extra_params: Optional[Dict[str, Any]]) -> List[VerifySpec]:
-    """从 extra_params.verify 解析 Execution specs, 末尾追加 task 终态确认。
+    """从 extra_params.verify 解析 Execution specs, 追加 goal(opt-in) + task 终态确认。
 
     extra_params.verify 形如 [{"type":"pytest","target":"tests/"}, "lint", ...];
+    extra_params.verify_goals=True (默认关) 追加子目标级验收, 可带 extra_params.goals
+        =["子目标1", ...] 显式指定要验收的子目标 (不给则 GoalVerifier 现场拆);
     extra_params.verify_task=False 可关掉终态确认 (默认开)。
     """
     specs: List[VerifySpec] = []
-    raw = (extra_params or {}).get("verify") or []
+    ep = extra_params or {}
+    raw = ep.get("verify") or []
     if isinstance(raw, (list, tuple)):
         for item in raw:
             s = VerifySpec.from_obj(item)
             if s is not None:
                 specs.append(s)
-    if (extra_params or {}).get("verify_task", True):
+    # 方向3 GoalVerifier: 子目标级验收, opt-in (默认关), 不改变既有 verify 行为
+    if ep.get("verify_goals"):
+        specs.append(VerifySpec(type="goal", args={"goals": ep.get("goals") or []}))
+    if ep.get("verify_task", True):
         specs.append(VerifySpec(type="task"))
     return specs
 
@@ -268,6 +352,7 @@ def make_registry(runner: ExecutionRunner, llm_call: LLMCall,
     reg: Dict[str, Verifier] = {
         "tool_success": ToolSuccessVerifier(),
         "execution": ExecutionVerifier(runner=runner),
+        "goal": GoalVerifier(llm_call=llm_call),
         "task": TaskVerifier(llm_call=llm_call),
     }
     if rules_provider is not None:
