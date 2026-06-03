@@ -4,7 +4,7 @@ import unittest
 
 from state_backend_module import InMemoryBackend
 from long_term_memory_module.core.impl import LongTermMemoryImpl
-from long_term_memory_module.model import Fact
+from long_term_memory_module.model import Fact, MemoryQuery
 
 
 def _mem(secret_key=None):
@@ -76,6 +76,35 @@ class TestExtractLayering(unittest.TestCase):
         m = LongTermMemoryImpl(backend=InMemoryBackend(), llm_client=_LLM())
         facts = m.extract_facts([{"role": "user", "content": "x"}])
         self.assertEqual(facts[0].mutability, "refinable")           # 非法值兜底 refinable
+
+
+class TestTwoLevelRetrieval(unittest.TestCase):
+    """MEM-5: digest 粗筛 → content 细比 两级检索 (无 embedder, 走子串两级路径)。"""
+
+    def test_digest_plus_content_double_hit(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="用户偏好 Python 编程", digest="偏好 Python", content_type="preference"))
+        hits = m.search_facts(MemoryQuery(query="Python"))
+        self.assertTrue(any(h.reason == "digest+content" for h in hits))  # 精炼+原始双命中
+
+    def test_content_only_hit(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="某文档提到 Django 很流行", digest="文档摘要", content_type="fact"))
+        hits = m.search_facts(MemoryQuery(query="Django"))
+        self.assertTrue(hits and hits[0].reason == "substring")  # digest 不沾边, 仅原始命中 (兼容旧 reason 名)
+
+    def test_encrypted_secret_findable_via_digest_only(self):
+        m = _mem(secret_key="k123")
+        m.add_fact(Fact.make(content="db_pwd=hunter2", content_type="secret", digest="生产数据库密码"))
+        hits = m.search_facts(MemoryQuery(query="数据库密码"))
+        self.assertTrue(len(hits) >= 1)
+        self.assertEqual(hits[0].reason, "digest_only")        # content 是密文, 靠 digest 命中
+        self.assertNotIn("hunter2", hits[0].fact.content)      # 结果不含明文
+
+    def test_no_match_returns_empty(self):
+        m = _mem()
+        m.add_fact(Fact.make(content="关于猫的事实", digest="猫"))
+        self.assertEqual(m.search_facts(MemoryQuery(query="量子计算")), [])
 
 
 if __name__ == "__main__":

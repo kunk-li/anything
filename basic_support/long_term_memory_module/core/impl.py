@@ -262,7 +262,9 @@ class LongTermMemoryImpl(BaseLongTermMemory):
                     seen_ids.add(f.fact_id)
                     self.mark_accessed(f.fact_id, tenant_id=tenant)
 
-        # 三阶段 — substring 兜底 (没 embedder 时主路径)
+        # 三阶段 — 两级检索 (MEM-5): 先在 digest(精炼层)粗筛"主题相关", 再用 content(原始层)细比确认。
+        # digest+content 双命中最可信; 仅 content 命中次之; 仅 digest 命中(主题沾边、细节未必/已加密) 给中分。
+        # 副作用: 加密 secret 的 content 是密文(搜不到), 但 digest 明文("X的密码")可被检索 → digest_only 命中。
         if len(hits) < query.top_k:
             q_lower = query.query.lower().strip()
             ids = self._backend.list_get(self._index_key(tenant))
@@ -270,19 +272,23 @@ class LongTermMemoryImpl(BaseLongTermMemory):
                 if fid in seen_ids:
                     continue
                 f = self._load_fact(tenant, str(fid))
-                if f is None:
+                if f is None or not self._tag_filter_pass(f, query) or f.confidence < query.min_confidence:
                     continue
-                if not self._tag_filter_pass(f, query):
+                hit_digest = bool(f.digest) and q_lower in f.digest.lower()    # L1 粗筛: 精炼层
+                hit_content = q_lower in f.content.lower()                     # L2 细比: 原始层
+                if not (hit_digest or hit_content):
                     continue
-                if f.confidence < query.min_confidence:
-                    continue
-                if q_lower in f.content.lower():
-                    score = min(0.95, len(q_lower) / max(len(f.content), 1))
-                    hits.append(MemoryHit(fact=f, score=score, reason="substring"))
-                    seen_ids.add(f.fact_id)
-                    self.mark_accessed(f.fact_id, tenant_id=tenant)
-                    if len(hits) >= query.top_k:
-                        break
+                if hit_digest and hit_content:
+                    score, reason = min(0.95, len(q_lower) / max(len(f.content), 1) + 0.3), "digest+content"
+                elif hit_content:
+                    score, reason = min(0.9, len(q_lower) / max(len(f.content), 1)), "substring"
+                else:
+                    score, reason = 0.5, "digest_only"   # 仅精炼层命中: 主题相关, 细节需细看/reveal
+                hits.append(MemoryHit(fact=f, score=score, reason=reason))
+                seen_ids.add(f.fact_id)
+                self.mark_accessed(f.fact_id, tenant_id=tenant)
+                if len(hits) >= query.top_k:
+                    break
 
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[: query.top_k]
