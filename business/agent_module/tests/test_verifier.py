@@ -9,7 +9,7 @@ import unittest
 from agent_module.core.impl import SimpleAgent
 from agent_module.core.components.verifier import (
     VerifySpec,
-    ToolSuccessVerifier, ExecutionVerifier, TaskVerifier,
+    ToolSuccessVerifier, ExecutionVerifier, TaskVerifier, ComplianceVerifier,
     run_verifiers,
 )
 
@@ -198,6 +198,72 @@ class TestSelfVerifyLoop(unittest.TestCase):
         })
         self.assertFalse(resp["details"]["verify_passed"])
         self.assertIn("verify_gaps", resp["details"])
+
+
+class TestExecutionRunnerReal(unittest.TestCase):
+    """VER-6: 真跑 _build_verify_runner (非 mock), 验证 4 场景框架真能工作。
+    sql(sqlite 内存) / shell(cmd) 必可跑; pytest 项目本就装了。"""
+
+    def _runner(self):
+        return SimpleAgent(tool_registry=_Reg(), llm_planner=None)._build_verify_runner()
+
+    def test_sql_real_pass_and_fail(self):
+        r = self._runner()
+        ok = r(VerifySpec(type="sql", target="CREATE TABLE t(a INT); INSERT INTO t VALUES (1);"))
+        self.assertEqual(ok["exit_code"], 0)
+        bad = r(VerifySpec(type="sql", target="SELECT * FROM no_such_table_xyz;"))
+        self.assertNotEqual(bad["exit_code"], 0)
+        self.assertTrue(bad["stderr"])
+
+    def test_shell_real_pass_and_fail(self):
+        r = self._runner()
+        ok = r(VerifySpec(type="shell", target="echo verify_ok_marker"))
+        self.assertEqual(ok["exit_code"], 0)
+        self.assertIn("verify_ok_marker", ok["stdout"])
+        bad = r(VerifySpec(type="shell", target="exit 3"))
+        self.assertEqual(bad["exit_code"], 3)
+
+    def test_pytest_real_failure_path(self):
+        # 跑不存在的路径, pytest 应返回非 0 (验证 runner 真能捕获失败且不挂)
+        out = self._runner()(VerifySpec(type="pytest", target="__no_such_test_dir_xyz__",
+                                        args={"timeout": 30}))
+        self.assertNotEqual(out["exit_code"], 0)
+
+
+class TestComplianceVerifier(unittest.TestCase):
+    """VER-7: 规范合规检查。"""
+
+    def test_no_rules_passes(self):
+        v = ComplianceVerifier(llm_call=lambda p: "", rules_provider=lambda: "")
+        r = v.verify(goal="g", result={"answer": "x"}, spec=VerifySpec(type="compliance"))
+        self.assertTrue(r.passed)   # 无规范 → 放行
+
+    def test_compliant(self):
+        v = ComplianceVerifier(llm_call=lambda p: '{"compliant": true}',
+                               rules_provider=lambda: "禁用 eval")
+        r = v.verify(goal="g", result={"answer": "用了 ast.literal_eval"}, spec=VerifySpec(type="compliance"))
+        self.assertTrue(r.passed)
+
+    def test_violation_carries_detail(self):
+        v = ComplianceVerifier(llm_call=lambda p: '{"compliant": false, "violations": "直接用了 eval"}',
+                               rules_provider=lambda: "禁用 eval")
+        r = v.verify(goal="g", result={"answer": "eval(x)"}, spec=VerifySpec(type="compliance"))
+        self.assertFalse(r.passed)
+        self.assertIn("eval", r.feedback)
+
+    def test_llm_exception_fail_open(self):
+        def boom(p):
+            raise RuntimeError("down")
+        v = ComplianceVerifier(llm_call=boom, rules_provider=lambda: "some rule")
+        r = v.verify(goal="g", result={"answer": "x"}, spec=VerifySpec(type="compliance"))
+        self.assertTrue(r.passed)   # fail-open
+
+    def test_rules_provider_exception_passes(self):
+        def boom():
+            raise RuntimeError("read fail")
+        v = ComplianceVerifier(llm_call=lambda p: '{"compliant": false}', rules_provider=boom)
+        r = v.verify(goal="g", result={"answer": "x"}, spec=VerifySpec(type="compliance"))
+        self.assertTrue(r.passed)   # 取规范失败 → 放行
 
 
 if __name__ == "__main__":

@@ -168,6 +168,57 @@ class TaskVerifier(Verifier):
         )
 
 
+# 接入层注入: 返回当前生效的规范文本 (AGENTS.md / MEMORY.md / skills / 调用方传入)
+RulesProvider = Callable[[], str]
+
+
+class ComplianceVerifier(Verifier):
+    """规范合规检查 (LLMJudge): 执行结果/做法是否违反【已声明规范】。
+
+    规范来源由 rules_provider 注入 (AGENTS.md / MEMORY.md / skills / extra_params)。
+    无规范 → 放行; LLM 故障 / 无法解析 → fail-open 放行。
+    """
+    name = "compliance"
+
+    def __init__(self, llm_call: LLMCall, rules_provider: RulesProvider):
+        self.llm_call = llm_call
+        self.rules_provider = rules_provider
+
+    def verify(self, *, goal, result, spec, ctx=None) -> VerifyResult:
+        try:
+            rules = (self.rules_provider() or "").strip()
+        except Exception:
+            rules = ""
+        if not rules:
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback="(无已声明规范, 跳过合规检查)")
+        answer = TaskVerifier._extract_answer(result)
+        prompt = (
+            "你是规范审查员。判断下面的执行结果/做法是否违反了【已声明规范】。\n"
+            f"【已声明规范】\n{rules[:3000]}\n\n【目标】\n{goal}\n\n【执行结果】\n{answer}\n\n"
+            '只输出 JSON, 不要其他文字: '
+            '{"compliant": true/false, "violations": "违反的具体条目(合规则空串)"}'
+        )
+        try:
+            raw = self.llm_call(prompt) or ""
+        except Exception as e:
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback=f"(compliance LLM 异常, 放行: {e})")
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback="(compliance 输出无 JSON, 放行)")
+        try:
+            data = json.loads(m.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return VerifyResult(passed=True, fixable=False, verifier=self.name,
+                                feedback="(compliance JSON 解析失败, 放行)")
+        if bool(data.get("compliant", True)):
+            return VerifyResult(passed=True, verifier=self.name)
+        return VerifyResult(passed=False, verifier=self.name,
+                            feedback=f"违反规范: {data.get('violations', '')}")
+
+
 def run_verifiers(
     *,
     goal: str,
@@ -210,10 +261,15 @@ def collect_specs(extra_params: Optional[Dict[str, Any]]) -> List[VerifySpec]:
     return specs
 
 
-def make_registry(runner: ExecutionRunner, llm_call: LLMCall) -> Dict[str, Verifier]:
-    """构造默认验证器注册表 (tool_success / execution / task)。"""
-    return {
+def make_registry(runner: ExecutionRunner, llm_call: LLMCall,
+                  rules_provider: Optional[RulesProvider] = None) -> Dict[str, Verifier]:
+    """构造默认验证器注册表 (tool_success / execution / task [/ compliance])。
+    rules_provider 提供时额外注册 compliance 验证器。"""
+    reg: Dict[str, Verifier] = {
         "tool_success": ToolSuccessVerifier(),
         "execution": ExecutionVerifier(runner=runner),
         "task": TaskVerifier(llm_call=llm_call),
     }
+    if rules_provider is not None:
+        reg["compliance"] = ComplianceVerifier(llm_call=llm_call, rules_provider=rules_provider)
+    return reg

@@ -505,6 +505,27 @@ class SimpleAgent(
 
         return runner
 
+    def _collect_compliance_rules(self, extra) -> str:
+        """合规检查的规范来源: 优先 extra_params.compliance_rules; 否则尽力取项目级
+        记忆 (AGENTS.md / ProjectMemory)。取不到返回空串 → compliance 自动放行。"""
+        explicit = (extra or {}).get("compliance_rules")
+        if explicit:
+            return str(explicit)
+        pm = getattr(self, "project_memory", None)
+        if pm is None:
+            pm = getattr(getattr(self, "deps", None), "project_memory", None)
+        if pm is not None:
+            for meth in ("get_memory_text", "as_text", "get_content", "render", "load"):
+                fn = getattr(pm, meth, None)
+                if callable(fn):
+                    try:
+                        txt = fn()
+                        if txt:
+                            return str(txt)
+                    except Exception:
+                        pass
+        return ""
+
     def _post_verify(self, request, response, original_task, start_time):
         """对执行结果跑验证; auto 模式失败时带 feedback 递归纠正 (预算护栏)。
         enable_self_verify=off / verify_mode=off 时原样返回 (零影响)。"""
@@ -525,7 +546,10 @@ class SimpleAgent(
         if llm_call is None:
             # 无 LLM 通道: 终态确认无法判, 退化为放行 (只让 execution 验证生效)
             llm_call = lambda _p: '{"completed": true}'
-        registry = make_registry(runner=self._build_verify_runner(), llm_call=llm_call)
+        registry = make_registry(
+            runner=self._build_verify_runner(), llm_call=llm_call,
+            rules_provider=lambda: self._collect_compliance_rules(extra),
+        )
 
         vresults = run_verifiers(
             goal=original_task, result=response.get("data") or response,
