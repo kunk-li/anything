@@ -253,6 +253,23 @@ def build_business_layer(
         llm_client=llm_client,               # 真流式: Agent run_stream 直连 chat_stream
     )
 
+    # 外部工具连接 (RFC Stage1): 从 config agent.external_tools 注册 HTTP 外部工具,
+    # 默认并入 agent 审批白名单 (human-in-loop)。无配置/失败均不阻断启动 (fail-safe)。
+    try:
+        from agent_module.tools.external import (
+            build_providers_from_config, register_external_tools,
+        )
+        _ext_providers = build_providers_from_config(deps.config)
+        if _ext_providers:
+            _ext_approval = register_external_tools(tool_registry, _ext_providers)
+            agent.tool_approval_required.update(_ext_approval)
+            deps.logger.info(
+                f"[ext-tools] 注册外部工具 {len(_ext_approval)} 个 (默认需审批): "
+                f"{sorted(_ext_approval)}"
+            )
+    except Exception as _ext_err:
+        deps.logger.warning(f"[ext-tools] 外部工具注册失败 (忽略): {_ext_err}")
+
     # Task EE (#65): spawn_subagent — 需要拿到 parent agent 引用, 所以在 new
     # SimpleAgent 之后再注册到同一个 tool_registry. 子 agent 跑 ReAct 时复用
     # 这个 registry 但用 _RestrictedRegistry 限制可见工具子集.
