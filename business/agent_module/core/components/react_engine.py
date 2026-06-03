@@ -42,6 +42,7 @@ class ReActEngineMixin:
             trace_id: Optional[str],
             extra_params: Dict[str, Any],
             start_time: float,
+            timeout: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """ReAct 多轮循环: observe -> reflect -> next, 直到 final_answer 或 max iterations.
 
@@ -107,6 +108,11 @@ class ReActEngineMixin:
             payload={"task": task, "max_iterations": max_iter},
         )
 
+        # AUDIT-2a: wall-clock 超时 enforce. doc/错误码表承诺 agent.timeout / AGENT_TIMEOUT,
+        # 但历史上 timeout 只写进 state payload 从不生效, 长 ReAct 循环无超时兜底。
+        effective_timeout = timeout if (timeout and timeout > 0) else getattr(self, "timeout", 0)
+        timed_out = False
+
         history: List[Dict[str, Any]] = []
         tool_results: List[Dict[str, Any]] = []
         final_answer: Optional[str] = None
@@ -115,6 +121,16 @@ class ReActEngineMixin:
         tool_descriptions = self._tool_descriptions()
 
         for iteration in range(1, max_iter + 1):
+            # AUDIT-2a: 每轮入口检查 wall-clock; 超过 timeout 立即中止, 不再开新一轮 LLM+工具
+            if effective_timeout and (time.time() - start_time) > effective_timeout:
+                timed_out = True
+                self._append_state_event(
+                    session_id=session_id, event_type="react_timeout", trace_id=trace_id,
+                    payload={"iteration": iteration,
+                             "elapsed": round(time.time() - start_time, 3),
+                             "timeout": effective_timeout},
+                )
+                break
             prompt = self._build_react_prompt(
                 task=task,
                 available_tools=available_tools,
@@ -281,6 +297,26 @@ class ReActEngineMixin:
                 session_id=session_id, event_type="react_observation", trace_id=trace_id,
                 payload={"iteration": iteration, "tool_name": tool_name, "success": tool_result.get("success"), "obs": observation[:200]},
             )
+
+        # AUDIT-2a: 超时中止 → 返回 AGENT_TIMEOUT (带已完成的部分轨迹), 不伪装成 SUCCESS
+        if timed_out and not final_answer:
+            return {
+                "code": "AGENT_TIMEOUT",
+                "message": f"Agent ReAct 执行超过 {effective_timeout}s 超时中止 (已完成 {len(history)} 轮)",
+                "data": {
+                    "answer": "", "session_id": session_id, "trace_id": trace_id,
+                    "execution_mode": "react", "execution_strategy": "react",
+                    "iterations_used": len(history),
+                    "tool_results_summary": [
+                        {"tool_name": tr.get("tool_name"), "success": tr.get("success")}
+                        for tr in tool_results
+                    ],
+                    "citations": [], "retrieved_chunks": [],
+                },
+                "trace_id": trace_id, "retryable": True,
+                "details": {"timeout": effective_timeout, "iterations_used": len(history)},
+                "cost_time": round(time.time() - start_time, 3),
+            }
 
         # 循环结束: 整合最终结果
         if final_answer is None and last_observation is not None:

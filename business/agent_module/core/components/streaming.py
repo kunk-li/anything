@@ -231,9 +231,17 @@ class StreamingMixin:
         final_answer: Optional[str] = None
         last_observation: Optional[Dict[str, Any]] = None
         tool_descriptions = self._tool_descriptions()
+        # AUDIT-2a: 流式 ReAct wall-clock 超时 (per-request timeout 覆盖 self.timeout)
+        _stream_timeout = int(request.get("timeout") or getattr(self, "timeout", 0) or 0)
 
         try:
             for iteration in range(1, self.max_react_iterations + 1):
+                # AUDIT-2a: 每轮入口检查超时; 超过则 yield done(AGENT_TIMEOUT) 收尾, 不再开新一轮
+                if _stream_timeout and (time.time() - start_time) > _stream_timeout:
+                    yield {"type": "done", "code": "AGENT_TIMEOUT",
+                           "message": f"Agent 流式执行超过 {_stream_timeout}s 超时中止 (已完成 {len(history)} 轮)",
+                           "cost_time": round(time.time() - start_time, 3)}
+                    return
                 prompt = self._build_react_prompt(
                     task=task, available_tools=available_tools,
                     history=history, iteration=iteration,

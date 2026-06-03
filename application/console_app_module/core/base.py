@@ -16,7 +16,8 @@ class BaseConsoleApp(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def build_request(self, console_input: ConsoleInput) -> Dict[str, Any]:
+    def build_request(self, source: ConsoleInput | Dict[str, Any] | str) -> Dict[str, Any]:
+        """source 可为 ConsoleInput / dict / 原始 str, 统一构造 request body。"""
         raise NotImplementedError
 
     @abstractmethod

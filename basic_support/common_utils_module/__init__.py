@@ -6,6 +6,7 @@
 Task U (#55): 同时暴露 ProjectMemory — Agent/RAG init 时注入项目级记忆.
 """
 
+from .core.base import BaseUtils
 from .core.impl import CommonUtils
 from .utils.project_memory import ProjectMemory, get_project_memory, reset_project_memory
 from .utils.hooks import (
@@ -37,7 +38,7 @@ from .utils.audit_log import (
 )
 
 __all__ = [
-    "CommonUtils",
+    "BaseUtils", "CommonUtils",
     "ProjectMemory", "get_project_memory", "reset_project_memory",
     "BlockedError", "HookRegistry", "get_hook_registry", "reset_hook_registry",
     "Skill", "SkillRegistry", "get_skill_registry", "reset_skill_registry",

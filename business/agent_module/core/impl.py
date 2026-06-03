@@ -312,7 +312,17 @@ class SimpleAgent(
             )
 
             tool_results = []
+            _ss_timed_out = False
             for step in plan.get("steps", []):
+                # AUDIT-2a: single_shot 步骤循环同样 enforce wall-clock 超时,
+                # 超时则中止后续步骤, 返回已完成步骤的部分结果 (下方 response 标 AGENT_TIMEOUT)。
+                if timeout and (time.time() - start_time) > timeout:
+                    _ss_timed_out = True
+                    self._append_state_event(
+                        session_id=session_id, event_type="task_timeout", trace_id=trace_id,
+                        payload={"elapsed": round(time.time() - start_time, 3), "timeout": timeout},
+                    )
+                    break
                 step_id = step.get("step_id")
                 tool_name = step.get("tool_name")
                 self._append_state_event(
@@ -404,9 +414,11 @@ class SimpleAgent(
                     )
 
             response = {
-                "code": "SUCCESS", "message": "ok",
+                "code": "AGENT_TIMEOUT" if _ss_timed_out else "SUCCESS",
+                "message": (f"Agent 执行超过 {timeout}s 超时, 返回已完成步骤的部分结果"
+                            if _ss_timed_out else "ok"),
                 "data": aggregated, "trace_id": trace_id,
-                "retryable": False, "details": None,
+                "retryable": bool(_ss_timed_out), "details": None,
                 "cost_time": round(time.time() - start_time, 3),
             }
             # 把命中的记忆条目 / 反思 meta 记到 details, 让前端 / debug 可见

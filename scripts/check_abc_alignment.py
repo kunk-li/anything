@@ -51,6 +51,21 @@ TARGETS: List[Tuple[str, str, str]] = [
     ("orchestrator_module", "BaseOrchestrator", "SimpleOrchestrator"),
     # 接口/应用层
     ("request_response_module", "BaseRequestHandler", "RequestHandler"),
+    # 基础支撑层 (AUDIT-2c 补充)
+    ("common_utils_module", "BaseUtils", "CommonUtils"),
+    ("config_module", "BaseConfigManager", "ConfigManager"),
+    ("log_module", "BaseLogger", "SystemLogger"),
+    ("exception_module", "BaseExceptionHandler", "ExceptionHandler"),
+    # cross-cutting (AUDIT-2c 补充)
+    ("long_term_memory_module", "BaseLongTermMemory", "LongTermMemoryImpl"),
+    ("state_backend_module", "StateBackend", "InMemoryBackend"),
+    ("state_backend_module", "StateBackend", "SqliteBackend"),
+    ("state_backend_module", "StateBackend", "RedisBackend"),
+    # 应用层 (AUDIT-2c 补充)
+    ("console_app_module", "BaseConsoleApp", "ConsoleApp"),
+    # 注: api_service_module 的 ApiService 继承 12 个 RoutesMixin 而非 BaseApiService
+    #     (孤儿 ABC); 强行纳入会报"未继承"。留待 AUDIT-3 决策(让 ApiService 继承
+    #     BaseApiService 并实现抽象方法, 或删除无人实现的 BaseApiService)。
 ]
 
 
@@ -151,6 +166,12 @@ def _check_pair(module_name: str, base_name: str, impl_name: str) -> List[str]:
 
 
 def main(argv: List[str] | None = None) -> int:
+    # Windows GBK 控制台无法打印 ↔ 等 Unicode 字符，强制 stdout 用 UTF-8。
+    # 否则本地 pre-commit 运行会 UnicodeEncodeError 崩溃（CI 的 UTF-8 环境不受影响）。
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="检测 ABC 与实现签名漂移")
     parser.add_argument("--ci", action="store_true",
                         help="CI 模式:有漂移时 exit 1")

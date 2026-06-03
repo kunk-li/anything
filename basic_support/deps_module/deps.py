@@ -138,7 +138,7 @@ class BasicDeps:
         audit_logger:     AuditLogger            (Task CC #63)
         project_memory:   ProjectMemory          (Task U #55)
         usage_tracker:    UsageTracker           (Task Y #59)
-        health_tracker:   ModelHealthTracker     (Task HH #68)
+        health_tracker:   ModelHealthTracker     (Task HH #68; 见 build 内注: 不在此获取, 默认 None)
 
     用法 — 推荐 DI:
         agent = SimpleAgent(deps=deps); reg = deps.hook_registry
@@ -317,11 +317,11 @@ def build_basic_deps() -> BasicDeps:
         usage_tracker = get_usage_tracker()
     except Exception:
         pass
-    try:
-        from llm_adapter_module.utils import get_health_tracker
-        health_tracker = get_health_tracker()
-    except Exception:
-        pass
+    # health_tracker 属 data_layer (llm_adapter_module)；basic_support 不反向 import
+    # 上层模块以保持分层纯净 (AUDIT-2b)。真实消费方 (llm_adapter core/impl 内部、
+    # admin 路由) 都直接 get_health_tracker() 拿同一进程单例，不经 deps；过去这里的
+    # 反向 import 无任何消费方读取，纯冗余。如需经 deps 共享，由 run 层 (可合法依赖
+    # data_layer) 装配后注入 deps.health_tracker。
 
     return BasicDeps(
         config=config,
