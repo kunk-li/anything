@@ -138,6 +138,20 @@ class SimpleAgent(
             default=2, value_type=int,
         )
 
+        # UP-4 (方向1 阶段2, query refinement): 默认关。off 时 execute 行为零变化。
+        # 开: agent.enable_query_refine=true。用户问得含糊时, 基于画像把问题补全/澄清
+        # 后再规划; 严格保留原意, 失败一律 fail-open 用原问题。单次可 extra_params
+        # .enable_query_refine 覆盖。query_refine_max_len: 超此长度的问题视为已足够具体,
+        # 不折腾(省 LLM 调用, 也避免画蛇添足)。
+        self.enable_query_refine = self.config.get_effective_value(
+            "agent.enable_query_refine", env_var="ANYTHING_AGENT_QUERY_REFINE",
+            default=False, value_type=bool,
+        )
+        self.query_refine_max_len = self.config.get_effective_value(
+            "agent.query_refine_max_len", env_var="ANYTHING_AGENT_QUERY_REFINE_MAX_LEN",
+            default=200, value_type=int,
+        )
+
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
         default_dangerous = [
@@ -259,6 +273,27 @@ class SimpleAgent(
         original_task = task
         memory_tenant = self._memory_tenant(request)
         memory_hits_used: List[Dict[str, Any]] = []
+
+        # UP-4 (方向1 阶段2): query refinement — 用户问得含糊时, 先基于画像把问题
+        # 补全/澄清, 再走下面的记忆/画像/历史注入与规划。只改 task(规划输入),
+        # original_task 保持用户原话(history 展示 / 记忆抽取用)。默认关, 纠正递归跳过。
+        refine_meta: Optional[Dict[str, Any]] = None
+        _refine_on = extra_params.get("enable_query_refine")
+        if _refine_on is None:
+            _refine_on = self.enable_query_refine
+        if (task and _refine_on and self.memory_enabled
+                and self.long_term_memory is not None
+                and not extra_params.get("_skip_history_prefix")):
+            try:
+                _refined, refine_meta = self._refine_query(task, memory_tenant, trace_id)
+                if refine_meta:
+                    task = _refined
+            except Exception as _rq_err:
+                self.logger.warning(
+                    f"[refine] query refinement 失败 (用原问题继续): "
+                    f"trace_id={trace_id} err={_rq_err}"
+                )
+
         if task and self.memory_enabled and self.long_term_memory is not None:
             try:
                 augmented_task, memory_hits_used = self._inject_long_term_memory(
@@ -300,6 +335,13 @@ class SimpleAgent(
                 extra_params=extra_params, start_time=start_time,
             )
             if react_result is not None:
+                # UP-4: react 也走了 refine(在分支前), 在此单一出口补记 details, 不碰 react 引擎
+                if refine_meta and isinstance(react_result, dict):
+                    _rd = react_result.get("details")
+                    if not isinstance(_rd, dict):
+                        _rd = {}
+                    _rd["query_refinement"] = refine_meta
+                    react_result["details"] = _rd
                 return self._post_verify(request, react_result, original_task, start_time)
             self.logger.warning(
                 f"[react] 多轮规划不可用(无 LLM 通道/任务不适合), fallback 到 single_shot: trace_id={trace_id}"
@@ -453,6 +495,8 @@ class SimpleAgent(
             details: Dict[str, Any] = {}
             if memory_hits_used:
                 details["memory_hits"] = memory_hits_used
+            if refine_meta:
+                details["query_refinement"] = refine_meta
             if reflection_meta:
                 details["reflection"] = reflection_meta
             if details:
@@ -1143,6 +1187,74 @@ class SimpleAgent(
                 lines.append(f"- [{labels.get(dim, dim)}] {it}")
         lines.append("")
         return "\n".join(lines) + task
+
+    def _refine_query(
+        self, task: str, tenant_id: str, trace_id: Optional[str],
+    ) -> tuple:
+        """UP-4 (方向1 阶段2): 用户问得含糊时, 基于画像把问题补全/澄清后再规划。
+
+        区别于 _inject_user_profile(把画像当上下文附在 task 前): 这里直接改写"问题本身",
+        让规划/检索拿到的是"用户本来就想问的更精确版本"。
+
+        返回 (refined_task, meta)。任一前提不满足 (问题已清楚 / 无画像 / 无 LLM / 解析失败
+        / 安全阀拦截) 都返回 (task, None) — 主链路用原问题, 零副作用 (fail-open)。
+        meta = {"original", "refined", "reason"}, 由 execute 记到 details 透明可见。
+
+        设计原则 (minimal-change + human-in-loop): 仅在确有歧义时改写, 严格保留原意,
+        只补"知道使用者偏好就能确定的缺省"(语言/技术栈/格式/范围/默认值),
+        绝不替用户臆造其没表达的新需求。改写是否发生、补了什么, 全程记 details 可回溯。
+        """
+        # gate 0: 已足够具体的长问题不折腾 (省 LLM, 也避免画蛇添足)
+        if len(task) > self.query_refine_max_len:
+            return task, None
+        # gate 1: "基于画像优化" 的前提是有画像
+        profile = self.long_term_memory.get_user_profile(tenant_id)
+        if not profile:
+            return task, None
+        # gate 2: 需要 LLM 通道做"判含糊 + 改写"
+        llm = self._resolve_llm_planner(trace_id=trace_id)
+        if llm is None:
+            return task, None
+
+        labels = {"preference": "偏好", "style": "风格", "convention": "约定",
+                  "domain": "领域", "weakness": "需主动补位"}
+        profile_lines = [f"- [{labels.get(dim, dim)}] {it}"
+                         for dim, items in profile.items() for it in items]
+        prompt = (
+            "你在帮一个 AI 助手澄清用户的问题。下面给出这个用户的画像, 和用户刚提的问题。\n"
+            "判断该问题是否含糊/缺省到了 '知道用户偏好就能问得更准' 的程度, 并按规则处理:\n"
+            "1. 若问题已清楚完整, 或含糊点只能靠对话上文(而非画像)补 → needs_refine=false。\n"
+            "2. 若含糊且画像能补 → 基于画像补全缺省(语言/技术栈/格式/范围/默认值), "
+            "严格保留用户原意, 不得臆造用户没表达的新需求。\n"
+            "3. refined 应是 '用户本来就想问的更精确版本', 而不是你对问题的回答。\n"
+            f"\n[用户画像]\n" + "\n".join(profile_lines) +
+            f"\n\n[用户的问题]\n{task}\n"
+            '\n只输出 JSON(不要解释): '
+            '{"needs_refine": true/false, "refined": "改写后的问题(needs_refine=false 时留空)", '
+            '"reason": "一句话说明补了什么(中文)"}'
+        )
+        try:
+            raw = llm(prompt)
+        except Exception as e:
+            self.logger.warning(f"[refine] LLM 调用异常 (用原问题继续): trace_id={trace_id} err={e}")
+            return task, None
+
+        data = self._parse_reflection_json(raw)  # 复用通用 LLM-JSON 解析 (兼容围栏/前后文字)
+        if not isinstance(data, dict) or not data.get("needs_refine"):
+            return task, None
+        refined = str(data.get("refined") or "").strip()
+        # 安全阀: 改写结果须非空, 且不能比原问题短太多 (防 LLM 把问题"截没了"/答非所问)
+        if not refined or len(refined) < max(4, len(task) // 4):
+            return task, None
+        meta = {
+            "original": task[:300],
+            "refined": refined[:300],
+            "reason": str(data.get("reason") or "")[:200],
+        }
+        self.logger.info(
+            f"[refine] 问题已基于画像优化: trace_id={trace_id} reason={meta['reason']!r}"
+        )
+        return refined, meta
 
     def _extract_and_store_memory(
         self,
