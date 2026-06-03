@@ -24,6 +24,9 @@ from .components import (
     PromptBuilderMixin,
 )
 from .components.verifier import collect_specs, make_registry, run_verifiers
+from .components.self_reflection import (
+    SelfReflectionInspector, aggregate_audit_signals,
+)
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 from observability_module import trace_span
@@ -150,6 +153,14 @@ class SimpleAgent(
         self.query_refine_max_len = self.config.get_effective_value(
             "agent.query_refine_max_len", env_var="ANYTHING_AGENT_QUERY_REFINE_MAX_LEN",
             default=200, value_type=int,
+        )
+
+        # 方向4 (自主维护 / 第一级 建议性自主): 默认关。按需 self_reflect() 检视自身历史执行
+        # → LLM 元级反思 → 改进提议 (dry-run); apply 仅在人显式审批后把"教训"落长期记忆。
+        # 仅"提议", 绝不自动执行性维护 (务必分级, 全程 human-in-loop)。
+        self.enable_self_reflection = self.config.get_effective_value(
+            "agent.enable_self_reflection", env_var="ANYTHING_AGENT_SELF_REFLECTION",
+            default=False, value_type=bool,
         )
 
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
@@ -1255,6 +1266,136 @@ class SimpleAgent(
             f"[refine] 问题已基于画像优化: trace_id={trace_id} reason={meta['reason']!r}"
         )
         return refined, meta
+
+    # ============================================================
+    # 方向4 (自主维护 / 第一级 建议性自主): 行为自反思 — 按需提议, 人审批才执行
+    # ============================================================
+    def _resolve_audit_path(self, audit_path: Optional[str]) -> Optional[str]:
+        """定位审计日志 JSONL: 显式参数 > deps.audit_logger.path > 全局单例 > env。"""
+        if audit_path:
+            return audit_path
+        al = getattr(getattr(self, "deps", None), "audit_logger", None)
+        if al is not None and getattr(al, "path", None):
+            return str(al.path)
+        try:
+            from audit_module import get_audit_logger
+            return str(get_audit_logger().path)
+        except Exception:
+            return os.environ.get("ANYTHING_AUDIT_LOG_PATH")
+
+    def _read_audit_tail(self, path: str, max_records: int) -> List[Dict[str, Any]]:
+        """读审计日志尾部最多 max_records 条 (JSONL); 坏行跳过, 文件缺失/异常返 []。"""
+        import json as _json
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except (OSError, ValueError):
+            return []
+        out: List[Dict[str, Any]] = []
+        for line in lines[-max(1, max_records):]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = _json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(obj, dict):
+                out.append(obj)
+        return out
+
+    def self_reflect(
+        self,
+        audit_path: Optional[str] = None,
+        max_records: int = 500,
+        trace_id: Optional[str] = None,
+        context: str = "",
+    ) -> Dict[str, Any]:
+        """方向4 第一级: 按需检视自身历史执行 (审计日志聚合) → LLM 元级反思 → 改进提议。
+
+        **dry-run 零改动** (不碰记忆/配置/代码); 提议须经 apply_reflection_proposals 人审批后才落地。
+        返回 {"enabled","signals","proposals":[...],"note"}。enable_self_reflection=off /
+        无 LLM 通道 / 审计日志为空 → 空提议 + note (fail-safe, 绝不抛、绝不改状态)。
+        """
+        if not self.enable_self_reflection:
+            return {"enabled": False, "signals": {}, "proposals": [],
+                    "note": "self_reflection 未启用 (开: agent.enable_self_reflection)"}
+        path = self._resolve_audit_path(audit_path)
+        records = self._read_audit_tail(path, max_records) if path else []
+        signals = aggregate_audit_signals(records)
+        llm = self._resolve_llm_planner(trace_id=trace_id)
+        if llm is None:
+            return {"enabled": True, "signals": signals, "proposals": [],
+                    "note": "无 LLM 通道, 只给聚合信号不反思"}
+        try:
+            proposals = SelfReflectionInspector(llm_call=llm).reflect(signals, context=context)
+        except Exception as e:
+            self.logger.warning(f"[self_reflect] 反思失败 (返回空提议): trace_id={trace_id} err={e}")
+            proposals = []
+        self.logger.info(
+            f"[self_reflect] 分析 {signals.get('records_analyzed', 0)} 条审计 → "
+            f"{len(proposals)} 条提议: trace_id={trace_id}"
+        )
+        return {
+            "enabled": True, "signals": signals,
+            "proposals": [p.to_dict() for p in proposals],
+            "note": "dry-run 提议; 审批后调 apply_reflection_proposals 落地",
+        }
+
+    def apply_reflection_proposals(
+        self,
+        proposals: List[Dict[str, Any]],
+        approved_ids: List[str],
+        tenant_id: str = "default",
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """方向4: 仅把【人审批通过】且 action_type=record_lesson 的提议落长期记忆 (操作约定)。
+        非 record_lesson / 未审批 一律不动; 绝不自动改配置/代码。返回 {"applied","skipped","details"}。
+
+        建议性自主闭环: 反思 → 提议 → 人审批 → 教训以 convention 进记忆 → 经画像 always-on
+        注入改进未来行为。tags=['self_reflection','lesson'] 便于溯源/后续清理。
+        """
+        approved = set(approved_ids or [])
+        applied, skipped = 0, 0
+        details: List[Dict[str, Any]] = []
+        for p in (proposals or []):
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id")
+            if pid not in approved:
+                skipped += 1
+                continue
+            if p.get("action_type") != "record_lesson":
+                skipped += 1
+                details.append({"id": pid, "result": "skip_non_lesson",
+                                "action_type": p.get("action_type")})
+                continue
+            if self.long_term_memory is None:
+                skipped += 1
+                details.append({"id": pid, "result": "skip_no_memory"})
+                continue
+            lesson = str(p.get("proposed_action") or p.get("problem") or "").strip()
+            if not lesson:
+                skipped += 1
+                continue
+            try:
+                from long_term_memory_module import Fact
+                f = Fact.make(
+                    content=f"[自反思·约定] {lesson}",
+                    tenant_id=tenant_id, mutability="refinable",
+                    content_type="convention", digest=lesson[:100],
+                    tags=["self_reflection", "lesson"],
+                )
+                self.long_term_memory.add_fact(f)
+                applied += 1
+                details.append({"id": pid, "result": "recorded_to_memory", "fact_id": f.fact_id})
+            except Exception as e:
+                skipped += 1
+                details.append({"id": pid, "result": f"error: {e}"})
+        self.logger.info(
+            f"[self_reflect] apply: {applied} 落记忆 / {skipped} 跳过: trace_id={trace_id}"
+        )
+        return {"applied": applied, "skipped": skipped, "details": details}
 
     def _extract_and_store_memory(
         self,

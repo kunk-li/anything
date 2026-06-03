@@ -1,0 +1,171 @@
+# -*- coding: utf-8 -*-
+"""
+自主维护 / 行为自反思 (方向4 / 第一级: 建议性自主).
+
+设计 (务必分级, 全程 human-in-loop):
+    THINK    只读检视 agent 自身历史执行 (审计日志聚合), 推断哪些行为问题反复出现
+    PROPOSE  LLM 元级反思 → 结构化改进提议 (问题 + 证据 + 建议动作), dry-run 零改动
+    APPROVE  每条提议须人显式审批 (由接入层 gate)
+    APPLY    仅审批后经安全动作执行 (MVP: 把"教训"落长期记忆反哺画像; 绝不自动改配置/代码)
+
+区别于 verifier.py 的 TaskVerifier / impl 的 _reflect_revise (对单次答案反思): 本模块是
+**元级**反思 —— 跨多次任务的行为模式 (哪个工具老失败 / 反复超时 / 成本异常 / 错误码扎堆)。
+
+零外部依赖 (records / llm_call 由接入层注入), 可独立单测。fail-open: 反思本身出错
+绝不阻断 (返回空提议), 它是增强不是新失败源。
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List
+
+ACTION_TYPES = ("record_lesson", "config_suggestion", "investigate", "advisory")
+SEVERITIES = ("info", "warn", "high")
+
+
+@dataclass
+class ReflectionProposal:
+    """一条行为改进提议 (建议性, 须人审批才执行)。"""
+    id: str
+    problem: str                       # 反复出现的问题
+    evidence: str = ""                 # 支撑证据 (来自聚合信号)
+    proposed_action: str = ""          # 建议怎么改
+    action_type: str = "advisory"      # record_lesson | config_suggestion | investigate | advisory
+    severity: str = "info"             # info | warn | high
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id, "problem": self.problem, "evidence": self.evidence,
+            "proposed_action": self.proposed_action, "action_type": self.action_type,
+            "severity": self.severity,
+        }
+
+
+# 接入层注入: prompt -> text (复用 agent 的 llm planner 通道)
+LLMCall = Callable[[str], str]
+
+
+def aggregate_audit_signals(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """确定性聚合审计记录 (无 LLM): per-tool 成败/错误码、llm 调用与成本。
+
+    records: 审计日志 JSONL 反序列化的 dict 列表 (event=tool_call_finished/llm_call_finished/...)。
+    返回结构化 signals 供 reflect() 反思, 也可直接给前端 / debug 看。
+    """
+    tool_stats: Dict[str, Dict[str, Any]] = {}
+    llm_calls = 0
+    total_cost = 0.0
+    tool_finished = 0
+    tool_failed = 0
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        ev = r.get("event")
+        if ev == "tool_call_finished":
+            tool = str(r.get("tool") or "?")
+            st = tool_stats.setdefault(tool, {"calls": 0, "failures": 0, "error_codes": {}})
+            st["calls"] += 1
+            tool_finished += 1
+            if not r.get("success"):
+                st["failures"] += 1
+                tool_failed += 1
+                code = str(r.get("code") or "UNKNOWN")
+                st["error_codes"][code] = st["error_codes"].get(code, 0) + 1
+        elif ev == "llm_call_finished":
+            llm_calls += 1
+            try:
+                total_cost += float(r.get("cost_usd") or 0.0)
+            except (TypeError, ValueError):
+                pass
+    # 派生: 每工具失败率 + 排序 (失败率高 & 调用多 优先)
+    tools: List[Dict[str, Any]] = []
+    for name, st in tool_stats.items():
+        calls = st["calls"]
+        fr = round(st["failures"] / calls, 3) if calls else 0.0
+        tools.append({
+            "tool": name, "calls": calls, "failures": st["failures"],
+            "failure_rate": fr, "error_codes": st["error_codes"],
+        })
+    tools.sort(key=lambda t: (t["failure_rate"], t["failures"]), reverse=True)
+    return {
+        "records_analyzed": len(records),
+        "tool_calls_finished": tool_finished,
+        "tool_failures": tool_failed,
+        "llm_calls": llm_calls,
+        "total_cost_usd": round(total_cost, 4),
+        "tools": tools,
+    }
+
+
+class SelfReflectionInspector:
+    """元级自反思: 把聚合信号交给 LLM, 产出结构化改进提议 (dry-run, 不改任何状态)。
+
+    fail-open: 无信号 / LLM 不可用 / 输出无法解析 → 返回 []。绝不抛、绝不改状态。
+    """
+
+    def __init__(self, llm_call: LLMCall):
+        self.llm_call = llm_call
+
+    def reflect(self, signals: Dict[str, Any], context: str = "") -> List[ReflectionProposal]:
+        # 无信号可反思 (审计日志为空等) → 空
+        if not signals or not signals.get("records_analyzed"):
+            return []
+        prompt = (
+            "你在帮一个 AI agent 做'行为自反思': 下面是它最近一段执行的聚合统计(来自审计日志)。\n"
+            "找出【反复出现、值得改进】的行为问题, 给出可执行的改进提议。规则:\n"
+            "- 只提有数据支撑的问题(如某工具失败率高、成本异常、某错误码扎堆), 不要泛泛而谈;\n"
+            "- action_type: record_lesson(沉淀为长期教训让以后注意) / config_suggestion(建议调配置) "
+            "/ investigate(需人排查) / advisory(一般建议);\n"
+            "- 没有值得提的 → 返回空数组 []。\n\n"
+            f"【聚合统计】\n{json.dumps(signals, ensure_ascii=False)}\n"
+            + (f"\n【补充上下文】\n{context}\n" if context else "")
+            + '\n只输出 JSON 数组(不要其他文字), 每条: '
+            '{"problem":"问题","evidence":"证据","proposed_action":"建议动作",'
+            '"action_type":"record_lesson|config_suggestion|investigate|advisory","severity":"info|warn|high"}'
+        )
+        try:
+            raw = self.llm_call(prompt) or ""
+        except Exception:
+            return []
+        proposals: List[ReflectionProposal] = []
+        for i, it in enumerate(self._parse_json_array(raw)):
+            if not isinstance(it, dict):
+                continue
+            problem = str(it.get("problem") or "").strip()
+            if not problem:
+                continue
+            atype = str(it.get("action_type") or "advisory").strip()
+            atype = atype if atype in ACTION_TYPES else "advisory"
+            sev = str(it.get("severity") or "info").strip()
+            sev = sev if sev in SEVERITIES else "info"
+            proposals.append(ReflectionProposal(
+                id=f"rp{i + 1}",
+                problem=problem[:300],
+                evidence=str(it.get("evidence") or "")[:300],
+                proposed_action=str(it.get("proposed_action") or "")[:300],
+                action_type=atype,
+                severity=sev,
+            ))
+        return proposals
+
+    @staticmethod
+    def _parse_json_array(raw: str) -> List[Any]:
+        """LLM 输出 JSON 数组, 兼容 markdown 围栏 / 前后解释文字。"""
+        raw = (raw or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-zA-Z]*\n", "", raw)
+            raw = re.sub(r"\n```\s*$", "", raw).strip()
+        try:
+            obj = json.loads(raw)
+            return obj if isinstance(obj, list) else []
+        except Exception:
+            pass
+        m = re.search(r"\[[\s\S]*\]", raw)
+        if not m:
+            return []
+        try:
+            obj = json.loads(m.group(0))
+            return obj if isinstance(obj, list) else []
+        except Exception:
+            return []
