@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
@@ -260,5 +261,79 @@ def propose_from_memory_signals(signals: Dict[str, Any]) -> List[ReflectionPropo
             evidence=f"refinable_active={n_ref}",
             proposed_action="运行 consolidate 归纳相关/重复条目",
             action_type="run_consolidate", severity="info",
+        ))
+    return props
+
+
+# ============================================================
+# 代码/文档健康域 (方向4 扩域): 只读扫描项目 → advisory 维护清单 (不自动改代码/文档)
+# ============================================================
+
+_LAYERS = ("basic_support", "data_layer", "business", "interface", "application")
+_SKIP_DIRS = {"__pycache__", "run", "documents", "uploads", "node_modules",
+              "vector_store", "state_store", ".git", ".idea", ".pytest_cache"}
+
+
+def scan_code_doc_health(
+    root: str, layers=_LAYERS, max_todo_files: int = 10,
+) -> Dict[str, Any]:
+    """只读扫描项目代码/文档健康: ① 各层下 *_module 缺 README.md 的; ② *.py 里 TODO/FIXME 计数。
+    不改任何文件。供 propose_from_code_doc_signals 生成 advisory 提议。"""
+    modules_missing_readme: List[str] = []
+    for layer in layers:
+        layer_dir = os.path.join(root, layer)
+        if not os.path.isdir(layer_dir):
+            continue
+        for name in sorted(os.listdir(layer_dir)):
+            mod_dir = os.path.join(layer_dir, name)
+            if not name.endswith("_module") or not os.path.isdir(mod_dir):
+                continue
+            if not os.path.isfile(os.path.join(mod_dir, "README.md")):
+                modules_missing_readme.append(f"{layer}/{name}")
+    todo_total = 0
+    todo_by_file: Dict[str, int] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fn in filenames:
+            if not fn.endswith(".py"):
+                continue
+            fp = os.path.join(dirpath, fn)
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    cnt = sum(1 for line in f if "TODO" in line or "FIXME" in line)
+            except OSError:
+                continue
+            if cnt:
+                todo_total += cnt
+                todo_by_file[os.path.relpath(fp, root).replace("\\", "/")] = cnt
+    top = sorted(todo_by_file.items(), key=lambda kv: kv[1], reverse=True)[:max_todo_files]
+    return {
+        "modules_missing_readme": modules_missing_readme,
+        "todo_total": todo_total,
+        "todo_top_files": [{"file": f, "count": c} for f, c in top],
+    }
+
+
+def propose_from_code_doc_signals(signals: Dict[str, Any]) -> List[ReflectionProposal]:
+    """确定性规则: 代码/文档健康 → 维护提议。**全部 advisory** (action_type=investigate):
+    代码/文档改动不自动执行 (绝不执行性自主), 仅产出供人审阅/处理的清单。"""
+    props: List[ReflectionProposal] = []
+    missing = signals.get("modules_missing_readme") or []
+    if missing:
+        props.append(ReflectionProposal(
+            id=f"cd{len(props) + 1}", problem=f"{len(missing)} 个模块缺 README.md",
+            evidence=", ".join(missing[:10]),
+            proposed_action="为这些模块补 README (人工处理; 横切模块部分属已知债)",
+            action_type="investigate", severity="info",
+        ))
+    todo = signals.get("todo_total", 0)
+    if todo:
+        top = signals.get("todo_top_files") or []
+        ev = "; ".join(f"{t['file']}({t['count']})" for t in top[:5])
+        props.append(ReflectionProposal(
+            id=f"cd{len(props) + 1}", problem=f"代码中累计 {todo} 处 TODO/FIXME",
+            evidence=ev,
+            proposed_action="审阅高频 TODO/FIXME, 决定清理或转 backlog",
+            action_type="investigate", severity="info",
         ))
     return props

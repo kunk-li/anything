@@ -27,6 +27,7 @@ from .components.verifier import collect_specs, make_registry, run_verifiers
 from .components.self_reflection import (
     SelfReflectionInspector, aggregate_audit_signals,
     aggregate_memory_signals, propose_from_memory_signals,
+    scan_code_doc_health, propose_from_code_doc_signals,
 )
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
@@ -1473,6 +1474,42 @@ class SimpleAgent(
                 details.append({"id": p.get("id"), "op": at, "result": f"error: {e}"})
         self.logger.info(f"[mem_maint] apply: {applied} ops 执行: trace_id={trace_id}")
         return {"applied": applied, "details": details}
+
+    def _resolve_project_root(self) -> Optional[str]:
+        """定位项目根 (impl.py 在 business/agent_module/core/ 下, 上溯 4 级)。"""
+        try:
+            here = os.path.abspath(__file__)
+            root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(here))))
+            return root if os.path.isdir(root) else None
+        except Exception:
+            return None
+
+    def propose_code_doc_maintenance(
+        self, root: Optional[str] = None, trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """方向4 扩域·代码文档域: 只读扫描项目代码/文档健康 → advisory 维护清单 (dry-run)。
+
+        **advisory-only**: 代码/文档改动**不自动执行**(绝不执行性自主), 仅产出供人处理的清单
+        (故无配套 apply 方法)。gate enable_self_reflection; 无法定位项目根 → 空 (fail-safe)。
+        """
+        if not self.enable_self_reflection:
+            return {"enabled": False, "signals": {}, "proposals": [],
+                    "note": "self_reflection 未启用 (开: agent.enable_self_reflection)"}
+        root = root or self._resolve_project_root()
+        if not root or not os.path.isdir(root):
+            return {"enabled": True, "signals": {}, "proposals": [], "note": "未定位到项目根"}
+        try:
+            signals = scan_code_doc_health(root)
+            proposals = propose_from_code_doc_signals(signals)
+        except Exception as e:
+            self.logger.warning(f"[codedoc] 扫描失败 (返回空): trace_id={trace_id} err={e}")
+            return {"enabled": True, "signals": {}, "proposals": [], "note": f"扫描异常: {e}"}
+        self.logger.info(
+            f"[codedoc] root={root} → {len(proposals)} 条 advisory 提议: trace_id={trace_id}"
+        )
+        return {"enabled": True, "signals": signals,
+                "proposals": [p.to_dict() for p in proposals],
+                "note": "advisory; 代码/文档改动须人工处理, 不自动执行"}
 
     def _extract_and_store_memory(
         self,
