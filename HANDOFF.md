@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `c15380d` · 分支: `main`(已同步 origin)
+> 最后更新: 2026-06-03 · 最新 commit: `4fde8f7` · 分支: `main`(已同步 origin)
 
 ---
 
@@ -14,11 +14,11 @@
 |---|---|---|
 | **方向 3** 自我验证闭环 | 执行类任务"做到位"验证 + 自纠正 | ✅ 阶段1-2 done；GoalVerifier 缓做 |
 | **方向 2** 记忆升级 | 被动 fact 库 → 主动认知系统 | ✅ 阶段1-3 done (用户 5 点需求全兑现) |
-| **方向 1** 用户模型 | "更懂你" — 画像 + 主动应用 | ✅ MVP(UP-1/2/3)+UP-4 done；阶段3 待做 |
+| **方向 1** 用户模型 | "更懂你" — 画像 + 主动应用 | ✅ MVP(UP-1/2/3)+UP-4+阶段3 done (收尾) |
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | ⬜ 未开始 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
-0. **方向 1 UP-4 query refinement** (`c15380d`, 本次会话) — 含糊问题基于画像 LLM 判含糊+改写后再规划; 三重 gate + 安全阀 + 全程 fail-open; 默认关; 记 `details["query_refinement"]` 透明; test 9 例 + agent 全套 258 passed + ABC 19 全绿
+0. **本次会话 (方向1 收尾, 2 commit)** — ① **阶段3 画像冲突消解+时效** (`4fde8f7`): Fact 加 `superseded_by`; `reconcile_conflicts()`(LLM 找对立偏好组→`created_at` 最新者胜、其余标 superseded, 无LLM返0); `get_user_profile` 按 `created_at` 时效排序+只取有效; `search_facts` 跳过 superseded。② **UP-4 query refinement** (`c15380d`): 含糊问题基于画像判含糊+改写后再规划, 默认关, 三重 gate+安全阀+fail-open, 记 `details["query_refinement"]` 透明。两者 test 共 19 例 + long_term_memory&agent 359 passed + ABC 19 全绿
 1. **全项目审计** — 5 个并行 agent 扫描代码 vs 设计规范，亲自复核 3 条 CRITICAL (修正 2 处误报)
 2. **AUDIT 1-4** (`ab6f1ae` `3297e26`) — exception 补 import json、check_abc Win 编码、`AGENT_TIMEOUT` 真 enforce、deps 反向依赖消除、ABC 检查覆盖 10→19、console_app 设计文档重写(原错挂)、架构图模块清单校准、横切模块文档、`doc/README.md` 文档状态校准页
 3. **自动推送双保险** (`7feb32f`) — `MEMORY.md` 规则 + `.git/hooks/post-commit`(由 `scripts/install-git-hooks.sh` 装)
@@ -27,10 +27,10 @@
 6. **方向 1 用户画像 MVP** (`8cd577b`) — `get_user_profile` 5 维度聚合 + agent always-on 注入
 
 ## 4. 未完成 backlog (按优先级)
-- **方向 1 阶段 3** — 画像冲突消解 + 时效 (偏好变了更新); 也可考虑给 UP-4 加 "ask 模式"(歧义大时反问澄清, 而非静默改写) 与默认开启策略
 - **方向 3 GoalVerifier** — 子目标级验证, 需先给 plan 加 "goal 分组" 结构 (改动触及 Agent 规划核心)
 - **方向 4 自主维护** — 终极目标; **务必分级**: 先"建议性自主"(agent 提议、人审批), 绝不一上来"执行性自主"; 全程 human-in-loop (方向1 的 `ask` 模式 + 方向3 的 ComplianceVerifier 是雏形)
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
+- **方向 1 可选增强**: `reconcile_conflicts`/`consolidate`/`prune` 接入调度定期触发 (现都只外部手动调, 无定时); 给 UP-4 加 "ask 模式"(歧义大反问澄清而非静默改写) + 默认开启策略
 - **可选治理债**: 文档债深度逐份回灌 (doc/README 已标注哪些滞后, 未重写)；7 个 cross-cutting 模块补 base.py/测试归位 (AUDIT-4 评估为低优先, 已补集中设计文档)
 
 ## 5. 关键机制 (下个会话必须知道)
@@ -39,6 +39,7 @@
 - **记忆分层**: `Fact.mutability` = `canonical`(密码/路径, 永久不删不改写) / `refinable`(偏好/做法, 可提炼、老了丢原始留 digest)；`digest`=精炼层(粗筛+加密 secret 仍可检索)；`content_type` 含画像 5 维度。
 - **用户画像 5 维度**: `preference/style/convention/domain/weakness`；`get_user_profile()` 聚合，agent `_inject_user_profile()` 任务前 always-on 注入(`weakness`→"需主动补位"=规避缺陷)。
 - **query refinement (UP-4)**: 默认 **off** (`agent.enable_query_refine` / env `ANYTHING_AGENT_QUERY_REFINE`)。用户问得含糊时 `_refine_query()` 基于画像 + LLM 判含糊并改写问题(只补"知道偏好就能定的缺省"=语言/技术栈/格式/范围, 严格保留原意), 再走记忆/画像/历史注入与规划。**只改 task(规划输入), `original_task` 保持用户原话**(history 展示/记忆抽取用)。三重 gate(长问题>`query_refine_max_len`默认200 / 无画像 / 无 LLM) + 安全阀(改写非空且不比原问题短太多) + 全程 fail-open(用原问题)。改写记 `details["query_refinement"]={original,refined,reason}` 透明可回溯; 纠正递归跳过; 单次可 `extra_params.enable_query_refine` 覆盖。区别于 `_inject_user_profile`(画像当上下文附前面): 这里直接改写"问题本身"。
+- **画像冲突消解 + 时效 (方向1阶段3)**: `Fact.superseded_by`(被哪条新 fact 取代; `None`=有效, 非破坏性标记**不删数据**保审计链)。`reconcile_conflicts(tenant_id)` 用 LLM 找对立偏好分组→组内 `created_at` 最新者胜、其余标 `superseded_by`(无 `llm_client` 返 0; 循 `consolidate` 的独立 LLM 批处理模式, **不在每轮 add_fact 跑**, 现由外部手动调)。`get_user_profile` 时效排序 `(pinned, created_at, access_count)` → 新偏好领先(用 `created_at` 不受 `mark_accessed` bump 污染), 且只取有效项。`search_facts` 三阶段都跳过 superseded(旧偏好不再作为"当前上下文"注入)。`reconcile`(消解对立) vs `consolidate`(归纳重复) 是两件事。
 - **敏感加密**: `content_type=secret` 的 content 用 Fernet 加密(`SENSITIVE_CONFIG_SECRET`)，`reveal_fact()` 显式解密；无密钥则丢明文(绝不明文落库)。
 - **ABC 守护**: `scripts/check_abc_alignment.py` (19 对 base↔impl)。pre-commit 未实际安装(`.git/hooks` 当前只有 post-commit)。
 
@@ -77,5 +78,5 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 ## 9. 下个会话建议第一步
 1. 读本文件 + `MEMORY.md`(自动注入) — 5 分钟接上上下文
 2. 确认 `git status` 干净、`git log origin/main..HEAD` 为空
-3. 问用户: 继续 **方向1阶段3(画像冲突/时效)**、**方向3 GoalVerifier**、开 **方向4(自主维护)**, 还是新需求
+3. 问用户: 继续 **方向3 GoalVerifier**、开 **方向4(自主维护)**, 还是新需求 (方向1 已收尾)
 4. 任何 commit 后会由 git hook 自动 push (无需手动)
