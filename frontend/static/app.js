@@ -139,7 +139,7 @@
 
     // ---------- 状态 ----------
     const state = {
-        mode: 'rag',              // rag / agent / hybrid
+        mode: 'agent',            // rag / agent / hybrid — 默认 agent: 能用工具真正干活; rag 仅文档问答
         history: [],
         sending: false,           // 兼容旧引用; 实际并发逻辑用 inflight Map
         // Task RRRR (#135): per-session 并发跟踪 — sid → { placeholderId, startedAt }

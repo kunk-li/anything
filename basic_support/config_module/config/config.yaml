@@ -47,8 +47,10 @@ llm:
     max_retry: 1
 
   default_vector_model: "text-embedding-3-small"
-  # 主力 chat 模型: qwen-turbo(最轻量) → qwen-plus(能力/成本甜点). 想最强改 qwen-max.
-  default_chat_model: "qwen-plus"
+  # 主力 chat 模型: qwen-turbo(轻) / qwen-plus(快但大数推理会崩, 如 12345*67890 答成 5555) / qwen-max(最强最准但慢, 当前)。
+  # 实测 qwen-max 在多轮 agent 循环 (react+verify, 每步一次调用) 下耗时 78s+ → 网关 504 超时,
+  # 反而干不成活; qwen-plus 约 36s 能完成。要 qwen-max 需先降调用 (见 agent.enable_self_verify) 或加超时。
+  default_chat_model: "qwen-max"
   default_multimodal_model: "qwen-vl-plus"
 
   openai:

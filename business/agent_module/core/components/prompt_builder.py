@@ -93,7 +93,12 @@ class PromptBuilderMixin:
         return (
             f"{memory_block}"
             f"{skills_block}"
-            f"你是一个 ReAct 模式智能代理。当前任务: {task}\n"
+            f"你是一个有真实执行能力的智能助手 (Agent)。下面列出的工具都会真正执行操作"
+            f"(查询/计算/搜索/访问网页/读写文件/运行代码/控制电脑等), 不是模拟也不是假设。\n"
+            f"原则: ①优先用工具动手把任务做完, 不要回答'我做不到'/'我只是语言模型'/'请你自己去做'; "
+            f"②需要知识或文档时调 rag_search; 缺事实就先调工具拿到再答; "
+            f"③只有当工具确实都不适用时, 才用 final_answer 说明并给出力所能及的替代方案。\n"
+            f"当前任务: {task}\n"
             f"\n"
             f"可用工具:\n" + "\n".join(tool_lines) + "\n"
             f"\n"

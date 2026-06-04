@@ -266,7 +266,9 @@ def build_business_layer(
     agent = SimpleAgent(
         state_store=data_layer.get("state_store"),
         tool_registry=tool_registry,
-        timeout=60,
+        # 墙钟超时 120s: 多轮 ReAct + 自我校验 + qwen 单次延迟, 简单任务 ~36s, 复杂任务给足
+        # 余量"慢但能完成", 而不是 60s 撞 AGENT_TIMEOUT→504 干不成活 (用户优先完成而非快)。
+        timeout=120,
         max_retries=2,
         session_prefix="session",
         deps=deps,
