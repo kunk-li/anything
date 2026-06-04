@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `f60f8cf` · 分支: `main`(已同步 origin)
+> 最后更新: 2026-06-03 · 最新 commit: `b1b2d62` · 分支: `main`(⚠️ 本地或领先 origin: 网络不稳定时 push 可能失败, 需确认 `git push origin main`)
 
 ---
 
@@ -83,6 +83,7 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 自我验证器 (方向3, 含 GoalVerifier) | `business/agent_module/core/components/verifier.py` |
 | 自反思 / 自维护 (方向4) | `business/agent_module/core/components/self_reflection.py` |
 | 外部工具连接 (HTTP 连接器 + MCP stdio/HTTP + OpenAPI 生成) | `business/agent_module/tools/external/` (base/http_provider/mcp_provider/openapi/__init__) + `run/factories/business_layer.py` 接线 |
+| 计算机操作 (computer_use 工具, 危险/默认审批) | `business/agent_module/tools/tools_impl/computer_use.py` (pyautogui lazy, backend 可注入) |
 | Agent 核心(验证接入 `_post_verify` / 画像注入 `_inject_user_profile` / 超时 enforce) | `business/agent_module/core/impl.py` |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |

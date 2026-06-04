@@ -7,8 +7,14 @@
 
 ## Unreleased (2026-06-03)
 
-> 补记: 以下 方向1/2/3/4 + 审计 + 外部工具(HTTP+MCP+OpenAPI) 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`062cccb`)。
+> 补记: 以下 方向1/2/3/4 + 审计 + 外部工具(HTTP+MCP+OpenAPI) + 计算机操作 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`b1b2d62`)。
 > 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
+
+### 计算机操作 — computer_use 工具 (`b1b2d62`)
+对标 Claude computer use / OpenAI Operator: 截屏 + 鼠标/键盘控制真实桌面。
+- `tools_impl/computer_use.py`: `make_computer_use_tool(backend 可注入)` — screenshot/screen_size/move/click/double_click/right_click/type/key/scroll; 截图返 base64+存盘
+- 默认 `_PyAutoGuiBackend`(lazy pyautogui; 未装→MISSING_DEPS 优雅降级); backend 可注入(测试不碰真桌面)
+- **危险能力**: 控制真实桌面 → `impl.py default_dangerous` 加 `computer_use`, 默认进审批白名单(human-in-loop); 工厂注册; `test_computer_use` 10 例
 
 ### 外部工具连接 Stage1+2 — HTTP 连接器 + MCP 客户端 (`33dcc6b` HTTP / `e08280e` MCP)
 补 agent "无外部工具接入" 缺口(对标 codex/claude 验证为最大短板)。RFC `doc/外部工具连接-设计方案(RFC).md`:
