@@ -61,6 +61,7 @@ class TestReActExecute(unittest.TestCase):
             llm_planner=llm,
         )
         agent.execution_strategy = strategy
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False  # parse_task 用规则式,避免跟 ReAct 路径混
         return agent, llm
 
@@ -150,6 +151,7 @@ class TestReActExecute(unittest.TestCase):
         reg.register("llm_generate", _stub_tool_success)
         agent = SimpleAgent(tool_registry=reg, llm_planner=raise_llm)
         agent.execution_strategy = "react"
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False
 
         result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
@@ -162,6 +164,7 @@ class TestReActExecute(unittest.TestCase):
         reg.register("rag_search", _stub_tool_success)  # 故意不注册 llm_generate
         agent = SimpleAgent(tool_registry=reg, llm_planner=None)
         agent.execution_strategy = "react"
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False
         result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
         self.assertEqual(result["code"], "SUCCESS")
@@ -216,6 +219,7 @@ class TestPlanMode(unittest.TestCase):
         llm = _ScriptedLLM(responses)
         agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
         agent.execution_strategy = "react"
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False
         return agent, llm
 
@@ -293,6 +297,7 @@ class TestApprovalGates(unittest.TestCase):
         llm = _ScriptedLLM(responses)
         agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
         agent.execution_strategy = "react"
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False
         agent.tool_approval_required = set(approval_required)
         return agent, llm
@@ -381,6 +386,7 @@ class TestHookIntegration(unittest.TestCase):
         llm = _ScriptedLLM(responses)
         agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
         agent.execution_strategy = "react"
+        agent.enable_self_verify = False  # 单测隔离: 只测 react 机制, 校验闭环有独立测试
         agent.use_llm_planner = False
         # 清掉默认审批列表 (防干扰 hook 测试)
         agent.tool_approval_required = set()

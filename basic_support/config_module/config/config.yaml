@@ -100,6 +100,13 @@ agent:
   # 默认走 ReAct 多轮 (observe→think→act 迭代), 比 single_shot 单轮规划更能完成
   # 复杂任务. 单次 invoke 可用 extra_params.execution_strategy / max_iterations 覆盖.
   execution_strategy: "react"
+  # 自我验证闭环 (方向3): 默认开 — 每个 agent 任务执行后做终态确认 (TaskVerifier
+  # LLMJudge 判"是否真完成了目标"), 未完成则带缺口反馈自纠正 (auto, 预算 1 次重跑).
+  # 形成 执行→校验→重规划 闭环。代价: 每任务 +1 次校验 LLM 调用 + 失败时至多 1 次重跑。
+  # 无 LLM 通道时 verify 自动放行 (fail-open), 不阻断。想关: enable_self_verify=false 或 verify_mode=off。
+  enable_self_verify: true
+  verify_mode: "auto"
+  max_correction: 1
 
 document_store:
   dir: "documents"

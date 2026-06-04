@@ -69,6 +69,7 @@ def _make_parent_agent(parent_llm_responses=None):
         llm_planner=_ScriptedLLM(parent_llm_responses or []),
     )
     agent.execution_strategy = "react"
+    agent.enable_self_verify = False  # 单测隔离: 只测 subagent 机制, 校验闭环有独立测试
     agent.use_llm_planner = False
     agent.tool_approval_required = set()
     return agent
