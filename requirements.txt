@@ -25,5 +25,7 @@ python-docx>=1.0
 # 图片处理 (image_describe / 拖拽图片场景生成测试图)
 Pillow>=10.0
 
-# Agent 工具
-# (无需额外, 都用 stdlib + requests)
+# Agent 工具核心: 无需额外 (都用 stdlib + requests)
+# 可选工具依赖 (缺则该工具优雅降级 MISSING_DEPS, 不影响启动):
+psutil>=5.9        # system_info — 只读看本机 CPU/内存/磁盘/网络/进程 (用于"直接查看电脑使用情况")
+# pyautogui>=0.9   # computer_use — 控制真实桌面 (须有显示环境; Linux 另需 scrot + python3-tk), 按需装

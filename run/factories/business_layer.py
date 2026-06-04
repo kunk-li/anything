@@ -203,6 +203,13 @@ def build_business_layer(
     )
     tool_registry.register("computer_use", _make_computer_use(), description=_CU_DESC)
 
+    # 系统状态只读查看 (system_info): CPU/内存/磁盘/网络/进程 — 让 agent 直接读真实指标再分析,
+    # 而非教用户开任务管理器。只读无副作用 → 不进审批白名单 (不在 agent default_dangerous)。需 psutil, 缺则降级。
+    from agent_module.tools.tools_impl.system_info import (
+        make_system_info_tool as _make_system_info, SYSTEM_INFO_DESCRIPTION as _SI_DESC,
+    )
+    tool_registry.register("system_info", _make_system_info(), description=_SI_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(
