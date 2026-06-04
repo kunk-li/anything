@@ -415,11 +415,15 @@ class StreamingMixin:
                     answer_out = str(_full)
             except Exception as e:
                 self.logger.warning(f"[react-stream] 最终答案生成失败, 用 react final_answer: {e}")
-            if answer_out:
-                _streamed_text = [answer_out]
-                chunk_size = max(1, len(answer_out) // 60)
-                for i in range(0, len(answer_out), chunk_size):
-                    yield {"type": "chunk", "text": answer_out[i:i + chunk_size]}
+            # 铁底兜底: 绝不让最终答案为空白 (即便走了工具路径 + 重生成失败/空 + final_answer
+            # 异常凑到一起 — 用户曾遇到主答案区整段空白)。空就退回 final_answer, 再不行给提示。
+            if not (answer_out and str(answer_out).strip()):
+                answer_out = (str(final_answer or "").strip()
+                              or "抱歉, 这次没能生成有效回答, 请重试或换个说法描述你的需求。")
+            _streamed_text = [answer_out]
+            chunk_size = max(1, len(answer_out) // 60)
+            for i in range(0, len(answer_out), chunk_size):
+                yield {"type": "chunk", "text": answer_out[i:i + chunk_size]}
 
             # 持久化到后端 state_store (单一数据源) — 跟 _run_stream_direct 一致.
             # ReAct 工具场景的对话也存, 切会话/刷新不丢.
