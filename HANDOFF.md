@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `b1b2d62` · 分支: `main`(⚠️ 本地或领先 origin: 网络不稳定时 push 可能失败, 需确认 `git push origin main`)
+> 最后更新: 2026-06-03 · 最新 commit: `673dd7d` · 分支: `main`(已同步 origin; 注: 本会话网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` 重试即可)
 
 ---
 
