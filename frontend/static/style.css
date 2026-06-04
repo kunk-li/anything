@@ -450,8 +450,12 @@ body {
     .sidebar-toggle { display: inline-flex !important; }
 }
 
-/* 桌面默认隐藏切换按钮 */
-.sidebar-toggle { display: none; }
+/* 顶栏侧栏开关: 桌面也显示 — 点击折叠/展开常显侧栏 (窄屏由上面 media query 以 !important 控制) */
+.sidebar-toggle { display: inline-flex; }
+
+/* 折叠态: 桌面下隐藏对应侧栏 (display:none 让主区回填空间)。窄屏改用 .open 浮出, 不走这里。 */
+.sessions-sidebar.collapsed,
+.sidebar.collapsed { display: none !important; }
 
 /* ===== 手机分界: 640px ===== */
 @media (max-width: 640px) {

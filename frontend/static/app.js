@@ -395,7 +395,12 @@
         // 移动端开关
         if (els.sessionsSidebarToggle && els.sessionsSidebar) {
             els.sessionsSidebarToggle.addEventListener('click', () => {
-                els.sessionsSidebar.classList.toggle('open');
+                // 桌面(侧栏常显): 折叠/展开 .collapsed; 窄屏(默认隐藏): 浮出/收起 .open
+                if (window.innerWidth > 1100) {
+                    els.sessionsSidebar.classList.toggle('collapsed');
+                } else {
+                    els.sessionsSidebar.classList.toggle('open');
+                }
             });
         }
         // Task YYYY-H (#114): 搜索框 — 本地 filter, 不发请求
@@ -1789,7 +1794,12 @@
         // 侧栏切换 (移动端用)
         if (els.sidebarToggle && els.sidebar) {
             els.sidebarToggle.addEventListener('click', () => {
-                els.sidebar.classList.toggle('open');
+                // 桌面(右栏常显): 折叠/展开 .collapsed; 窄屏(默认隐藏): 浮出/收起 .open
+                if (window.innerWidth > 1100) {
+                    els.sidebar.classList.toggle('collapsed');
+                } else {
+                    els.sidebar.classList.toggle('open');
+                }
             });
             // 在窄屏选中 chunk/step 时自动打开侧栏
             // 点击聊天区时自动关闭侧栏 (移动端 UX)
