@@ -193,6 +193,59 @@ class TestRAGHistoryMemory(_ut.TestCase):
         rag._save_turn("sess", "q", "a")  # 不抛
 
 
+class TestRAGSaveOnFailure(_ut.TestCase):
+    """检索/LLM 失败时本轮仍要落盘 (先存后端) — 否则刷新后用户提问丢失.
+
+    复现的真实场景: embedding/LLM 服务不可用 → retrieve/generate 抛异常 →
+    旧代码在 except 里只返错误信封, 跳过 _save_turn → 这一轮彻底不落盘,
+    前端刷新调 /sessions/{id} 拿到空 → 最新对话丢失.
+    """
+
+    def _make_rag(self):
+        store = _MemStateStore()
+        rag = SimpleRAG(llm_client=MockLLMClient(), state_store=store)
+        rag.history_max_turns = 6
+        return rag, store
+
+    def _force_retrieve_fail(self, rag):
+        def _boom(_req):
+            raise RuntimeError("embedding 服务不可用")
+        rag.retrieve = _boom
+
+    def test_run_persists_user_turn_on_failure(self):
+        rag, store = self._make_rag()
+        self._force_retrieve_fail(rag)
+        result = rag.run({"query": "刷新别丢我", "session_id": "sess_f", "trace_id": "tf"})
+        self.assertNotEqual(result.get("code"), "SUCCESS")  # 失败信封
+        events = (store.get_state("sess_f") or {}).get("events", [])
+        users = [e.get("content") for e in events if e.get("role") == "user"]
+        self.assertIn("刷新别丢我", users)  # 用户提问必须落盘
+
+    def test_run_stream_persists_user_turn_on_failure(self):
+        rag, store = self._make_rag()
+        self._force_retrieve_fail(rag)
+        out = list(rag.run_stream(
+            {"query": "流式也别丢", "session_id": "sess_s", "trace_id": "ts"}))
+        self.assertTrue(any(e.get("type") == "error" for e in out))
+        events = (store.get_state("sess_s") or {}).get("events", [])
+        users = [e.get("content") for e in events if e.get("role") == "user"]
+        self.assertIn("流式也别丢", users)
+
+    def test_no_session_id_failure_does_not_crash(self):
+        # 没 session_id 时 _save_turn 早返, 失败路径不应再抛
+        rag, _ = self._make_rag()
+        self._force_retrieve_fail(rag)
+        result = rag.run({"query": "无会话", "trace_id": "tn"})
+        self.assertNotEqual(result.get("code"), "SUCCESS")
+
+    def test_success_path_no_duplicate_save(self):
+        # 成功路径 (vector_db=None → 0 检索 → 诚实兜底) 恰好 1 轮, 不因新增 except 重复存
+        rag, store = self._make_rag()
+        rag.run({"query": "正常问题", "session_id": "sess_ok", "trace_id": "tok"})
+        events = (store.get_state("sess_ok") or {}).get("events", [])
+        self.assertEqual(len(events), 2)  # user + assistant, 无重复
+
+
 # ==========================================
 # Task #49 — 混合检索 (BM25 + vector via RRF)
 # ==========================================

@@ -483,6 +483,14 @@ class SimpleRAG(BaseRAG):
 
         except Exception as e:
             self.logger.error(f"RAG run_stream 异常: {e}, trace_id={trace_id}")
+            # "先存后端": 流式检索/LLM 失败也要落盘本轮 (与非流式 run() 对称),
+            # 否则刷新后用户提问丢失. 走到这里 _save_turn(469) 未执行, 不会重复.
+            self._save_turn(
+                session_id=request.get("session_id"),
+                user_query=self._normalize_query(request.get("query", "")),
+                assistant_answer="⚠️ 本轮回答生成失败（服务暂时不可用），你的问题已保留，可稍后重试。",
+                trace_id=trace_id,
+            )
             yield {
                 "type": "error",
                 "code": "RAG_RUN_FAILED",
@@ -552,6 +560,15 @@ class SimpleRAG(BaseRAG):
 
         except Exception as e:
             self.logger.error(f"RAG 执行异常：{str(e)}, trace_id={trace_id}")
+            # "先存后端": 检索/LLM 失败也要把本轮落盘, 否则刷新后用户的提问彻底丢失.
+            # _save_turn 自带 try/except (失败仅 WARN), 不会再抛. 成功路径已在 generate() 存过,
+            # 走到这里说明 generate 抛在 save 之前, 不会重复.
+            self._save_turn(
+                session_id=request.get("session_id"),
+                user_query=self._normalize_query(request.get("query", "")),
+                assistant_answer="⚠️ 本轮回答生成失败（服务暂时不可用），你的问题已保留，可稍后重试。",
+                trace_id=trace_id,
+            )
             return self._handle_exception(exception=e, trace_id=trace_id, request=request)
 
     def _normalize_query(self, query: str) -> str:
