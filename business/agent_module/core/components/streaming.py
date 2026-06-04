@@ -264,6 +264,14 @@ class StreamingMixin:
 
                 step = self._parse_react_response(raw, available_tools)
                 if step is None:
+                    # 健壮性: LLM 没按 ReAct 的 JSON 格式输出 — 规划/建议/写作类任务里 qwen 等常
+                    # 直接给自然语言答案 (不套 JSON 壳)。与其报 AGENT_RUN_FAILED 让用户白等,
+                    # 不如把这段自然语言当最终答案 (LLM 显然在回答, 只是没套壳), 走收尾流程。
+                    raw_text = (raw or "").strip()
+                    if raw_text:
+                        final_answer = raw_text
+                        history.append({"thought": "", "final_answer": final_answer})
+                        break
                     yield {"type": "error", "code": "AGENT_RUN_FAILED",
                            "message": f"LLM 输出无法解析 iter={iteration}"}
                     return
