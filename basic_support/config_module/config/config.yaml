@@ -47,7 +47,8 @@ llm:
     max_retry: 1
 
   default_vector_model: "text-embedding-3-small"
-  default_chat_model: "qwen-turbo"
+  # 主力 chat 模型: qwen-turbo(最轻量) → qwen-plus(能力/成本甜点). 想最强改 qwen-max.
+  default_chat_model: "qwen-plus"
   default_multimodal_model: "qwen-vl-plus"
 
   openai:
@@ -58,6 +59,21 @@ llm:
       api_base: "https://api.openai.com/v1"
 
     qwen-turbo:
+      request_type: "CHAT"
+      adapter_class: "OpenAIChatAdapter"
+      api_key: "${DASHSCOPE_API_KEY}"
+      api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # qwen-plus: 能力/成本甜点 (约 turbo 的 3-4x 价), 当前 default_chat_model.
+    qwen-plus:
+      request_type: "CHAT"
+      adapter_class: "OpenAIChatAdapter"
+      api_key: "${DASHSCOPE_API_KEY}"
+      api_base: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # qwen-max: 旗舰最强档 (约 turbo 的 60-100x 价). 已注册备用; 想要最强把
+    # default_chat_model 改成 qwen-max 即可 (注意成本).
+    qwen-max:
       request_type: "CHAT"
       adapter_class: "OpenAIChatAdapter"
       api_key: "${DASHSCOPE_API_KEY}"
@@ -81,6 +97,9 @@ rag:
 agent:
   max_retries: 3
   timeout: 30
+  # 默认走 ReAct 多轮 (observe→think→act 迭代), 比 single_shot 单轮规划更能完成
+  # 复杂任务. 单次 invoke 可用 extra_params.execution_strategy / max_iterations 覆盖.
+  execution_strategy: "react"
 
 document_store:
   dir: "documents"
