@@ -367,44 +367,37 @@ class StreamingMixin:
             # llm_service 没暴露 chat_stream 时降级为切片伪流.
             # 注: 零工具调用场景下 (LLM 直接给 final_answer), 用 task 重新流式生成
             # 答案; 有工具调用时, 用 task + 工具结果 prompt 重新流式总结.
-            _streamed = False
-            _streamed_text = []  # 收集实际输出, 用于持久化到后端
-            chat_stream_fn = None
-            for src in ("llm_service", "llm_client"):
-                obj = getattr(self, src, None)
-                if obj is not None and hasattr(obj, "chat_stream"):
-                    chat_stream_fn = obj.chat_stream
-                    break
-            if chat_stream_fn and final_answer:
-                try:
-                    # 拼最终回答 prompt: 有工具结果时把结果带上让 LLM 自然语言总结
-                    if tool_results:
-                        tool_ctx_parts = []
-                        for tr in tool_results:
-                            tn = tr.get("tool_name", "?")
-                            summary = self._summarize_tool_output(tr.get("output"))
-                            tool_ctx_parts.append(f"[工具 {tn} 结果]\n{summary}")
-                        tool_ctx = "\n\n".join(tool_ctx_parts)
-                        stream_prompt = (
-                            f"用户任务: {task}\n\n"
-                            f"已收集到的信息:\n{tool_ctx}\n\n"
-                            f"请基于以上信息, 用自然语言直接回答用户."
-                        )
-                    else:
-                        # 纯 chat 类问题 (LLM 决定不调任何工具)
-                        stream_prompt = str(task or "")
-                    for token in chat_stream_fn(stream_prompt, trace_id=trace_id):
-                        if token:
-                            _streamed_text.append(str(token))
-                            yield {"type": "chunk", "text": str(token)}
-                    _streamed = True
-                except Exception as e:
-                    self.logger.warning(f"[react-stream] chat_stream 失败, 降级切片: {e}")
-            if not _streamed and final_answer:
-                _streamed_text = [final_answer]
-                chunk_size = max(1, len(final_answer) // 80)
-                for i in range(0, len(final_answer), chunk_size):
-                    yield {"type": "chunk", "text": final_answer[i:i + chunk_size]}
+            # 最终答案: 健壮性优先 (用户多次遇"显示不全/截断/空白")。早先用 chat_stream SSE 真
+            # token 流, 但 SSE 中途断会留半截/空白答案 (实测同一问题 3 次得 len=0 / 截断 / 完整,
+            # 极不稳)。改为: 用非流式 llm_call 一次性拿完整答案 (单次响应, 抗中途断 + 可重试),
+            # 再切片伪流给前端保留打字机观感; 生成失败/空则退回 react final_answer。保证答案完整。
+            _streamed_text = []
+            answer_out = final_answer or ""
+            try:
+                if tool_results:
+                    tool_ctx_parts = []
+                    for tr in tool_results:
+                        tn = tr.get("tool_name", "?")
+                        summary = self._summarize_tool_output(tr.get("output"))
+                        tool_ctx_parts.append(f"[工具 {tn} 结果]\n{summary}")
+                    tool_ctx = "\n\n".join(tool_ctx_parts)
+                    final_prompt = (
+                        f"用户任务: {task}\n\n已收集到的信息:\n{tool_ctx}\n\n"
+                        f"请基于以上信息, 用自然语言完整地直接回答用户 (一次写完整, 不要中途停下)."
+                    )
+                else:
+                    # 纯 chat 类问题 (LLM 决定不调任何工具)
+                    final_prompt = str(task or "")
+                _full = llm_call(final_prompt)
+                if _full and str(_full).strip():
+                    answer_out = str(_full)
+            except Exception as e:
+                self.logger.warning(f"[react-stream] 最终答案生成失败, 用 react final_answer: {e}")
+            if answer_out:
+                _streamed_text = [answer_out]
+                chunk_size = max(1, len(answer_out) // 60)
+                for i in range(0, len(answer_out), chunk_size):
+                    yield {"type": "chunk", "text": answer_out[i:i + chunk_size]}
 
             # 持久化到后端 state_store (单一数据源) — 跟 _run_stream_direct 一致.
             # ReAct 工具场景的对话也存, 切会话/刷新不丢.
