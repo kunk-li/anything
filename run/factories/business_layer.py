@@ -197,6 +197,12 @@ def build_business_layer(
     from agent_module.tools.tools_impl.browser_visit import BROWSER_VISIT_DESCRIPTION as _BV_DESC
     tool_registry.register("browser_visit", _browser_visit, description=_BV_DESC)
 
+    # 计算机操作 (computer use): 截屏 + 鼠标/键盘控制桌面 (危险, 默认需审批; 需 pyautogui, 缺则降级)
+    from agent_module.tools.tools_impl.computer_use import (
+        make_computer_use_tool as _make_computer_use, COMPUTER_USE_DESCRIPTION as _CU_DESC,
+    )
+    tool_registry.register("computer_use", _make_computer_use(), description=_CU_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(
