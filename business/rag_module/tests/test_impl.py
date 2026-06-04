@@ -350,3 +350,125 @@ class TestHybridRetrieval(_ut2.TestCase):
         self.assertIsInstance(chunks, list)
         ids = [c["chunk_id"] for c in chunks]
         self.assertIn("c_vec_only", ids)
+
+
+# ==========================================
+# Phase4 — 记忆个性化 (RAG 聊天接入用户模型)
+# ==========================================
+class _CapturingLLM:
+    """记录收到的 prompt, 返回固定答案 — 用于断言 memory 是否注入进 prompt."""
+    def __init__(self, answer="模拟答案"):
+        self.answer = answer
+        self.last_prompt = None
+        self.calls = 0
+
+    def generate(self, prompt, trace_id=None):
+        self.calls += 1
+        self.last_prompt = prompt
+        return self.answer
+
+
+class _FakeHit:
+    def __init__(self, content, score=0.9, reason="relevant"):
+        self.fact = type("_F", (), {"content": content, "fact_id": "h"})()
+        self.score = score
+        self.reason = reason
+
+
+class _FakeFact:
+    def __init__(self, content):
+        self.content = content
+        self.fact_id = "f_" + content[:4]
+
+
+class _FakeLTM:
+    """最小 long_term_memory 桩: 画像 / 相关 fact / 抽取 / 入库."""
+    def __init__(self, profile=None, facts=None, extracted=None):
+        self._profile = profile or {}
+        self._facts = facts or []
+        self._extracted = extracted or []
+        self.extract_called = 0
+        self.added = []
+
+    def get_user_profile(self, tenant_id):
+        return self._profile
+
+    def search_facts(self, query):
+        return list(self._facts)
+
+    def extract_facts(self, messages, tenant_id, session_id=None):
+        self.extract_called += 1
+        return list(self._extracted)
+
+    def add_fact(self, f):
+        self.added.append(f)
+
+
+class TestRAGMemoryIntegration(_ut.TestCase):
+    """Phase4: RAG 聊天答前注入用户画像/相关 fact (懂使用者) + 答后抽 fact (越用越懂)."""
+
+    def _make_rag(self, ltm):
+        rag = SimpleRAG(
+            llm_client=_CapturingLLM(),
+            embedding=_MockEmbedding(),
+            vector_db=_MockVectorDB([
+                {"chunk_id": "c1", "doc_id": "d1", "file_name": "f.md",
+                 "chunk_index": 0, "content": "some context", "score": 0.9},
+            ]),
+            long_term_memory=ltm,
+        )
+        rag.memory_enabled = ltm is not None   # 工厂注入后置位; 测试里显式置, 不依赖 config
+        return rag
+
+    def test_inject_profile_and_facts_into_prompt(self):
+        ltm = _FakeLTM(
+            profile={"preference": ["喜欢简洁回答"], "domain": ["Python"]},
+            facts=[_FakeHit("用户在做 RAG 项目")],
+        )
+        rag = self._make_rag(ltm)
+        rag.run({"query": "怎么优化", "session_id": "s1", "trace_id": "t1",
+                 "extra_params": {"tenant_id": "u1"}})
+        prompt = rag.llm_client.last_prompt or ""
+        self.assertIn("喜欢简洁回答", prompt)        # 画像注入
+        self.assertIn("用户在做 RAG 项目", prompt)    # 相关 fact 注入
+
+    def test_learn_extracts_and_adds_facts_after_answer(self):
+        ltm = _FakeLTM(extracted=[_FakeFact("用户偏好 Python")])
+        rag = self._make_rag(ltm)
+        rag.run({"query": "教我装饰器", "session_id": "s2", "trace_id": "t2",
+                 "extra_params": {"tenant_id": "u1"}})
+        self.assertEqual(ltm.extract_called, 1)    # 答后学习被触发
+        self.assertEqual(len(ltm.added), 1)        # 抽到的 fact 入库
+
+    def test_no_memory_zero_change(self):
+        rag = self._make_rag(None)
+        out = rag.run({"query": "hi", "session_id": "s3", "trace_id": "t3"})
+        self.assertEqual(out["code"], "SUCCESS")
+        self.assertNotIn("关于使用者", rag.llm_client.last_prompt or "")  # 无画像块
+
+    def test_memory_failure_does_not_break_rag(self):
+        class _BadLTM:
+            def get_user_profile(self, t): raise RuntimeError("boom")
+            def search_facts(self, q): raise RuntimeError("boom")
+            def extract_facts(self, **k): raise RuntimeError("boom")
+            def add_fact(self, f): raise RuntimeError("boom")
+        rag = self._make_rag(_BadLTM())
+        out = rag.run({"query": "x", "session_id": "s4", "trace_id": "t4",
+                       "extra_params": {"tenant_id": "u1"}})
+        self.assertEqual(out["code"], "SUCCESS")   # memory 全炸也不影响 RAG 主响应
+
+    def test_learn_even_when_no_doc_context(self):
+        # 空知识库 (无 vector_db → 检索 0 → 无上下文兜底) 也要从用户陈述学习, 否则
+        # 新用户/无文档场景下 "越用越懂" 永远不触发。
+        ltm = _FakeLTM(extracted=[_FakeFact("用户叫 Kunk")])
+        rag = SimpleRAG(llm_client=_CapturingLLM(), long_term_memory=ltm)
+        rag.memory_enabled = True
+        out = rag.run({"query": "记住我叫 Kunk", "session_id": "s5", "trace_id": "t5",
+                       "extra_params": {"tenant_id": "u1"}})
+        self.assertEqual(out["code"], "SUCCESS")
+        self.assertEqual(ltm.extract_called, 1)   # 无文档命中也触发学习
+        self.assertEqual(len(ltm.added), 1)
+
+
+if __name__ == "__main__":
+    _ut.main()

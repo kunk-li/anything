@@ -28,6 +28,7 @@ class SimpleRAG(BaseRAG):
         query_rewriter=None,
         state_store=None,  # Task #46: 会话记忆 (从这里读历史 + 写新轮)
         bm25_retriever=None,  # Task #49: 混合检索, 关键字稀疏召回
+        long_term_memory=None,  # Phase4: 用户模型/跨会话学习 (个性化 + 越用越懂)
         deps: Optional[BasicDeps] = None,
     ):
         # 基础依赖优先走 DI 注入；未注入时构造一套（向后兼容）
@@ -45,6 +46,7 @@ class SimpleRAG(BaseRAG):
         self.query_rewriter = query_rewriter
         self.state_store = state_store
         self.bm25_retriever = bm25_retriever
+        self.long_term_memory = long_term_memory
 
         # 关键配置项走 get_effective_value, 允许环境变量覆盖
         # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
@@ -87,6 +89,17 @@ class SimpleRAG(BaseRAG):
         self.hybrid_rrf_k = self.config.get_effective_value(
             "rag.hybrid_rrf_k", env_var="ANYTHING_RAG_HYBRID_RRF_K",
             default=60, value_type=int,
+        )
+
+        # Phase4 记忆个性化: long_term_memory 注入了才生效 (graceful). 答前注入用户画像 +
+        # query 相关 fact ("懂使用者"), 答后从本轮抽 fact 入库 ("越用越懂"). 默认开 (仅当有 memory)。
+        self.memory_enabled = bool(long_term_memory is not None and self.config.get_effective_value(
+            "rag.memory_enabled", env_var="ANYTHING_RAG_MEMORY_ENABLED",
+            default=True, value_type=bool,
+        ))
+        self.memory_top_k = self.config.get_effective_value(
+            "rag.memory_top_k", env_var="ANYTHING_RAG_MEMORY_TOP_K",
+            default=3, value_type=int,
         )
 
         self.logger.info("RAG 模块初始化完成")
@@ -145,6 +158,75 @@ class SimpleRAG(BaseRAG):
             })
         except Exception as e:
             self.logger.warning(f"写会话状态失败 (忽略): session_id={session_id}, err={e}")
+
+    # ============ Phase4 记忆个性化 (用户模型 + 跨会话学习) ============
+    def _memory_tenant(self, request: Dict[str, Any]) -> str:
+        """解析当前 tenant_id (extra_params > observability context > default)."""
+        ep = request.get("extra_params") or {}
+        tenant = ep.get("tenant_id") or request.get("tenant_id")
+        if tenant:
+            return str(tenant)
+        try:
+            from observability_module import get_current_tenant
+            cur = get_current_tenant()
+            if cur:
+                return str(cur)
+        except Exception:
+            pass
+        return "default"
+
+    def _memory_context_block(self, query: str, tenant_id: str) -> str:
+        """答前注入: 用户画像 + query 相关 fact, 拼成可加到 prompt 前的上下文块。
+        无记忆 / 读失败一律返 '' (fail-open, 不影响 RAG 主流程)。"""
+        if not self.memory_enabled or self.long_term_memory is None:
+            return ""
+        blocks: List[str] = []
+        try:
+            profile = self.long_term_memory.get_user_profile(tenant_id) or {}
+            if profile:
+                labels = {"preference": "偏好", "style": "风格", "convention": "约定",
+                          "domain": "领域", "weakness": "需主动补位"}
+                lines = ["[关于使用者 — 回答时遵循; 标 '需主动补位' 的请主动替 ta cover]"]
+                for dim, items in profile.items():
+                    for it in items:
+                        lines.append(f"- [{labels.get(dim, dim)}] {it}")
+                blocks.append("\n".join(lines))
+        except Exception as e:
+            self.logger.warning(f"[memory] 读用户画像失败 (忽略): tenant={tenant_id}, err={e}")
+        try:
+            from long_term_memory_module import MemoryQuery
+            hits = self.long_term_memory.search_facts(
+                MemoryQuery(query=query, tenant_id=tenant_id, top_k=self.memory_top_k)
+            )
+            if hits:
+                lines = ["[已知与本问题相关的信息]"] + [f"- {h.fact.content}" for h in hits]
+                blocks.append("\n".join(lines))
+        except Exception as e:
+            self.logger.warning(f"[memory] 查相关 fact 失败 (忽略): tenant={tenant_id}, err={e}")
+        return ("\n\n".join(blocks) + "\n\n") if blocks else ""
+
+    def _learn_from_turn(self, query: str, answer: str, tenant_id: str,
+                         session_id: Optional[str]) -> None:
+        """答后学习: 从 (query, answer) 抽 fact 入长期记忆 (越用越懂)。best-effort,
+        无 LLM 抽取通道 (NotImplementedError) / 失败 都静默跳过, 绝不阻断主响应。"""
+        if not self.memory_enabled or self.long_term_memory is None or not answer:
+            return
+        try:
+            facts = self.long_term_memory.extract_facts(
+                messages=[{"role": "user", "content": query},
+                          {"role": "assistant", "content": answer}],
+                tenant_id=tenant_id, session_id=session_id,
+            )
+        except NotImplementedError:
+            return
+        except Exception as e:
+            self.logger.warning(f"[memory] extract_facts 失败 (忽略): tenant={tenant_id}, err={e}")
+            return
+        for f in facts or []:
+            try:
+                self.long_term_memory.add_fact(f)
+            except Exception as e:
+                self.logger.warning(f"[memory] add_fact 失败 (忽略): err={e}")
 
     def retrieve(self, request: Dict[str, Any]) -> List[Dict[str, Any]]:
         """执行 chunk 级检索并返回标准结果列表(文档第 12 章 6 步链路)。
@@ -308,6 +390,7 @@ class SimpleRAG(BaseRAG):
         query = self._normalize_query(request.get("query", ""))
         trace_id = request.get("trace_id")
         session_id = request.get("session_id")
+        tenant_id = self._memory_tenant(request)  # Phase4 记忆个性化
 
         context_chunks = self._assemble_context(retrieved_chunks)
         # A1: 检索 0 结果 → 不调 LLM, 直接诚实回复 (杜绝无依据幻觉 + 省一次 LLM 调用).
@@ -315,11 +398,15 @@ class SimpleRAG(BaseRAG):
             no_ctx = "根据现有知识库, 没有找到与该问题相关的内容。可以换个说法, 或先上传相关文档再问。"
             self._save_turn(session_id=session_id, user_query=query,
                             assistant_answer=no_ctx, trace_id=trace_id)
+            # Phase4: 即便无文档命中也从本轮抽 fact (用户陈述/偏好), 让"越用越懂"不漏掉日常对话
+            self._learn_from_turn(query, no_ctx, tenant_id, session_id)
             self.logger.info(f"RAG 检索 0 结果, 返回诚实兜底 (不调 LLM): trace_id={trace_id}")
             return {"answer": no_ctx, "citations": []}
         # Task #46: 注入历史
         history = self._load_history(session_id)
         prompt = self._build_prompt(query=query, context_chunks=context_chunks, history=history)
+        # Phase4: 答前注入用户画像 + query 相关 fact (懂使用者); 无记忆则空, prompt 不变
+        prompt = self._memory_context_block(query, tenant_id) + prompt
 
         self.logger.info(
             f"RAG 生成开始：trace_id={trace_id}, context_chunks={len(context_chunks)}, "
@@ -339,6 +426,8 @@ class SimpleRAG(BaseRAG):
             assistant_answer=answer_text,
             trace_id=trace_id,
         )
+        # Phase4: 答后从本轮抽 fact 入长期记忆 (越用越懂); best-effort
+        self._learn_from_turn(query, answer_text, tenant_id, session_id)
 
         self.logger.info(f"RAG 生成完成：trace_id={trace_id}")
         return {
@@ -382,9 +471,11 @@ class SimpleRAG(BaseRAG):
             # 2. 拼上下文 + prompt + citations (跟 generate() 同样)
             query = self._normalize_query(request.get("query", ""))
             session_id = request.get("session_id")
+            tenant_id = self._memory_tenant(request)  # Phase4 记忆个性化
             context_chunks = self._assemble_context(retrieved_chunks)
             history = self._load_history(session_id)  # Task #46
             prompt = self._build_prompt(query=query, context_chunks=context_chunks, history=history)
+            prompt = self._memory_context_block(query, tenant_id) + prompt  # Phase4: 答前注入
             citations = self._build_citations(context_chunks)
 
             self.logger.info(
@@ -426,6 +517,8 @@ class SimpleRAG(BaseRAG):
                 yield {"type": "chunk", "text": no_ctx}
                 self._save_turn(session_id=session_id, user_query=query,
                                 assistant_answer=no_ctx, trace_id=trace_id)
+                # Phase4: 无文档命中也学习本轮 (与非流式对称)
+                self._learn_from_turn(query, no_ctx, tenant_id, session_id)
                 yield {"type": "done", "cost_time": round(time.time() - start_time, 3),
                        "answer_length": len(no_ctx), "code": "SUCCESS"}
                 return
@@ -472,6 +565,8 @@ class SimpleRAG(BaseRAG):
                 assistant_answer=full_answer,
                 trace_id=trace_id,
             )
+            # Phase4: 答后从本轮抽 fact 入长期记忆 (越用越懂); best-effort
+            self._learn_from_turn(query, full_answer, tenant_id, session_id)
 
             # 5. 完成事件
             yield {

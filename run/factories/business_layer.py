@@ -248,6 +248,21 @@ def build_business_layer(
     except Exception as _mem_err:
         deps.logger.warning(f"[memory] long_term_memory 启用失败 (忽略): {_mem_err}")
 
+    # Phase4: 把 long_term_memory 也注入 RAG, 让"聊天"主路径同样懂使用者 (答前注入画像/相关
+    # fact) + 越用越懂 (答后抽 fact)。rag 在 long_term_memory 之前构造, 故属性注入 + 补算
+    # memory_enabled (__init__ 时 long_term_memory 还是 None, 算出来是 False)。
+    if long_term_memory is not None and rag is not None:
+        try:
+            rag.long_term_memory = long_term_memory
+            rag.memory_enabled = bool(deps.config.get_effective_value(
+                "rag.memory_enabled", env_var="ANYTHING_RAG_MEMORY_ENABLED",
+                default=True, value_type=bool))
+            deps.logger.info(
+                f"[memory] RAG 已接入 long_term_memory (memory_enabled={rag.memory_enabled})"
+            )
+        except Exception as _rm_err:
+            deps.logger.warning(f"[memory] RAG 接入 long_term_memory 失败 (忽略): {_rm_err}")
+
     agent = SimpleAgent(
         state_store=data_layer.get("state_store"),
         tool_registry=tool_registry,
