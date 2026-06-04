@@ -255,11 +255,25 @@ class StreamingMixin:
                     max_iterations=self.max_react_iterations,
                     tool_descriptions=tool_descriptions,
                 )
-                try:
-                    raw = llm_call(prompt)
-                except Exception as e:
+                # 健壮: react 计划 LLM 调用撞网络抖动会抛异常 — 重试 (短退避) 而非直接报错。
+                # 本 generator 在线程池跑 (handle_stream via run_in_executor), time.sleep 安全。
+                raw = None
+                _last_err = None
+                for _attempt in range(3):
+                    try:
+                        raw = llm_call(prompt)
+                        _last_err = None
+                        break
+                    except Exception as e:
+                        _last_err = e
+                        self.logger.warning(
+                            f"[react-stream] LLM 调用异常 iter={iteration} 第{_attempt + 1}/3 次: {e}"
+                        )
+                        if _attempt < 2:
+                            time.sleep(0.8 * (_attempt + 1))  # 0.8s → 1.6s 退避
+                if _last_err is not None:
                     yield {"type": "error", "code": "AGENT_RUN_FAILED",
-                           "message": f"LLM 调用异常 iter={iteration}: {e}"}
+                           "message": f"LLM 调用异常 iter={iteration} (重试 3 次仍失败): {_last_err}"}
                     return
 
                 step = self._parse_react_response(raw, available_tools)
