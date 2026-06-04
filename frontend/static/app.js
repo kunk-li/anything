@@ -2415,10 +2415,12 @@
                     resolve();
                 },
                 onClose: () => {
-                    if (activeStream) {
-                        activeStream = null;
-                        resolve();
-                    }
+                    // 修"点停止后不能再发请求": stopSending 会先把 activeStream 置 null, 旧版
+                    // if(activeStream) 卫语句会跳过 resolve → sendStream 的 await 永不解开 →
+                    // send() 的 finally 不跑 → inflight 锁不释放 → 发送被拒。resolve() 幂等,
+                    // 无条件 resolve 既修该 bug, 又不影响正常 onDone/onError 之后的 close。
+                    activeStream = null;
+                    resolve();
                 },
             });
             activeStream.send(body);
