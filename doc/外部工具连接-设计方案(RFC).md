@@ -1,6 +1,6 @@
 # 外部工具连接 — 设计方案 (RFC)
 
-| 状态 | **Stage1+2 已实现** (2026-06-03) — HTTP/OpenAPI 连接器 + MCP stdio 客户端均落地 |
+| 状态 | **Stage1+2 + 增量 已实现** (2026-06-03) — HTTP 连接器 + MCP(stdio+HTTP) + OpenAPI 自动生成 + 真实 server 集成测试 |
 |---|---|
 | 背景 | agent 缺失同外部工具的连接 (用户提出; 对标 codex/claude 验证为最大短板) |
 | 决策人 | 用户 |
@@ -104,4 +104,4 @@
 4. **配置形式**: → ✅ **`config.yaml` 的 `agent.external_tools`**(HttpToolSpec dict 列表) + 兼容运行时 `register_tool`。
 5. **范围**: → ✅ 先建**机制 + 测试 spec**(用户之后填真实 API; 凭据建议走 env/加密 secret, 勿明文入配置)。
 
-> 用户拍板"推进 RFC"+"参考 codex/claude code 实现"; Q1-Q5 均已定 + 落地 (Stage1 HTTP + Stage2 MCP stdio)。剩 SSE/HTTP 传输、真实 server 配置、定时连接管理等增量。
+> 用户拍板"推进 RFC"+"参考 codex/claude code 实现"; Q1-Q5 均已定 + 落地。已完成: Stage1 HTTP 连接器 + Stage2 MCP stdio 客户端 + 增量(MCP **HTTP/SSE 传输** `102e942` / **真实 server 集成测试**(自带 echo server, 真子进程) `fe10cab` / **OpenAPI 自动生成 HTTP 工具** `062cccb`)。剩: MCP **SSE 长连**(server→client 流式通知, 现 HTTP 只做请求/响应) + 连接生命周期管理 + OpenAPI `spec_url` 远程拉取。

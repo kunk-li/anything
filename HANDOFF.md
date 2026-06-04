@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `e08280e` · 分支: `main`(已同步 origin)
+> 最后更新: 2026-06-03 · 最新 commit: `062cccb` · 分支: `main`(⚠️ 本地领先 origin 若干 commit, 网络恢复后需 push)
 
 ---
 
@@ -24,7 +24,7 @@
    ③ **方向3 GoalVerifier** (`5a24097`): 子目标级验收, opt-in, 不动规划核心
    ④ **方向1阶段3** (`4fde8f7`): 画像冲突消解(`reconcile_conflicts`/`superseded_by`) + 时效排序
    ⑤ **UP-4 query refinement** (`c15380d`): 含糊问题基于画像改写, 默认关, fail-open
-   ⑥ **外部工具连接 Stage1+2** (`33dcc6b` HTTP / `e08280e` MCP): 补 codex/claude 对标出的最大短板。Stage1 HTTP/OpenAPI 连接器 + Stage2 **MCP stdio 客户端**(参考 codex/claude code 标准 MCP 协议, 最小自实现无 SDK 依赖) — 统一 `ExternalToolProvider` 抽象 + 工厂接线; 配置 `agent.external_tools`/`agent.mcp_servers`; 复用 SSRF + 默认审批 + fail-safe; test 23 例
+   ⑥ **外部工具连接 Stage1+2+增量** (`33dcc6b`/`e08280e`/`102e942`/`fe10cab`/`062cccb`): 补 codex/claude 对标最大短板。HTTP 连接器 + **MCP 客户端(stdio + HTTP/SSE, 参考 codex/claude code 标准协议自实现无 SDK)** + OpenAPI 自动生成工具 + 真实 server 集成测试(自带 echo server 真子进程) — 统一 `ExternalToolProvider` 抽象 + 工厂接线; 配置 `agent.external_tools`/`mcp_servers`/`openapi_tools`; SSRF+默认审批+fail-safe; test 37 例
    全程 test 共 83 例 + agent 322/long_term_memory 全套 passed + ABC 19 全绿
 1. **全项目审计** — 5 个并行 agent 扫描代码 vs 设计规范，亲自复核 3 条 CRITICAL (修正 2 处误报)
 2. **AUDIT 1-4** (`ab6f1ae` `3297e26`) — exception 补 import json、check_abc Win 编码、`AGENT_TIMEOUT` 真 enforce、deps 反向依赖消除、ABC 检查覆盖 10→19、console_app 设计文档重写(原错挂)、架构图模块清单校准、横切模块文档、`doc/README.md` 文档状态校准页
@@ -34,7 +34,7 @@
 6. **方向 1 用户画像 MVP** (`8cd577b`) — `get_user_profile` 5 维度聚合 + agent always-on 注入
 
 ## 4. 未完成 backlog (按优先级)
-- **外部工具连接 增量 (可选)** — Stage1 (HTTP 连接器) + Stage2 (MCP stdio 客户端) **均已落地** (`33dcc6b`/`e08280e`, `business/agent_module/tools/external/`)。剩增量: (a) MCP **SSE/HTTP 传输**(现仅 stdio 本地子进程); (b) 真实 server 配置 + 连接生命周期管理(现 discover 启动连, 进程随 app 存活); (c) OpenAPI spec 自动生成 HTTP 工具。详见 `doc/外部工具连接-设计方案(RFC).md`。
+- **外部工具连接 余量 (可选)** — HTTP 连接器 + MCP(stdio+HTTP) + OpenAPI 生成 + 真实 server 集成测试 **均已落地** (`business/agent_module/tools/external/`)。剩: (a) MCP **SSE 长连**(server→client 流式通知, 现 HTTP 仅请求/响应); (b) 连接**生命周期管理**(现 discover 启动连, 进程随 app 存活); (c) OpenAPI **`spec_url` 远程拉取**(现仅 inline spec dict)。详见 `doc/外部工具连接-设计方案(RFC).md`。
 - **方向 4 续探 (可选)** — 建议性自主全档已落地(行为/记忆/代码文档自维护 + 定时提议通知 + 预授权自动, **默认全关**)。再往前: (a) 把 `maintenance_scan` 真正注册进 `TaskScheduler` 定时任务(现是能力就绪, 未默认注册); (b) 真正"执行性自主"(超出预授权安全算子, 如自动改配置/代码)——**风险高, 须专门设计 + 强护栏(沙箱/审批/可回滚), 不轻易做**
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
 - **方向 1 可选增强**: `reconcile_conflicts`/`consolidate`/`prune` 接入调度定期触发 (现都只外部手动调, 无定时); 给 UP-4 加 "ask 模式"(歧义大反问澄清而非静默改写) + 默认开启策略
@@ -52,7 +52,7 @@
 - **自主维护·记忆健康 (方向4 扩域)**: 默认 **off** (同 `enable_self_reflection`)。`propose_memory_maintenance(tenant)` 只读检视记忆健康(陈旧/可降级/对立/冗余, **确定性**不调 LLM)→ dry-run 提议; `apply_memory_maintenance(proposals, approved_ids)` 仅把**人审批**的提议映射到**现成算子**执行(`run_prune→prune_stale` / `run_degrade→degrade_stale_refinable` / `run_reconcile→reconcile_conflicts` / `run_consolidate→consolidate`)。候选谓词须与那些算子一致(改算子时同步 `aggregate_memory_signals`)。
 - **自主维护·代码文档 (方向4 扩域, advisory)**: `propose_code_doc_maintenance(root)` 只读扫项目(缺 README 模块 / TODO·FIXME 计数)→ advisory 清单; **代码/文档改动绝不自动执行, 无 apply**(仅供人处理)。
 - **自主维护·定时提议+通知 + 更高自主档 (方向4)**: `run_maintenance_scan(scope, auto_apply)` 聚合 行为/记忆/代码文档 三域提议 + `_notify_maintenance` 写审计(通知); `execute` 的 `extra_params.maintenance_scan=true` 钩子可被 **TaskScheduler** 周期触发(`maintenance_scope` 选域)。**更高自主档**: 配置 `agent.auto_approve_maintenance`(预授权 action_type 名单, **默认空**=零自动=纯提议); `auto_apply` 时仅对 (名单 ∩ **安全天花板** `{run_prune,run_degrade}`) 自动执行+审计; reconcile/consolidate(LLM)/code_doc(advisory) **永不**自动。人设名单=预授权、被通知、清空=撤销 → 仍全程 human-in-loop。
-- **外部工具连接 (RFC Stage1+2)**: `business/agent_module/tools/external/` — `ExternalToolProvider` 抽象(HTTP/MCP 都实现)。**Stage1 HTTP**: `HttpToolProvider`+`HttpToolSpec`(声明式 url占位/query/body/auth/`response_path`)+`make_http_tool`(复用 `http_get` SSRF 防御)。**Stage2 MCP**: `McpToolProvider`+`McpStdioClient`(标准 MCP 协议 JSON-RPC2.0 over stdio, 最小自实现无 SDK; initialize→tools/list→tools/call; 工具命名空间 `server.tool`)。配置 `agent.external_tools`/`agent.mcp_servers` → 启动 `business_layer.py` 注册, **默认并入 `tool_approval_required`**(human-in-loop), fail-safe。零新依赖。凭据/server 仅显式配置(勿明文; 不自动连未知 server)。
+- **外部工具连接 (RFC Stage1+2)**: `business/agent_module/tools/external/` — `ExternalToolProvider` 抽象(HTTP/MCP 都实现)。**Stage1 HTTP**: `HttpToolProvider`+`HttpToolSpec`(声明式 url占位/query/body/auth/`response_path`)+`make_http_tool`(复用 `http_get` SSRF 防御)。**Stage2 MCP**: `McpToolProvider` + `_McpClientBase`(传输无关) → `McpStdioClient`(stdio 子进程) / `McpHttpClient`(Streamable HTTP: POST JSON-RPC, json/sse 响应, Mcp-Session-Id); 标准 MCP 协议 JSON-RPC2.0, 最小自实现无 SDK; initialize→tools/list→tools/call; 命名空间 `server.tool`。**OpenAPI**: `openapi_to_specs(openapi dict)` 每 operation → HttpToolSpec(复用 Stage1)。配置 `agent.external_tools`/`agent.mcp_servers`/`agent.openapi_tools` → 启动 `business_layer.py` 注册, **默认并入 `tool_approval_required`**(human-in-loop), fail-safe。零新依赖。凭据/server 仅显式配置(勿明文; 不自动连未知 server)。真实 server 互通有自带 echo server 集成测试守护。
 - **敏感加密**: `content_type=secret` 的 content 用 Fernet 加密(`SENSITIVE_CONFIG_SECRET`)，`reveal_fact()` 显式解密；无密钥则丢明文(绝不明文落库)。
 - **ABC 守护**: `scripts/check_abc_alignment.py` (19 对 base↔impl)。pre-commit 未实际安装(`.git/hooks` 当前只有 post-commit)。
 
@@ -82,7 +82,7 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 |---|---|
 | 自我验证器 (方向3, 含 GoalVerifier) | `business/agent_module/core/components/verifier.py` |
 | 自反思 / 自维护 (方向4) | `business/agent_module/core/components/self_reflection.py` |
-| 外部工具连接 (Stage1 HTTP + Stage2 MCP stdio) | `business/agent_module/tools/external/` (base/http_provider/mcp_provider/__init__) + `run/factories/business_layer.py` 接线 |
+| 外部工具连接 (HTTP 连接器 + MCP stdio/HTTP + OpenAPI 生成) | `business/agent_module/tools/external/` (base/http_provider/mcp_provider/openapi/__init__) + `run/factories/business_layer.py` 接线 |
 | Agent 核心(验证接入 `_post_verify` / 画像注入 `_inject_user_profile` / 超时 enforce) | `business/agent_module/core/impl.py` |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
@@ -93,5 +93,5 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 ## 9. 下个会话建议第一步
 1. 读本文件 + `MEMORY.md`(自动注入) — 5 分钟接上上下文
 2. 确认 `git status` 干净、`git log origin/main..HEAD` 为空
-3. 问用户: 新需求, 或外部工具增量(MCP SSE/HTTP 传输 / 真实 server 配置试跑 / OpenAPI 自动生成)。方向1/2/3 收尾; 方向4 建议性自主全档; 外部工具 Stage1+2 均落地 (见 §4)
+3. **先 push 本地领先的 commit** (本会话末网络中断, 见顶部告警); 然后问用户: 新需求 (方向1/2/3 收尾; 方向4 建议性自主全档; 外部工具 HTTP+MCP(stdio/HTTP)+OpenAPI 均落地, 余量见 §4)
 4. 任何 commit 后会由 git hook 自动 push (无需手动)

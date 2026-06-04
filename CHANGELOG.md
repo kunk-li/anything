@@ -7,7 +7,7 @@
 
 ## Unreleased (2026-06-03)
 
-> 补记: 以下 方向1/2/3/4 + 审计 + 外部工具(HTTP+MCP) 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`e08280e`)。
+> 补记: 以下 方向1/2/3/4 + 审计 + 外部工具(HTTP+MCP+OpenAPI) 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`062cccb`)。
 > 战略: 从"团队知识库工具"演进为"懂使用者的个人智能助手"(终极: 能自动思考/自更新维护的 agent)。
 
 ### 外部工具连接 Stage1+2 — HTTP 连接器 + MCP 客户端 (`33dcc6b` HTTP / `e08280e` MCP)
@@ -15,7 +15,8 @@
 - `business/agent_module/tools/external/`: `ExternalToolProvider` 抽象 + `ExternalToolDef`(HTTP/MCP 都实现, 统一接入点); `register_external_tools` + `build_providers_from_config`; `business_layer.py` 启动注册, 默认并入 `tool_approval_required`(human-in-loop), fail-safe; **零新依赖**(stdlib)
 - **Stage1 HTTP/OpenAPI** (`33dcc6b`): `HttpToolProvider` + `HttpToolSpec`(声明式 url占位/query/JSON body/auth/`response_path`) + `make_http_tool`(复用 `http_get` SSRF 私网防御, fetch 可注入); `test_external_tools` 13 例
 - **Stage2 MCP 客户端** (`e08280e`): 参考 codex/claude code 标准 MCP 协议, **最小自实现** `McpStdioClient`(JSON-RPC 2.0 over stdio: initialize→tools/list→tools/call; transport 可注入) + `McpToolProvider`(命名空间 `server.tool`); 配置 `agent.mcp_servers`; 仅连显式 server; `test_mcp_tools` 10 例
-- 安全: SSRF/默认审批/仅显式配置/fail-safe; 凭据/server 勿明文(建议 env/加密)
+- **增量** (`102e942`/`fe10cab`/`062cccb`): ① MCP **HTTP/SSE 传输** — 抽 `_McpClientBase` + `McpHttpClient`(Streamable HTTP: POST JSON-RPC, json/sse, Mcp-Session-Id), 远程 server; ② **真实 server 集成测试** — 自带最小 echo MCP server(python -c stdlib), 真子进程端到端跑通(无网络/npx); ③ **OpenAPI 自动生成** — `openapi_to_specs` 每 operation→HttpToolSpec(复用 Stage1), 配置 `agent.openapi_tools`
+- 安全: SSRF/默认审批/仅显式配置/fail-safe; 凭据/server 勿明文(建议 env/加密)。余量: MCP SSE 长连 / 连接生命周期 / OpenAPI spec_url 远程拉取
 
 ### 方向4 自主维护 — 建议性自主全档 (`4e20332` 行为反思 / `7361885` 记忆 / `409c2fb` 代码文档 / `935edb7` 定时 / `e9a086b` 预授权)
 **全程 human-in-loop, 默认全关; 安全分级 — 只提议为主, 自动执行严格受限。**
