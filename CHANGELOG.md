@@ -5,6 +5,31 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-04)
+
+> 主题: 回应"agent 能力太弱 / 不能操作" — 系统性增强 agent (模型档位 / 执行循环 / 自我校验 / 记忆个性化) + 修若干体验 bug。commit `b7e8ec6`..`bc78c26`。
+
+### "不能操作 / 模型说不能干" 修复 (`bc78c26`)
+根因: 聊天默认 RAG 模式 (被动从文档答、无工具) → 让 agent 干活就答"做不了, 很多工作不能实施"。
+- 前端默认 `mode` 'rag'→'agent' (聊天直接用工具干活; agent 经 rag_search 兼顾文档问答, 是 RAG 超集); `app.js?v=188` 刷缓存
+- `prompt_builder.py` react 提示词加赋能前言 (你有真实工具会真正执行, 优先动手, 别答"我做不了/我只是AI", 缺事实先调工具)
+- `config.yaml` `default_chat_model`→qwen-max (选工具/推理最准); agent 墙钟超时 60→120s (`business_layer.py`, 多轮 ReAct+校验避免 AGENT_TIMEOUT→504)
+- 实测 "12345 乘以 67890"(UTF-8) → 838102050 正确, 18.5s, calculator。(排查中错答 5555/80235 + 78s 超时, 定位为 CLI 测试把中文 body 发成非 UTF-8 致服务端乱码, 非 agent 问题; 真实前端 UTF-8 不受影响)
+
+### agent 能力增强四期 (`541d43e` 地基 / `0be65f4` 校验闭环 / `266dbf4` 记忆个性化)
+回应"agent 太弱"。盘点发现编排/校验/记忆核心多已建好, 主缺口在模型档位与默认行为。
+- **地基** (`541d43e`): 主力 chat 模型 qwen-turbo→qwen-plus(后续→max); `agent.execution_strategy` 默认 single_shot→react (多轮迭代; max_react 已 15)。纯 config
+- **规划闭环** (`0be65f4`): `enable_self_verify`/`verify_mode=auto`/`max_correction=1` 默认开 — 每个 agent 任务终态校验"是否真完成"+未完成带缺口反馈自纠正 (复用方向3 `_post_verify`, 早建好默认关, 本期激活); 修 7 个计调用次数单测 (给其 agent 构造显式 `enable_self_verify=False` 隔离正交校验调用)
+- **记忆个性化** (`266dbf4`): RAG 聊天接入用户模型 — 答前注入画像+query 相关 fact(懂使用者)、答后 `extract_facts`→`add_fact` 学习(越用越懂, 含无文档兜底分支); `SimpleRAG` 加 `long_term_memory` 注入 + `memory_enabled`/`memory_top_k`; 工厂属性注入; 全程 graceful fail-open; `test_impl` +5
+- **自主编排**: 核心 (`spawn_subagent` 子代理 + 串行工具链 + 15 轮 ReAct) 已就绪并经上面激活; **并行工具执行**延后 (可选, 中高复杂度)
+
+### RAG 失败也落盘本轮 — 修刷新丢最新对话 (`92df5fc`)
+`run()`/`run_stream()` 仅正常完成才 `_save_turn`, 异常路径 (检索/LLM 挂) 跳过 → 刷新调 `/sessions/{id}` 拿空 → 最新对话丢。设计本是"先存后端"(前端已不留 localStorage 历史)。修: except 里补 `_save_turn`(用户问题+失败说明); `test_impl` +4
+
+### LLM banner 熔断冷却后自愈 + gitignore 审计日志 (`b7e8ec6` / `b296d0b`)
+- banner (`b7e8ec6`): 只把"仍在冷却窗口内"(`cooldown_remaining_seconds>0`)的 unhealthy 算真不可用, 冷却已过视为恢复中 → banner 自动消失 (`app.js` `_renderLLMBanner`); 去掉"重启服务"误导文案 (前端 banner + `llm_compat` stub) — 熔断器本就自愈无需重启
+- `.gitignore` (`b296d0b`): 忽略 `audit.log.jsonl` + 滚动备份 (不带前导斜杠匹配任意目录; 防 `git add -A` 误纳入运行时审计日志)
+
 ## Unreleased (2026-06-03)
 
 > 补记: 以下 方向1/2/3/4 + 审计 + 外部工具(HTTP+MCP+OpenAPI) + 计算机操作 工作集中补入 CHANGELOG (对应 commit `0d78f4a`..`b1b2d62`)。

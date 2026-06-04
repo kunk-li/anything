@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `673dd7d` · 分支: `main`(已同步 origin; 注: 本会话网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` 重试即可)
+> 最后更新: 2026-06-04 · 最新 commit: `bc78c26` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
 
 ---
 
@@ -18,7 +18,13 @@
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 建议性自主全档 done: 行为自反思/记忆健康/代码文档/定时提议通知/预授权自动(默认空); 终极目标持续演进 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
-0. **本次会话 (方向1→2→3→4 + 文档审计 + 外部工具 Stage1+2, 全在 origin/main)** —
+0新. **最新会话 (2026-06-04): "agent 太弱/不能操作" 系统性增强 + 体验修复 (全在 origin/main, `b7e8ec6`..`bc78c26`)** —
+   ① **"不能操作/模型说不能干"修复** (`bc78c26`): 根因=聊天**默认 RAG 模式**(被动从文档答、无工具)→让 agent 干活就答"做不了"。前端默认 `mode` rag→**agent**(state.mode @ app.js, agent 经 rag_search 兼顾文档问答) + react 提示词**赋能**(prompt_builder: 有真实工具会真执行/优先动手/别说"我做不了") + `default_chat_model`→**qwen-max** + agent 墙钟超时 60→**120s**(business_layer, 避免多轮循环 AGENT_TIMEOUT→504)。实测 12345×67890→838102050 对、18.5s。`app.js?v=188`
+   ② **agent 增强四期** ("能力太弱"): 地基(`541d43e`: qwen-turbo→plus(后→max) + `agent.execution_strategy` 默认 single_shot→**react**; max_react 已 15) / 规划闭环(`0be65f4`: `enable_self_verify`+`verify_mode=auto`+`max_correction=1` **默认开**, 复用方向3 `_post_verify` 执行→校验→自纠正; 修 7 个计次单测) / 记忆个性化(`266dbf4`: **RAG 聊天接入用户模型** — 答前注入画像+相关 fact、答后 `extract_facts`→`add_fact` 学习含无文档兜底; SimpleRAG 加 `long_term_memory`+工厂属性注入; graceful) / 自主编排(核心 spawn_subagent+串行链+15轮 ReAct 已就绪, **并行执行延后**)
+   ③ **RAG 失败补存** (`92df5fc`): `run()`/`run_stream()` 异常路径(检索/LLM 挂)也 `_save_turn`(用户问题+失败说明), 修"刷新丢最新对话"(设计本是先存后端, 前端不留 localStorage 历史)
+   ④ **banner 自愈** (`b7e8ec6`): 熔断冷却结束 banner 自动消失(cooldown_remaining>0 才算挂)+去"重启服务"误导(熔断器本自愈); **gitignore** (`b296d0b`): 忽略 `audit.log.jsonl`+滚动备份
+   全程 test: agent 356 + rag 26 + 既有全套 passed; ABC 19 全绿
+1新. **上一会话 (方向1→2→3→4 + 文档审计 + 外部工具 Stage1+2, 全在 origin/main)** —
    ① **方向4 自主维护 (建议性自主全档)** — a) 行为自反思 (`4e20332`: `self_reflect`/`apply_reflection_proposals`, 审计日志+LLM 元级反思); b) 扩域·记忆健康 (`7361885`: `propose/apply_memory_maintenance`, 确定性+复用 prune/degrade/reconcile/consolidate); c) 扩域·代码文档 (`409c2fb`: `propose_code_doc_maintenance`, advisory 只读不自动改); d) 定时提议+通知 (`935edb7`: `run_maintenance_scan` 聚合三域+审计通知, `execute` 的 `maintenance_scan` 钩子可被 TaskScheduler 周期触发); e) 更高自主档 (`e9a086b`: `auto_approve_maintenance` 预授权策略**默认空**=零自动, 仅安全确定性算子 run_prune/run_degrade 可自动)。**全程 human-in-loop, 默认全关**
    ② **代码↔设计文档审计校准** (`30ac2e3`): 3 路并行审计 + 亲验; 架构总览事实修正(ABC 10→19/测试规模/reranker 默认/chunker 分层)、Agent 文档加 v2.2 能力校准节、横切文档补记忆升级、CHANGELOG 补方向1/2/3、`.gitignore` 加固(防 `git add -A` 误纳入运行时产物); 规则合规复核(依赖/命名零违规)
    ③ **方向3 GoalVerifier** (`5a24097`): 子目标级验收, opt-in, 不动规划核心
@@ -34,6 +40,7 @@
 6. **方向 1 用户画像 MVP** (`8cd577b`) — `get_user_profile` 5 维度聚合 + agent always-on 注入
 
 ## 4. 未完成 backlog (按优先级)
+- **agent 并行工具执行 (可选, Phase3 延后)** — 现 ReAct 逐轮**串行**调工具; 补"一步并发多个独立工具"(LLM 多动作 JSON + ThreadPool 执行, 多源任务省延迟)。中高复杂度(多动作 JSON 可靠性 / 工具线程安全 / 降级兜底); orchestration 核心(spawn_subagent 子代理 + 串行链 + 15 轮 ReAct)已够用, 故延后。
 - **外部工具连接 余量 (可选)** — HTTP 连接器 + MCP(stdio+HTTP) + OpenAPI 生成 + 真实 server 集成测试 **均已落地** (`business/agent_module/tools/external/`)。剩: (a) MCP **SSE 长连**(server→client 流式通知, 现 HTTP 仅请求/响应); (b) 连接**生命周期管理**(现 discover 启动连, 进程随 app 存活); (c) OpenAPI **`spec_url` 远程拉取**(现仅 inline spec dict)。详见 `doc/外部工具连接-设计方案(RFC).md`。
 - **方向 4 续探 (可选)** — 建议性自主全档已落地(行为/记忆/代码文档自维护 + 定时提议通知 + 预授权自动, **默认全关**)。再往前: (a) 把 `maintenance_scan` 真正注册进 `TaskScheduler` 定时任务(现是能力就绪, 未默认注册); (b) 真正"执行性自主"(超出预授权安全算子, 如自动改配置/代码)——**风险高, 须专门设计 + 强护栏(沙箱/审批/可回滚), 不轻易做**
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
@@ -43,7 +50,7 @@
 
 ## 5. 关键机制 (下个会话必须知道)
 - **自动推送**: commit 后**自动** `git push origin main` 不询问 (双保险: MEMORY 规则 + git post-commit hook)。push 后仍一句话告知; 疑似含密钥/凭据/大体积运行时数据时先提示。
-- **自我验证** (`verifier.py`): 默认 **off**。开: `agent.enable_self_verify=true` + `verify_mode=off|auto|ask`；请求带 `extra_params.verify=[{"type":"pytest","target":"tests/"}]`。**三层模型 (Step/Goal/Task)**: ToolSuccess/Execution(pytest·sql·shell·lint)/Compliance/Task 终态之外, **GoalVerifier 子目标级**(`extra_params.verify_goals=True` opt-in, 默认关; 可带 `goals=[...]` 显式子目标, 否则 LLM 现场拆; 给"plan goal 分组"留接入点但未启用——不动规划核心)。`_post_verify` 是接入点(`collect_specs→make_registry→run_verifiers`+auto 自纠正递归)。验证器故障一律 fail-open(放行)。
+- **自我验证** (`verifier.py`): **2026-06-04 起默认 on** (config `agent.enable_self_verify=true` / `verify_mode=auto` / `max_correction=1`; 每个 agent 任务终态校验+未完成自纠正; 关回 `false`/`off` 即停, 单测构造均显式关以隔离)。手动也可: `agent.enable_self_verify=true` + `verify_mode=off|auto|ask`；请求带 `extra_params.verify=[{"type":"pytest","target":"tests/"}]`。**三层模型 (Step/Goal/Task)**: ToolSuccess/Execution(pytest·sql·shell·lint)/Compliance/Task 终态之外, **GoalVerifier 子目标级**(`extra_params.verify_goals=True` opt-in, 默认关; 可带 `goals=[...]` 显式子目标, 否则 LLM 现场拆; 给"plan goal 分组"留接入点但未启用——不动规划核心)。`_post_verify` 是接入点(`collect_specs→make_registry→run_verifiers`+auto 自纠正递归)。验证器故障一律 fail-open(放行)。
 - **记忆分层**: `Fact.mutability` = `canonical`(密码/路径, 永久不删不改写) / `refinable`(偏好/做法, 可提炼、老了丢原始留 digest)；`digest`=精炼层(粗筛+加密 secret 仍可检索)；`content_type` 含画像 5 维度。
 - **用户画像 5 维度**: `preference/style/convention/domain/weakness`；`get_user_profile()` 聚合，agent `_inject_user_profile()` 任务前 always-on 注入(`weakness`→"需主动补位"=规避缺陷)。
 - **query refinement (UP-4)**: 默认 **off** (`agent.enable_query_refine` / env `ANYTHING_AGENT_QUERY_REFINE`)。用户问得含糊时 `_refine_query()` 基于画像 + LLM 判含糊并改写问题(只补"知道偏好就能定的缺省"=语言/技术栈/格式/范围, 严格保留原意), 再走记忆/画像/历史注入与规划。**只改 task(规划输入), `original_task` 保持用户原话**(history 展示/记忆抽取用)。三重 gate(长问题>`query_refine_max_len`默认200 / 无画像 / 无 LLM) + 安全阀(改写非空且不比原问题短太多) + 全程 fail-open(用原问题)。改写记 `details["query_refinement"]={original,refined,reason}` 透明可回溯; 纠正递归跳过; 单次可 `extra_params.enable_query_refine` 覆盖。区别于 `_inject_user_profile`(画像当上下文附前面): 这里直接改写"问题本身"。
