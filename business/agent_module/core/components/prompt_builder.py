@@ -107,10 +107,12 @@ class PromptBuilderMixin:
             f"这是第 {iteration}/{max_iterations} 轮。请输出下一步思考与动作。\n"
             f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
             f"\n"
-            f"请只输出严格 JSON(不要解释/markdown 围栏),二选一格式:\n"
+            f"请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
             f'{{"thought": "<推理>", "final_answer": "<最终回答>"}}\n'
-            f'或\n'
+            f'或 (调用单个工具):\n'
             f'{{"thought": "<推理>", "action": {{"tool": "<工具名>", "input": {{...}}}}}}\n'
+            f'或 (多个相互独立的工具一步并发执行, 仅当它们彼此不依赖时用, 省时间):\n'
+            f'{{"thought": "<推理>", "actions": [{{"tool": "<工具A>", "input": {{...}}}}, {{"tool": "<工具B>", "input": {{...}}}}]}}\n'
         )
 
     @staticmethod

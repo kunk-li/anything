@@ -462,5 +462,73 @@ class TestHookIntegration(unittest.TestCase):
         self.assertGreater(len(result["data"]["tool_results_summary"]), 0)
 
 
+class TestReActParallel(unittest.TestCase):
+    """Phase3: ReAct 多动作并行执行 (actions:[...]) — 一步并发多个独立工具."""
+
+    def _make_agent(self, llm_responses, approval=None):
+        reg = _DictRegistry()
+        for n in ("rag_search", "llm_generate", "weather", "py_sandbox"):
+            reg.register(n, _stub_tool_success)
+        agent = SimpleAgent(tool_registry=reg, llm_planner=_ScriptedLLM(llm_responses))
+        agent.execution_strategy = "react"
+        agent.use_llm_planner = False
+        agent.enable_self_verify = False  # 隔离: 只测并行机制
+        agent.tool_approval_required = set(approval or [])
+        return agent
+
+    # ---- 解析 ----
+    def test_parse_actions_multi(self):
+        raw = ('{"thought":"t","actions":[{"tool":"rag_search","input":{"query":"x"}},'
+               '{"tool":"weather","input":{"city":"bj"}}]}')
+        step = SimpleAgent._parse_react_response(raw, ["rag_search", "weather"])
+        self.assertIn("actions", step)
+        self.assertEqual([a["tool"] for a in step["actions"]], ["rag_search", "weather"])
+
+    def test_parse_actions_filters_invalid(self):
+        raw = '{"thought":"t","actions":[{"tool":"rag_search","input":{}},{"tool":"nope","input":{}}]}'
+        step = SimpleAgent._parse_react_response(raw, ["rag_search"])
+        self.assertEqual([a["tool"] for a in step["actions"]], ["rag_search"])
+
+    def test_parse_actions_all_invalid_returns_none(self):
+        raw = '{"thought":"t","actions":[{"tool":"nope","input":{}}]}'
+        self.assertIsNone(SimpleAgent._parse_react_response(raw, ["rag_search"]))
+
+    # ---- 执行 ----
+    def test_parallel_executes_all_tools(self):
+        agent = self._make_agent([
+            ('{"thought":"并发查两个","actions":[{"tool":"rag_search","input":{"query":"a"}},'
+             '{"tool":"weather","input":{"city":"bj"}}]}'),
+            '{"thought":"汇总","final_answer":"done"}',
+        ])
+        r = agent.execute({"task": "并发任务", "session_id": "s", "trace_id": "t"})
+        self.assertEqual(r["code"], "SUCCESS")
+        tools = [x["tool_name"] for x in r["data"]["tool_results_summary"]]
+        self.assertIn("rag_search", tools)
+        self.assertIn("weather", tools)
+
+    def test_parallel_approval_blocks_whole_batch(self):
+        # 批中含需审批工具且未批 → 整批阻断 (安全优先), 不执行任何工具
+        agent = self._make_agent([
+            ('{"thought":"并发","actions":[{"tool":"rag_search","input":{}},'
+             '{"tool":"py_sandbox","input":{"code":"x"}}]}'),
+        ], approval=["py_sandbox"])
+        r = agent.execute({"task": "x", "session_id": "s", "trace_id": "t"})
+        self.assertEqual(r["code"], "TOOL_APPROVAL_REQUIRED")
+        self.assertEqual(r["data"]["tool_name"], "py_sandbox")
+
+    def test_parallel_approved_tool_runs(self):
+        # 批中需审批工具已 approve → 整批正常并发执行
+        agent = self._make_agent([
+            ('{"thought":"并发","actions":[{"tool":"rag_search","input":{}},'
+             '{"tool":"py_sandbox","input":{"code":"x"}}]}'),
+            '{"thought":"done","final_answer":"ok"}',
+        ], approval=["py_sandbox"])
+        r = agent.execute({"task": "x", "session_id": "s", "trace_id": "t",
+                           "extra_params": {"approve_tools": ["py_sandbox"]}})
+        self.assertEqual(r["code"], "SUCCESS")
+        tools = [x["tool_name"] for x in r["data"]["tool_results_summary"]]
+        self.assertIn("py_sandbox", tools)
+
+
 if __name__ == "__main__":
     unittest.main()

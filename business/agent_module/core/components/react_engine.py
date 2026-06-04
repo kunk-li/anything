@@ -166,6 +166,72 @@ class ReActEngineMixin:
                 )
                 break
 
+            # Phase3: 多动作并行 — actions 存在则一步并发执行 (相互独立的工具, 如同时查多源).
+            # 审批门槛: 任一工具需审批且未批 → 整批阻断 (与单动作一致, 安全优先)。
+            multi_actions = step.get("actions")
+            if multi_actions:
+                prepared: List[Any] = []
+                blocked_tool = None
+                for a in multi_actions:
+                    tn = a.get("tool")
+                    if self._needs_approval(tn, extra_params):
+                        blocked_tool = tn
+                        break
+                    ti = dict(a.get("input") or {})
+                    ti.setdefault("trace_id", trace_id)
+                    ti.setdefault("session_id", session_id)
+                    ti.setdefault("extra_params", extra_params)
+                    prepared.append((tn, ti))
+                if blocked_tool is not None:
+                    self._append_state_event(
+                        session_id=session_id, event_type="react_approval_required",
+                        trace_id=trace_id,
+                        payload={"iteration": iteration, "tool_name": blocked_tool, "parallel": True},
+                    )
+                    return {
+                        "code": "TOOL_APPROVAL_REQUIRED",
+                        "message": f"工具 '{blocked_tool}' 需要审批; 请带 extra_params.approve_tools=['{blocked_tool}', ...] 重新提交.",
+                        "data": {
+                            "tool_name": blocked_tool,
+                            "required_tools": sorted(self.tool_approval_required),
+                            "approved_so_far": list(extra_params.get("approve_tools") or []),
+                            "answer": "", "citations": [], "retrieved_chunks": [],
+                            "steps": [], "tool_results_summary": [],
+                        },
+                        "trace_id": trace_id, "retryable": False,
+                        "details": {"iteration": iteration, "parallel": True},
+                        "cost_time": round(time.time() - start_time, 3),
+                    }
+                self._append_state_event(
+                    session_id=session_id, event_type="react_parallel_actions", trace_id=trace_id,
+                    payload={"iteration": iteration, "tools": [tn for tn, _ in prepared]},
+                )
+                par_results = self._run_actions_parallel(prepared, session_id, trace_id, iteration)
+                for (tn, ti), tr in zip(prepared, par_results):
+                    tool_results.append(tr)
+                    obs = self._summarize_tool_output(tr.get("output"))
+                    last_observation = tr
+                    sdata = None
+                    try:
+                        _out = tr.get("output") or {}
+                        if isinstance(_out, dict) and isinstance(_out.get("data"), dict):
+                            sdata = _out["data"]
+                    except Exception:
+                        sdata = None
+                    history.append({
+                        "thought": thought,
+                        "action": {"tool": tn, "input": ti},
+                        "observation": obs,
+                        "observation_data": sdata,
+                    })
+                self._append_state_event(
+                    session_id=session_id, event_type="react_parallel_done", trace_id=trace_id,
+                    payload={"iteration": iteration,
+                             "results": [{"tool_name": tr.get("tool_name"), "success": tr.get("success")}
+                                         for tr in par_results]},
+                )
+                continue
+
             # 执行 action
             action = step.get("action") or {}
             tool_name = action.get("tool")
@@ -374,6 +440,48 @@ class ReActEngineMixin:
             "cost_time": cost_time,
         }
 
+    def _run_actions_parallel(
+            self,
+            prepared: List[Any],
+            session_id: str,
+            trace_id: Optional[str],
+            iteration: int,
+    ) -> List[Dict[str, Any]]:
+        """Phase3: 并发执行已通过审批的多个独立工具 (有界 ≤4)。
+        每个工具各自走 pre/post hook + 重试; hook 阻断/工具失败仅影响该工具,
+        不拖累整批 (各返回各的结果, 顺序与 prepared 对齐)。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(item):
+            tn, ti = item
+            hook_ctx = {"trace_id": trace_id, "session_id": session_id,
+                        "iteration": iteration, "phase": "react_parallel"}
+            local_input = ti
+            try:
+                ni = self._hook_registry().fire("pre_tool_call", tn, local_input, hook_ctx)
+                if isinstance(ni, dict):
+                    local_input = ni
+            except BlockedError as be:
+                return {"tool_name": tn, "success": False, "code": be.code,
+                        "output": {"error": be.message, "blocked_by_hook": True}}
+            tr = self._call_tool_with_retry(
+                step={"step_id": f"react_{iteration}_par_{tn}",
+                      "tool_name": tn, "input_data": local_input},
+                session_id=session_id, trace_id=trace_id, max_retries=self.max_retries,
+            )
+            try:
+                nr = self._hook_registry().fire("post_tool_call", tn, local_input, tr, hook_ctx)
+                if isinstance(nr, dict):
+                    tr = nr
+            except Exception:
+                pass
+            return tr
+
+        if not prepared:
+            return []
+        with ThreadPoolExecutor(max_workers=min(4, len(prepared))) as ex:
+            return list(ex.map(_one, prepared))
+
     @staticmethod
     def _parse_react_response(
             raw: str,
@@ -396,15 +504,29 @@ class ReActEngineMixin:
         if not isinstance(parsed, dict):
             return None
 
-        # 二选一: final_answer 或 action
+        # 三选一: final_answer / actions(并行多动作) / action(单动作)
         if "final_answer" in parsed:
             return {"thought": parsed.get("thought", ""), "final_answer": parsed["final_answer"]}
+
+        # Phase3: 多动作并行 — actions:[{tool,input}, ...] (一步并发多个相互独立的工具).
+        # 只保留合法工具; 全非法 → None (fallback). 单个时退化等价单动作.
+        avail = set(available_tools)
+        raw_actions = parsed.get("actions")
+        if isinstance(raw_actions, list) and raw_actions:
+            valid = [
+                {"tool": a.get("tool"), "input": a.get("input") or {}}
+                for a in raw_actions
+                if isinstance(a, dict) and a.get("tool") in avail
+            ]
+            if not valid:
+                return None
+            return {"thought": parsed.get("thought", ""), "actions": valid}
 
         action = parsed.get("action")
         if not isinstance(action, dict):
             return None
         tool_name = action.get("tool")
-        if tool_name not in set(available_tools):
+        if tool_name not in avail:
             return None
         return {
             "thought": parsed.get("thought", ""),
