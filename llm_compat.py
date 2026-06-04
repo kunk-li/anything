@@ -88,6 +88,6 @@ def _stub_with_err(prompt: str, err: Exception) -> str:
         f"- 限流 (429 Too Many Requests)\n"
         f"- 网络不通 / SSL 错误\n\n"
         f"去 **管理 → 监控 → 模型健康** 看具体哪个模型挂了. "
-        f"重启服务后再试.\n\n"
+        f"网络/限流/余额恢复后, 熔断器会在冷却结束自动重试恢复, 无需重启 (仅改 key/配置才需重启).\n\n"
         f"---\n你刚问的:\n```\n{(prompt or '')[:300]}\n```"
     )

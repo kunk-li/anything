@@ -4077,10 +4077,13 @@
     function _renderLLMBanner(registeredCount, modelHealthMap) {
         const existing = document.getElementById('llm-banner');
         const names = Object.keys(modelHealthMap || {});
-        const unhealthy = names.filter(n => modelHealthMap[n].state === 'unhealthy');
-        // 警告条件: 一个模型都没注册 OR 注册了但所有曾被调用过的都 unhealthy
+        // 只把"仍在冷却窗口内"的 unhealthy 算作真不可用; 冷却已过的会在下次调用自动重试
+        // (熔断器 probation), 视为恢复中 → 不再报警 → banner 在冷却结束后自动消失 (自愈, 无需重启)。
+        const down = names.filter(n => modelHealthMap[n].state === 'unhealthy'
+                                       && (modelHealthMap[n].cooldown_remaining_seconds || 0) > 0);
+        // 警告条件: 一个模型都没注册 OR 注册了但所有模型都在冷却中
         const showWarning = registeredCount === 0 ||
-                            (names.length > 0 && unhealthy.length === names.length);
+                            (names.length > 0 && down.length === names.length);
         if (!showWarning) {
             if (existing) existing.remove();
             return;
@@ -4089,15 +4092,15 @@
         const banner = document.createElement('div');
         banner.id = 'llm-banner';
         banner.className = 'llm-banner';
-        const errSample = unhealthy.length > 0
-            ? (modelHealthMap[unhealthy[0]]?.last_error || '').slice(0, 100)
+        const errSample = down.length > 0
+            ? (modelHealthMap[down[0]]?.last_error || '').slice(0, 100)
             : (registeredCount === 0 ? '没有注册任何 LLM 模型' : '');
         banner.innerHTML = `
             <span class="llm-banner-icon">⚠️</span>
             <span class="llm-banner-text">
-                <strong>LLM 不可用</strong> — 所有回答都是 stub 占位.
+                <strong>LLM 暂不可用</strong> — 回答暂为 stub 占位.
                 ${errSample ? '<br/><small>原因: ' + escapeHtml(errSample) + '…</small>' : ''}
-                请配 <code>DASHSCOPE_API_KEY</code> 或 <code>OPENAI_API_KEY</code> 然后重启服务.
+                检查 <code>DASHSCOPE_API_KEY</code>/<code>OPENAI_API_KEY</code> 与网络; 恢复后会自动重试 (无需重启)。
             </span>
             <button class="llm-banner-close" aria-label="关闭" title="关闭">✕</button>
         `;
