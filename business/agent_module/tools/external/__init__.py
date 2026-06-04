@@ -15,11 +15,13 @@ from .http_provider import HttpToolProvider, HttpToolSpec, make_http_tool
 from .mcp_provider import (
     McpServerSpec, McpStdioClient, McpHttpClient, McpToolProvider,
 )
+from .openapi import openapi_to_specs
 
 __all__ = [
     "ExternalToolProvider", "ExternalToolDef",
     "HttpToolProvider", "HttpToolSpec", "make_http_tool",
     "McpToolProvider", "McpServerSpec", "McpStdioClient", "McpHttpClient",
+    "openapi_to_specs",
     "register_external_tools", "build_providers_from_config",
 ]
 
@@ -68,6 +70,32 @@ def _specs_from(config: Any, key: str, spec_cls: type, required: tuple) -> list:
     return out
 
 
+def _openapi_specs_from(config: Any) -> list:
+    """从 config `agent.openapi_tools` (每项 {spec: OpenAPI dict, base_url, name_prefix, auth_*})
+    生成 HttpToolSpec 列表。inline `spec` dict 为主 (spec_url 远程拉取留后续)。异常自动跳过。"""
+    try:
+        raw = config.get_config("agent.openapi_tools", []) or []
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict) or not isinstance(entry.get("spec"), dict):
+            continue
+        try:
+            out.extend(openapi_to_specs(
+                entry["spec"],
+                base_url=entry.get("base_url", ""),
+                name_prefix=entry.get("name_prefix", ""),
+                auth_header=entry.get("auth_header", ""),
+                auth_value=entry.get("auth_value", ""),
+            ))
+        except Exception:
+            continue
+    return out
+
+
 def build_providers_from_config(config: Any) -> List[ExternalToolProvider]:
     """从 config 构造外部工具 providers:
       - `agent.external_tools` (HttpToolSpec dict 列表) → HttpToolProvider (Stage1)
@@ -78,6 +106,7 @@ def build_providers_from_config(config: Any) -> List[ExternalToolProvider]:
         return []
     providers: List[ExternalToolProvider] = []
     http_specs = _specs_from(config, "agent.external_tools", HttpToolSpec, ("name", "url"))
+    http_specs += _openapi_specs_from(config)          # OpenAPI 自动生成的 HTTP 工具
     if http_specs:
         providers.append(HttpToolProvider(http_specs))
     mcp_specs = _specs_from(config, "agent.mcp_servers", McpServerSpec, ("name", "command"))
