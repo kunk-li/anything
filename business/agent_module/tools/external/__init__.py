@@ -12,12 +12,14 @@ from typing import Any, List, Optional, Set
 
 from .base import ExternalToolDef, ExternalToolProvider
 from .http_provider import HttpToolProvider, HttpToolSpec, make_http_tool
-from .mcp_provider import McpServerSpec, McpStdioClient, McpToolProvider
+from .mcp_provider import (
+    McpServerSpec, McpStdioClient, McpHttpClient, McpToolProvider,
+)
 
 __all__ = [
     "ExternalToolProvider", "ExternalToolDef",
     "HttpToolProvider", "HttpToolSpec", "make_http_tool",
-    "McpToolProvider", "McpServerSpec", "McpStdioClient",
+    "McpToolProvider", "McpServerSpec", "McpStdioClient", "McpHttpClient",
     "register_external_tools", "build_providers_from_config",
 ]
 

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-MCP 客户端 (外部工具连接 RFC · Stage2).
+MCP 客户端 (外部工具连接 RFC · Stage2 + 增量).
 
 参考 Codex / Claude Code 的做法: 实现**标准 MCP (Model Context Protocol)** 客户端 ——
-JSON-RPC 2.0 over **stdio** (newline-delimited), 连接外部 MCP server → 发现并注册其 tools。
-**最小自实现** (无 `mcp` SDK 依赖, 契合本项目少依赖哲学); 接 Stage1 的 `ExternalToolProvider` 抽象。
+JSON-RPC 2.0, 两种传输:
+  - **stdio** (本地子进程 server, newline-delimited): `McpStdioClient`
+  - **HTTP** (远程 server, Streamable HTTP: POST JSON-RPC, 响应 json 或 SSE, Mcp-Session-Id): `McpHttpClient`
+**最小自实现** (无 `mcp` SDK 依赖, 契合本项目少依赖); 接 Stage1 的 `ExternalToolProvider` 抽象。
 
-协议流程 (与标准 MCP server 互通):
-    initialize → notifications/initialized → tools/list → tools/call
-工具命名空间 `server.tool` 避免多 server 冲突。stdio server = 子进程, 仅连**显式配置**的 server。
-transport 可注入 (测试用 fake, 不起真子进程)。fail-safe: server 连不上跳过, 不拖垮启动。
+协议流程: initialize → notifications/initialized → tools/list → tools/call。
+工具命名空间 `server.tool`。仅连**显式配置**的 server。transport/post 可注入 (测试不起真子进程/不发网络)。
 """
 from __future__ import annotations
 
@@ -17,43 +17,90 @@ import json
 import os
 import subprocess
 import threading
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import ExternalToolDef, ExternalToolProvider
+from .http_provider import _url_ssrf_error
 
 PROTOCOL_VERSION = "2024-11-05"   # MCP 协议版本 (server 一般宽容; 需要时可调)
-_MAX_READ_LINES = 2000            # 单次 request 读响应的行数上限 (防卡死)
+_MAX_READ_LINES = 2000            # stdio 单次 request 读响应的行数上限 (防卡死)
+_CLIENT_INFO = {"name": "anything-agent", "version": "1.0"}
 
 
 @dataclass
 class McpServerSpec:
-    """声明一个 stdio MCP server。"""
-    name: str                                       # server 标识 (工具名前缀)
-    command: str                                    # 启动命令 (如 "npx" / "python")
+    """声明一个 MCP server (stdio 或 http)。"""
+    name: str                                      # server 标识 (工具名前缀)
+    transport: str = "stdio"                       # stdio | http
+    # --- stdio ---
+    command: str = ""                              # stdio 启动命令 (如 "npx" / "python")
     args: List[str] = field(default_factory=list)
     env: Dict[str, str] = field(default_factory=dict)
+    # --- http ---
+    url: str = ""                                  # http server 端点
+    headers: Dict[str, str] = field(default_factory=dict)
+    auth_header: str = ""
+    auth_value: str = ""
+    # --- 通用 ---
     enabled: bool = True
     timeout: int = 30
     requires_approval: bool = True
 
 
-class McpStdioClient:
-    """最小 stdio JSON-RPC 2.0 MCP 客户端 (一个 server 一个 client)。
+# ============================================================
+# 客户端: 传输无关的 MCP 动作逻辑 + 两种传输实现
+# ============================================================
 
-    newline-delimited JSON-RPC; 同步阻塞 (send → 读到匹配 id 的响应, 跳过通知/不匹配)。
-    `transport` 可注入 (须有 `write(str)` / `readline()->str`); 默认 None → 真 subprocess (lazy 启动)。
-    """
+class _McpClientBase:
+    """MCP 动作逻辑 (initialize/list_tools/call_tool), 传输无关。
+    子类实现 `_rpc(method, params) -> result` (出错抛) 与 `_notify(method, params)`。"""
 
-    def __init__(self, spec: McpServerSpec, transport: Any = None):
-        self.spec = spec
-        self._transport = transport
-        self._proc: Optional[subprocess.Popen] = None
+    def __init__(self):
         self._id = 0
         self._lock = threading.Lock()
         self._initialized = False
 
-    # ---- 传输 ----
+    def _rpc(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        raise NotImplementedError
+
+    def _notify(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
+        raise NotImplementedError
+
+    def initialize(self) -> None:
+        if self._initialized:
+            return
+        self._rpc("initialize", {
+            "protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": _CLIENT_INFO,
+        })
+        self._notify("notifications/initialized")
+        self._initialized = True
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        self.initialize()
+        result = self._rpc("tools/list") or {}
+        tools = result.get("tools") if isinstance(result, dict) else None
+        return tools or []
+
+    def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
+        self.initialize()
+        return self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
+
+    def close(self) -> None:
+        pass
+
+
+class McpStdioClient(_McpClientBase):
+    """stdio JSON-RPC MCP 客户端 (一个 server 一个 client; newline-delimited)。
+    `transport` 可注入 (须有 `write(str)`/`readline()->str`); 默认 None → 真 subprocess (lazy 启动)。"""
+
+    def __init__(self, spec: McpServerSpec, transport: Any = None):
+        super().__init__()
+        self.spec = spec
+        self._transport = transport
+        self._proc: Optional[subprocess.Popen] = None
+
     def _ensure_started(self) -> None:
         if self._transport is not None or self._proc is not None:
             return
@@ -76,8 +123,7 @@ class McpStdioClient:
             return self._transport.readline()
         return self._proc.stdout.readline()       # type: ignore[union-attr]
 
-    # ---- JSON-RPC ----
-    def _request(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    def _rpc(self, method, params=None):
         self._ensure_started()
         with self._lock:
             self._id += 1
@@ -95,38 +141,16 @@ class McpStdioClient:
                     msg = json.loads(line)
                 except ValueError:
                     continue
-                if msg.get("id") == rid:           # 跳过通知 / 不匹配 id
+                if msg.get("id") == rid:
                     if "error" in msg:
                         raise RuntimeError(f"MCP error: {msg['error']}")
                     return msg.get("result")
             raise RuntimeError("MCP 响应超过最大读取行数")
 
-    def _notify(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
+    def _notify(self, method, params=None):
         self._ensure_started()
         self._write(json.dumps({"jsonrpc": "2.0", "method": method,
                                 "params": params or {}}, ensure_ascii=False) + "\n")
-
-    # ---- MCP 动作 ----
-    def initialize(self) -> None:
-        if self._initialized:
-            return
-        self._request("initialize", {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "anything-agent", "version": "1.0"},
-        })
-        self._notify("notifications/initialized")
-        self._initialized = True
-
-    def list_tools(self) -> List[Dict[str, Any]]:
-        self.initialize()
-        result = self._request("tools/list") or {}
-        tools = result.get("tools") if isinstance(result, dict) else None
-        return tools or []
-
-    def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
-        self.initialize()
-        return self._request("tools/call", {"name": name, "arguments": arguments or {}})
 
     def close(self) -> None:
         try:
@@ -135,6 +159,99 @@ class McpStdioClient:
         except Exception:
             pass
 
+
+def _default_http_post(url: str, payload: Dict[str, Any], headers: Dict[str, str],
+                       timeout: int = 30):
+    """SSRF 安全的 HTTP POST (stdlib urllib)。返回 (status:int, resp_headers:dict, body:str)。"""
+    err = _url_ssrf_error(url)
+    if err:
+        raise RuntimeError(err)
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(2 * 1024 * 1024).decode("utf-8", errors="replace")
+        return getattr(resp, "status", 200), {k: v for k, v in resp.headers.items()}, raw
+
+
+def _parse_mcp_http_body(body: str, rid: int) -> Optional[Dict[str, Any]]:
+    """从 HTTP 响应体取匹配 id 的 JSON-RPC 消息。支持 SSE(data: 行) 与 纯 JSON(对象/数组)。"""
+    body = (body or "").strip()
+    if not body:
+        return None
+    if "data:" in body:                      # SSE 帧
+        for line in body.splitlines():
+            line = line.strip()
+            if line.startswith("data:"):
+                try:
+                    msg = json.loads(line[5:].strip())
+                except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get("id") == rid:
+                    return msg
+        return None
+    try:
+        obj = json.loads(body)
+    except ValueError:
+        return None
+    if isinstance(obj, list):
+        for m in obj:
+            if isinstance(m, dict) and m.get("id") == rid:
+                return m
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+class McpHttpClient(_McpClientBase):
+    """HTTP (Streamable HTTP) JSON-RPC MCP 客户端: POST 请求, 解析 json/sse 响应,
+    捕获并复用 `Mcp-Session-Id`。`post(url, payload, headers)->(status,headers,body)` 可注入(测试)。"""
+
+    def __init__(self, spec: McpServerSpec, post: Optional[Callable] = None):
+        super().__init__()
+        self.spec = spec
+        self._post = post or _default_http_post
+        self._session_id: Optional[str] = None
+
+    def _req_headers(self) -> Dict[str, str]:
+        h = {"Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream",
+             **dict(self.spec.headers)}
+        if self.spec.auth_header and self.spec.auth_value:
+            h[self.spec.auth_header] = self.spec.auth_value
+        if self._session_id:
+            h["Mcp-Session-Id"] = self._session_id
+        return h
+
+    def _rpc(self, method, params=None):
+        with self._lock:
+            self._id += 1
+            rid = self._id
+            payload = {"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}
+            status, resp_headers, body = self._post(self.spec.url, payload, self._req_headers())
+            sid = (resp_headers or {}).get("Mcp-Session-Id") or (resp_headers or {}).get("mcp-session-id")
+            if sid:
+                self._session_id = sid
+            msg = _parse_mcp_http_body(body, rid)
+            if msg is None:
+                raise RuntimeError(f"MCP HTTP 无匹配响应 (status={status})")
+            if "error" in msg:
+                raise RuntimeError(f"MCP error: {msg['error']}")
+            return msg.get("result")
+
+    def _notify(self, method, params=None):
+        payload = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+        try:
+            self._post(self.spec.url, payload, self._req_headers())   # 通知 best-effort
+        except Exception:
+            pass
+
+
+def _default_client_for(spec: McpServerSpec) -> _McpClientBase:
+    return McpHttpClient(spec) if spec.transport == "http" else McpStdioClient(spec)
+
+
+# ============================================================
+# Provider
+# ============================================================
 
 def _mcp_result_to_envelope(result: Any) -> Dict[str, Any]:
     """MCP tools/call 结果 → 标准响应 envelope。result: {content:[{type,text}], isError}。"""
@@ -153,15 +270,13 @@ def _mcp_result_to_envelope(result: Any) -> Dict[str, Any]:
 
 
 class McpToolProvider(ExternalToolProvider):
-    """连接配置的 MCP server, 发现其 tools 并包成 agent 工具 (命名空间 server.tool)。
-
-    client_factory 可注入 (测试用); 默认 McpStdioClient(真 subprocess)。
-    """
+    """连接配置的 MCP server (stdio/http), 发现其 tools 并包成 agent 工具 (命名空间 server.tool)。
+    client_factory 可注入 (测试用); 默认按 spec.transport 选 stdio/http 客户端。"""
 
     def __init__(self, specs: List[McpServerSpec],
-                 client_factory: Optional[Callable[[McpServerSpec], McpStdioClient]] = None):
+                 client_factory: Optional[Callable[[McpServerSpec], _McpClientBase]] = None):
         self.specs = [s for s in specs if s.enabled]
-        self._client_factory = client_factory or (lambda spec: McpStdioClient(spec))
+        self._client_factory = client_factory or _default_client_for
 
     def discover(self) -> List[ExternalToolDef]:
         out: List[ExternalToolDef] = []
@@ -186,7 +301,7 @@ class McpToolProvider(ExternalToolProvider):
         return out
 
     @staticmethod
-    def _make_tool(client: McpStdioClient, remote_name: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    def _make_tool(client: _McpClientBase, remote_name: str) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
         def tool(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 result = client.call_tool(remote_name, payload or {})

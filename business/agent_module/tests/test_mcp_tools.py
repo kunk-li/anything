@@ -9,8 +9,9 @@ import json
 import unittest
 
 from agent_module.tools.external import (
-    McpServerSpec, McpStdioClient, McpToolProvider, build_providers_from_config,
+    McpServerSpec, McpStdioClient, McpHttpClient, McpToolProvider, build_providers_from_config,
 )
+from agent_module.tools.external.mcp_provider import _default_client_for
 
 
 class _FakeTransport:
@@ -131,6 +132,68 @@ class TestBuildMcpFromConfig(unittest.TestCase):
         self.assertIsInstance(providers[0], McpToolProvider)
         self.assertEqual(providers[0].specs[0].name, "fs")
         self.assertEqual(providers[0].specs[0].args, ["-y", "srv"])   # junk 被过滤, args 保留
+
+
+class _FakeHttpPost:
+    """模拟 MCP HTTP server: 按 method 回预设 result (json 或 sse); 可带 session id; 记录调用。"""
+    def __init__(self, responses, session_id=None, sse=False):
+        self.responses, self.session_id, self.sse = responses, session_id, sse
+        self.calls = []
+
+    def __call__(self, url, payload, headers):
+        self.calls.append({"url": url, "payload": payload, "headers": dict(headers)})
+        method, rid = payload.get("method"), payload.get("id")
+        resp_headers = {}
+        if self.session_id and method == "initialize":
+            resp_headers["Mcp-Session-Id"] = self.session_id
+        if rid is None:
+            return 202, {}, ""                       # notification
+        body = json.dumps({"jsonrpc": "2.0", "id": rid, "result": self.responses.get(method, {})})
+        if self.sse:
+            body = f"event: message\ndata: {body}\n\n"
+        return 200, resp_headers, body
+
+
+class TestMcpHttpClient(unittest.TestCase):
+    def _spec(self):
+        return McpServerSpec(name="r", transport="http", url="https://1.1.1.1/mcp")
+
+    def test_list_tools_json_response(self):
+        post = _FakeHttpPost({"initialize": {}, "tools/list": {"tools": [{"name": "remote_echo"}]}})
+        c = McpHttpClient(self._spec(), post=post)
+        self.assertEqual(c.list_tools()[0]["name"], "remote_echo")
+
+    def test_call_tool_sse_response(self):
+        post = _FakeHttpPost({"initialize": {}, "tools/call": {"content": [{"type": "text", "text": "hi"}]}}, sse=True)
+        c = McpHttpClient(self._spec(), post=post)
+        r = c.call_tool("x", {})
+        self.assertEqual(r["content"][0]["text"], "hi")
+
+    def test_session_id_captured_and_reused(self):
+        post = _FakeHttpPost({"initialize": {}, "tools/list": {"tools": []}}, session_id="sess-123")
+        McpHttpClient(self._spec(), post=post).list_tools()
+        tl = [c for c in post.calls if c["payload"].get("method") == "tools/list"][0]
+        self.assertEqual(tl["headers"].get("Mcp-Session-Id"), "sess-123")   # 后续请求带 session id
+
+    def test_error_response_raises(self):
+        class _ErrPost:
+            def __call__(self, url, payload, headers):
+                rid = payload.get("id")
+                if rid is None:
+                    return 202, {}, ""
+                return 200, {}, json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"code": -1, "message": "x"}})
+        with self.assertRaises(RuntimeError):
+            McpHttpClient(self._spec(), post=_ErrPost()).list_tools()
+
+
+class TestTransportRouting(unittest.TestCase):
+    def test_default_client_for_http(self):
+        self.assertIsInstance(
+            _default_client_for(McpServerSpec(name="r", transport="http", url="https://x/mcp")), McpHttpClient)
+
+    def test_default_client_for_stdio(self):
+        self.assertIsInstance(
+            _default_client_for(McpServerSpec(name="r", command="x")), McpStdioClient)
 
 
 if __name__ == "__main__":
