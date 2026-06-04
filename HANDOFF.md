@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-03 · 最新 commit: `062cccb` · 分支: `main`(⚠️ 本地领先 origin 若干 commit, 网络恢复后需 push)
+> 最后更新: 2026-06-03 · 最新 commit: `f60f8cf` · 分支: `main`(已同步 origin)
 
 ---
 
@@ -93,5 +93,5 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 ## 9. 下个会话建议第一步
 1. 读本文件 + `MEMORY.md`(自动注入) — 5 分钟接上上下文
 2. 确认 `git status` 干净、`git log origin/main..HEAD` 为空
-3. **先 push 本地领先的 commit** (本会话末网络中断, 见顶部告警); 然后问用户: 新需求 (方向1/2/3 收尾; 方向4 建议性自主全档; 外部工具 HTTP+MCP(stdio/HTTP)+OpenAPI 均落地, 余量见 §4)
+3. 问用户: 新需求 (方向1/2/3 收尾; 方向4 建议性自主全档; 外部工具 HTTP+MCP(stdio/HTTP)+OpenAPI 均落地, 余量见 §4)
 4. 任何 commit 后会由 git hook 自动 push (无需手动)
