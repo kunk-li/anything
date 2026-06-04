@@ -1122,6 +1122,14 @@
                     if (els.sessionInput) els.sessionInput.value = newId;
                     try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
                     ApiClient.configure(state.settings);
+                    // 删的是当前正在看的会话 → 清空主聊天区 + 右侧面板 (检索结果/步骤/ReAct 思维链),
+                    // 否则左侧列表已空, 右侧却残留已删会话的内容 (本次 bug)。对齐 clearHistory() 的清理。
+                    state.history = [];
+                    try { delete state.sessionHistories[sid]; } catch (_) {}
+                    renderHistory();
+                    try { renderRetrievedChunks([]); } catch (_) {}
+                    try { renderAgentSteps([]); } catch (_) {}
+                    try { renderReactTrace([]); } catch (_) {}
                 }
                 refreshSessions();
             } else {
