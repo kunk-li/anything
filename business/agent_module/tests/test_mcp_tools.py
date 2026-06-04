@@ -6,6 +6,7 @@ McpToolProvider(fake client: 命名空间/success&error envelope/连不上 fail-
 build_providers_from_config 含 mcp_servers。
 """
 import json
+import sys
 import unittest
 
 from agent_module.tools.external import (
@@ -194,6 +195,55 @@ class TestTransportRouting(unittest.TestCase):
     def test_default_client_for_stdio(self):
         self.assertIsInstance(
             _default_client_for(McpServerSpec(name="r", command="x")), McpStdioClient)
+
+
+# 自带最小 MCP stdio echo server (stdlib; readline 循环 + 每次 flush, 防管道缓冲卡死)
+_ECHO_SERVER = r"""
+import sys, json
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    mid = msg.get("id")
+    if mid is None:
+        continue
+    m = msg.get("method")
+    if m == "initialize":
+        result = {"protocolVersion": "2024-11-05", "serverInfo": {"name": "echo"}, "capabilities": {}}
+    elif m == "tools/list":
+        result = {"tools": [{"name": "echo", "description": "echo back args", "inputSchema": {"type": "object"}}]}
+    elif m == "tools/call":
+        args = (msg.get("params") or {}).get("arguments") or {}
+        result = {"content": [{"type": "text", "text": json.dumps(args, ensure_ascii=False)}], "isError": False}
+    else:
+        result = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}) + "\n")
+    sys.stdout.flush()
+"""
+
+
+class TestMcpStdioIntegration(unittest.TestCase):
+    """真实 server 试跑: 起真子进程 (python -c 跑自带 echo MCP server), 端到端走 stdio JSON-RPC。
+    无网络/npx 依赖。验证 McpStdioClient 与真实 MCP server 的握手+列举+调用互通。"""
+
+    def test_real_subprocess_echo_server(self):
+        spec = McpServerSpec(name="echo", command=sys.executable, args=["-c", _ECHO_SERVER])
+        client = McpStdioClient(spec)            # 默认 transport=None → 真 subprocess
+        try:
+            tools = client.list_tools()
+            self.assertEqual(tools[0]["name"], "echo")
+            result = client.call_tool("echo", {"msg": "hello", "n": 1})
+            self.assertIn("hello", result["content"][0]["text"])   # echo 回显参数
+            self.assertFalse(result.get("isError"))
+        finally:
+            client.close()
 
 
 if __name__ == "__main__":
