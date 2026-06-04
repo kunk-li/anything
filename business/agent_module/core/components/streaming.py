@@ -144,8 +144,15 @@ class StreamingMixin:
         # 覆盖对话/写作/问答主场景 — TTFT 快, 逐字吐. 跟 RAG 真流式同一套 chat_stream.
         # 工具调用场景 (plan_only / 显式 execution_strategy=react) 跳过此分支, 走下面
         # ReAct 多轮 (能看到 thought/action/observation + 工具结果).
+        # 修"流式 agent 不调工具(含 system_info)、只会说做不了": 是否走 ReAct(带工具) 此前
+        # 只看单次请求的 extra_params.execution_strategy, 忽略了 self.execution_strategy
+        # (config 默认 react)。前端 type=agent 不传 extra_params.execution_strategy → 永远
+        # 落到 _run_stream_direct 纯 chat 分支 → 永不调工具。这里把 self.execution_strategy
+        # 也算进 effective strategy, 与非流式 execute() 对齐。
+        _effective_strategy = (extra_params.get("execution_strategy")
+                               or getattr(self, "execution_strategy", "single_shot"))
         _want_react = (
-            extra_params.get("execution_strategy") == "react"
+            _effective_strategy == "react"
             or (bool(extra_params.get("plan_only")) and not bool(extra_params.get("approve_plan")))
         )
         if (not _want_react and getattr(self, "llm_client", None) is not None
