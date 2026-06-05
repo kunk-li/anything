@@ -90,9 +90,12 @@ class PromptBuilderMixin:
         except Exception:
             skills_block = ""
 
-        return (
+        # 缓存友好结构 (#2): [全局稳定前缀] → [任务块] → [易变块]。
+        # 稳定前缀(项目记忆+赋能前言+工具表+输出格式)跨所有 agent 调用一致 → 命中 provider 的
+        # prefix cache(qwen/OpenAI 自动按 token 前缀缓存) → 降 token 成本 + 缩短 TTFT。
+        # 原先把 task 夹在工具表前, 导致工具表(最大的稳定块)被 task 切断、无法跨任务复用缓存。
+        stable_prefix = (
             f"{memory_block}"
-            f"{skills_block}"
             f"你是一个有真实执行能力的智能助手 (Agent)。下面列出的工具都会真正执行操作"
             f"(查询/计算/搜索/访问网页/读写文件/运行代码/看本机状态等), 不是模拟也不是假设。\n"
             f"用工具 vs 直接答 的判断原则:\n"
@@ -104,21 +107,20 @@ class PromptBuilderMixin:
             f"③本机相关 (这台电脑/系统使用情况) 必须调 system_info 读真实数据再答, 绝不可说'我无法访问你的电脑'(你能, 就靠工具);\n"
             f"④绝不要回答'我做不到'/'我只是语言模型'/'请你自己去弄' —— 能直接答就答, 该用工具就用;\n"
             f"⑤工具失败或无结果 (如无网、知识库为空) 时, 改用你自己的知识把问题尽力答完, 不要卡住、也不要反复重试同一个失败的工具。\n"
-            f"当前任务: {task}\n"
-            f"\n"
-            f"可用工具:\n" + "\n".join(tool_lines) + "\n"
-            f"\n"
-            f"历史:\n{history_text}\n"
-            f"\n"
-            f"这是第 {iteration}/{max_iterations} 轮。请输出下一步思考与动作。\n"
-            f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
-            f"\n"
-            f"请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
+            f"\n可用工具:\n" + "\n".join(tool_lines) + "\n"
+            f"\n请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
             f'{{"thought": "<推理>", "final_answer": "<最终回答>"}}\n'
             f'或 (调用单个工具):\n'
             f'{{"thought": "<推理>", "action": {{"tool": "<工具名>", "input": {{...}}}}}}\n'
             f'或 (多个相互独立的工具一步并发执行, 仅当它们彼此不依赖时用, 省时间):\n'
             f'{{"thought": "<推理>", "actions": [{{"tool": "<工具A>", "input": {{...}}}}, {{"tool": "<工具B>", "input": {{...}}}}]}}\n'
+        )
+        return (
+            stable_prefix
+            + f"\n{skills_block}当前任务: {task}\n"
+            + f"\n历史:\n{history_text}\n"
+            + f"\n这是第 {iteration}/{max_iterations} 轮。请输出下一步思考与动作。\n"
+            + f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
         )
 
     @staticmethod
