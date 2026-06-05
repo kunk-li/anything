@@ -32,6 +32,9 @@ __pycache__/
 # 审计日志 JSONL + 滚动备份 (相对 cwd, 可能落在仓库根或 run/, 故不加前导斜杠匹配任意目录)
 audit.log.jsonl
 audit.log.jsonl.*
+# agent 运行时自动沉淀的技能 (#1): 不进版本库; 人写/预置技能不带 _auto_ 前缀, 正常提交
+skills/_auto_*.md
+skills/**/_auto_*.md
 
 # Benchmark 结果 (机器 / Python 版本相关,不应进 git)
 /benchmarks/baseline*.json
