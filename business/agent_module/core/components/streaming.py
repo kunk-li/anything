@@ -431,8 +431,12 @@ class StreamingMixin:
             # 再切片伪流给前端保留打字机观感; 生成失败/空则退回 react final_answer。保证答案完整。
             _streamed_text = []
             answer_out = final_answer or ""
-            try:
-                if tool_results:
+            # 治延迟 (#2): 仅"有工具结果"时才重生成 (把工具输出总结成自然语言 — react final_answer
+            # 未必完整带上工具输出)。无工具的纯回答/规划/建议: react 的 final_answer 已是在完整上下文
+            # (含命中技能/历史) 下生成的完整答案, 直接用 —— 省一次 LLM 调用, 且不丢上下文 (重生成只喂
+            # task 会丢掉技能/历史)。原先无论有无工具都重生成, 是规划/建议类慢 70s+ 的主因之一。
+            if tool_results:
+                try:
                     tool_ctx_parts = []
                     for tr in tool_results:
                         tn = tr.get("tool_name", "?")
@@ -443,14 +447,11 @@ class StreamingMixin:
                         f"用户任务: {task}\n\n已收集到的信息:\n{tool_ctx}\n\n"
                         f"请基于以上信息, 用自然语言完整地直接回答用户 (一次写完整, 不要中途停下)."
                     )
-                else:
-                    # 纯 chat 类问题 (LLM 决定不调任何工具)
-                    final_prompt = str(task or "")
-                _full = llm_call(final_prompt)
-                if _full and str(_full).strip():
-                    answer_out = str(_full)
-            except Exception as e:
-                self.logger.warning(f"[react-stream] 最终答案生成失败, 用 react final_answer: {e}")
+                    _full = llm_call(final_prompt)
+                    if _full and str(_full).strip():
+                        answer_out = str(_full)
+                except Exception as e:
+                    self.logger.warning(f"[react-stream] 最终答案重生成失败, 用 react final_answer: {e}")
             # 铁底兜底: 绝不让最终答案为空白 (即便走了工具路径 + 重生成失败/空 + final_answer
             # 异常凑到一起 — 用户曾遇到主答案区整段空白)。空就退回 final_answer, 再不行给提示。
             if not (answer_out and str(answer_out).strip()):

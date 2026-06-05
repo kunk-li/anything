@@ -77,7 +77,8 @@ class PromptBuilderMixin:
         except Exception:
             memory_block = ""
 
-        # Task AA (#61): 命中的 skill body 拼到 prompt 顶部
+        # Task AA (#61): 命中的 skill body 拼到 prompt 顶部 (trigger 自动注入)
+        matched = []
         skills_block = ""
         try:
             matched = get_skill_registry().match(task or "")
@@ -94,7 +95,10 @@ class PromptBuilderMixin:
         # 相关任务时先调 use_skill(name) 把该技能完整指南拉进来再做(模型驱动, 补 trigger 自动注入)。
         catalog_block = ""
         try:
-            cat = get_skill_registry().catalog()
+            # 排除已 trigger 自动注入的技能 (body 已在上面 skills_block), 免得 agent 又 use_skill
+            # 白跑一轮 (省一次 LLM 调用, 治延迟)。目录只列"没自动注入、需要时才按需加载"的技能。
+            _injected = {s.name for s in matched}
+            cat = [c for c in get_skill_registry().catalog() if c["name"] not in _injected]
             if cat:
                 lines = "\n".join(f"- {c['name']}: {(c.get('description') or '')[:80]}"
                                   for c in cat[:40])
