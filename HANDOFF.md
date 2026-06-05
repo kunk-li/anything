@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-05 · 最新 commit: `ee44ff9` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
+> 最后更新: 2026-06-05 · 最新 commit: `12bf5b4` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
 
 ---
 
@@ -23,10 +23,10 @@
    ② **#2 提示词缓存** (`19a0bd9`): react prompt 重排 [稳定前缀(记忆+赋能前言+工具表+格式)]→[任务块]→[易变(历史+迭代)], 命中 qwen prefix cache 降本+缩 TTFT
    ③ **superpowers 机制集成** (`41257a8`, obra/superpowers): SkillRegistry 递归加载(rglob) + `use_skill(name)` 工具 + prompt 注入"技能目录"(名+描述)→ agent 主动按需加载(模型驱动, 补 trigger 自动注入); `git clone` superpowers 进技能目录即用。test 6 例; `doc/技能系统与superpowers集成.md`。**预置 4 条方法论技能** (`f781bd4`, 原创): brainstorming/writing_plans/systematic_debugging/test_driven_development
    ④ **agent 评测台** (`03ed9a0`): `scripts/eval_agent.py` — 7 代表任务走**真实 WS 流式打真 LLM**, `--runs N` 量非确定性, 断言 no_error/nonempty/min_len/contains/not_refused, 出成功率+退出码(可接发版 gate)。抓只在真模型/真流式下暴露的回归。基线单次 7/7=100%、--runs 3=20/21=95.2%
-   ⑤ **治延迟** (`ee44ff9`): 无工具任务跳过最终答案重生成(直接用 react final_answer, 省一次 LLM 调用+不丢上下文) + 技能目录排除已 trigger 注入项(不重复 use_skill)。规划 71→40s、问答 15→8.5s, 7/7 仍 100%
+   ⑤ **治延迟** (`ee44ff9`→`12bf5b4`): 无工具任务跳过最终答案重生成(直接用 react final_answer, 省一次 LLM 调用+不丢上下文)。`12bf5b4` 用评测台当复现器诊断后收尾两件事: (a) 技能目录**有 trigger 命中就整个抑制**(原只排除命中那条, 不够 — agent 仍会去加载目录里其它技能, 偶发 +20~25s 无增益); (b) **流式收尾洗净"生 JSON"** —— 上面跳过重生成意外暴露: react 解析失败时 final_answer 退化成原始 JSON 串(parse-fail 兜底)会被直接喷给用户, 故 final_answer 是生 JSON 时即便无工具也重生成一次干净作答 + 铁底兜底加挡生 JSON。规划 71→37s、问答 15→8s、--runs 2 = 14/14 100%
    ⑥ **流式 agent 健壮性串** (评测台守护): 答案完整不截断(`da52410` 最终答案改非流式生成+切片) / 解析失败兜底(`01e05d1` 自然语言当 final_answer 不报错) / 网络抖动重试(`4869c28` 3 次退避) / 提示词重平衡(`3ff454b` 建议规划类直接答别过度搜工具) / 铁底兜底(`5ecf6be` 答案绝不空白) / 并行工具空转修复(`d7d1b66` run_stream 补多动作 actions:[] 处理) / system_info 只读本机状态工具
    ⑦ **前端体验** (需刷新): 删当前会话清空主区+右栏(`56160b4`) / 侧栏开关桌面生效(`c680c1d` 顶栏💬▯) / 停止后能再发(`f9f71e6`)。`app.js?v=190`/`style.css?v=191`
-   全程 test: agent **383** + 既有全套 passed; ABC 19 全绿
+   全程 test: agent **387** (含 run_stream 首批 4 例 — 流式路径此前零单测, 是本会话流式 bug 盲区) + 既有全套 passed; ABC 19 全绿
 0旧. **会话 (2026-06-04): "agent 太弱/不能操作" 系统性增强 + 体验修复 (全在 origin/main, `b7e8ec6`..`bc78c26`)** —
    ① **"不能操作/模型说不能干"修复** (`bc78c26`): 根因=聊天**默认 RAG 模式**(被动从文档答、无工具)→让 agent 干活就答"做不了"。前端默认 `mode` rag→**agent**(state.mode @ app.js, agent 经 rag_search 兼顾文档问答) + react 提示词**赋能**(prompt_builder: 有真实工具会真执行/优先动手/别说"我做不了") + `default_chat_model`→**qwen-max** + agent 墙钟超时 60→**120s**(business_layer, 避免多轮循环 AGENT_TIMEOUT→504)。实测 12345×67890→838102050 对、18.5s。`app.js?v=188`
    ② **agent 增强四期** ("能力太弱"): 地基(`541d43e`: qwen-turbo→plus(后→max) + `agent.execution_strategy` 默认 single_shot→**react**; max_react 已 15) / 规划闭环(`0be65f4`: `enable_self_verify`+`verify_mode=auto`+`max_correction=1` **默认开**, 复用方向3 `_post_verify` 执行→校验→自纠正; 修 7 个计次单测) / 记忆个性化(`266dbf4`: **RAG 聊天接入用户模型** — 答前注入画像+相关 fact、答后 `extract_facts`→`add_fact` 学习含无文档兜底; SimpleRAG 加 `long_term_memory`+工厂属性注入; graceful) / 自主编排(核心 spawn_subagent+串行链+15轮 ReAct 已就绪, **并行执行延后**)
@@ -52,6 +52,7 @@
 - ~~agent 并行工具执行~~ ✅ **done** (`185dca6`+`d7d1b66`): LLM 输出 `actions:[]` 多动作 JSON → `_run_actions_parallel`(ThreadPool ≤4)一步并发彼此独立的工具; `_react_execute`(非流式) + `run_stream`(流式)双路径均支持。注: 评测台见 qwen-max 偶有"对同一工具连调 3 次"的非收敛(如 datetime×3), 属模型侧选择噪声非编排 bug, 未阻塞; 若要治可加"重复(tool,input)去重/提前收敛"提示。
 - **外部工具连接 余量 (可选)** — HTTP 连接器 + MCP(stdio+HTTP) + OpenAPI 生成 + 真实 server 集成测试 **均已落地** (`business/agent_module/tools/external/`)。剩: (a) MCP **SSE 长连**(server→client 流式通知, 现 HTTP 仅请求/响应); (b) 连接**生命周期管理**(现 discover 启动连, 进程随 app 存活); (c) OpenAPI **`spec_url` 远程拉取**(现仅 inline spec dict)。详见 `doc/外部工具连接-设计方案(RFC).md`。
 - **方向 4 续探 (可选)** — 建议性自主全档已落地(行为/记忆/代码文档自维护 + 定时提议通知 + 预授权自动, **默认全关**)。再往前: (a) 把 `maintenance_scan` 真正注册进 `TaskScheduler` 定时任务(现是能力就绪, 未默认注册); (b) 真正"执行性自主"(超出预授权安全算子, 如自动改配置/代码)——**风险高, 须专门设计 + 强护栏(沙箱/审批/可回滚), 不轻易做**
+- **react JSON 解析器容错 (可选, 治调试类延迟)** — qwen 给长答案 (如"系统排查思路") 时 react JSON 常畸形 → `_parse_react_response` 返 None → 流式走 parse-fail 兜底 → 触发洗净重生成 (+20s, 调试因此 ~62s, 正确但慢)。深层提速: 让解析器从畸形 JSON 里也尽量抠出 `final_answer` 字段 (容错 trailing comma / 未转义换行 / 截断), 抠到就不必重生成。风险: 解析器改动面广, 须配 run_stream 单测护; 现状已正确 (评测台 100%), 仅慢, 故标可选。
 - **pre-existing**: `#149 XXXX-2` 测流式 toggle 是否真生效 (一直 pending)
 - **方向 1 可选增强**: `reconcile_conflicts`/`consolidate`/`prune` 接入调度定期触发 (现都只外部手动调, 无定时); 给 UP-4 加 "ask 模式"(歧义大反问澄清而非静默改写) + 默认开启策略
 - **方向 3 可选深化**: 给 plan 加 "goal 分组" 结构, 让 GoalVerifier 用**真实计划分组**而非现场拆 (触及规划核心; 现用显式子目标/现场拆已够用, GoalVerifier 已留 `spec.args.goals` 接入点)
