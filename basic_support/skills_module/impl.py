@@ -191,7 +191,8 @@ class SkillRegistry:
             if d is None:
                 return 0
             self._loaded_from = str(d)
-            for path in sorted(d.glob("*.md")):
+            # 递归扫子目录 (支持 superpowers 等嵌套 skills/ 布局; _auto_*.md 自动沉淀也在内)
+            for path in sorted(d.rglob("*.md")):
                 try:
                     skill = parse_skill_file(path)
                     self._skills.append(skill)
@@ -211,6 +212,24 @@ class SkillRegistry:
             hits = [s for s in self._skills if s.matches(query)]
         hits.sort(key=lambda s: (-s.priority, s.name))
         return hits
+
+    def get_by_name(self, name: str) -> Optional[Skill]:
+        """按 name 精确取一个 skill (use_skill 工具按需加载完整 body 用)。"""
+        if not name:
+            return None
+        n = str(name).strip().lower()
+        with self._lock:
+            for s in self._skills:
+                if s.name.strip().lower() == n:
+                    return s
+        return None
+
+    def catalog(self) -> List[Dict[str, str]]:
+        """全部"真"技能的 {name, description} 目录 (跳过无描述无 trigger 的裸 md/文档),
+        供注入 prompt 让 agent 主动按需 use_skill —— superpowers 式"任务前先查技能"。"""
+        with self._lock:
+            return [{"name": s.name, "description": (s.description or s.name)}
+                    for s in self._skills if (s.description or s.triggers)]
 
     def info(self) -> Dict[str, Any]:
         """给 /admin/status + /skills 端点用."""

@@ -210,6 +210,12 @@ def build_business_layer(
     )
     tool_registry.register("system_info", _make_system_info(), description=_SI_DESC)
 
+    # 技能加载 (use_skill, 集成 superpowers 机制): 按名把技能完整指南拉进上下文。只读 → 不进审批白名单。
+    from agent_module.tools.tools_impl.use_skill import (
+        make_use_skill_tool as _make_use_skill, USE_SKILL_DESCRIPTION as _US_DESC,
+    )
+    tool_registry.register("use_skill", _make_use_skill(), description=_US_DESC)
+
     # email_send: 从 yaml config 读 smtp 配置, 缺配置时工具自身降级 SERVICE_UNAVAILABLE
     smtp_cfg = deps.config.get_config("smtp", {}) or {}
     tool_registry.register(

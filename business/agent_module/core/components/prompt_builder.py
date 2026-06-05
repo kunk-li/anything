@@ -90,6 +90,21 @@ class PromptBuilderMixin:
         except Exception:
             skills_block = ""
 
+        # superpowers 式技能目录: 列出全部技能(名+描述), 让 agent 知道有哪些技能可用 —— 遇到
+        # 相关任务时先调 use_skill(name) 把该技能完整指南拉进来再做(模型驱动, 补 trigger 自动注入)。
+        catalog_block = ""
+        try:
+            cat = get_skill_registry().catalog()
+            if cat:
+                lines = "\n".join(f"- {c['name']}: {(c.get('description') or '')[:80]}"
+                                  for c in cat[:40])
+                catalog_block = (
+                    "\n可用技能(skill)目录 — 遇到与下面某条技能相关的任务时, 先调 use_skill(name) "
+                    "加载该技能的完整指南再动手:\n" + lines + "\n"
+                )
+        except Exception:
+            catalog_block = ""
+
         # 缓存友好结构 (#2): [全局稳定前缀] → [任务块] → [易变块]。
         # 稳定前缀(项目记忆+赋能前言+工具表+输出格式)跨所有 agent 调用一致 → 命中 provider 的
         # prefix cache(qwen/OpenAI 自动按 token 前缀缓存) → 降 token 成本 + 缩短 TTFT。
@@ -108,6 +123,7 @@ class PromptBuilderMixin:
             f"④绝不要回答'我做不到'/'我只是语言模型'/'请你自己去弄' —— 能直接答就答, 该用工具就用;\n"
             f"⑤工具失败或无结果 (如无网、知识库为空) 时, 改用你自己的知识把问题尽力答完, 不要卡住、也不要反复重试同一个失败的工具。\n"
             f"\n可用工具:\n" + "\n".join(tool_lines) + "\n"
+            f"{catalog_block}"
             f"\n请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
             f'{{"thought": "<推理>", "final_answer": "<最终回答>"}}\n'
             f'或 (调用单个工具):\n'
