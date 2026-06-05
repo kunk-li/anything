@@ -5,6 +5,46 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-05)
+
+> 主题: 研究 Hermes Agent + obra/superpowers, 落地"技能学习闭环 / 提示词缓存 / 技能机制"; 建 agent
+> 评测台量成功率; 治延迟; 并修一串只在真模型+流式下暴露的健壮性 bug。commit `da52410`..`ee44ff9`。
+> 注: 模型最终档位 = qwen-max (config default_chat_model); agent 默认 execution_strategy=react + 自校验默认开。
+
+### 研究驱动新能力 (Hermes Agent + obra/superpowers)
+- **#1 技能自动沉淀** (`d7d1b66`, 借鉴 Hermes 学习闭环): 成功且复杂 (≥`agent.skill_distill_min_tools`
+  个工具) 的 agent 任务收尾, 后台 LLM 把"任务→工具→做法"提炼成可复用 skill 写入库 (`_auto_*.md`),
+  下次同类自动匹配注入。`SkillRegistry.save_skill`/`find_by_triggers`; agent `_distill_skill`/
+  `_distill_skill_async`(后台线程不阻塞 done); **默认关** `agent.enable_skill_distill`; 去重 + fail-open。
+  `test_skill_distill` 9 例。
+- **#2 提示词缓存** (`19a0bd9`): react prompt 重排 [稳定前缀(项目记忆+赋能前言+工具表+格式)] →
+  [任务块] → [易变(历史+迭代)], 命中 qwen prefix cache 降本 + 缩 TTFT (原把 task 夹工具表前切断缓存)。
+- **superpowers 机制集成** (`41257a8`): SkillRegistry 递归加载(rglob) + `use_skill(name)` 工具 +
+  prompt 注入"技能目录"(名+描述) → agent 主动按需加载技能 (模型驱动, 补 trigger 自动注入)。
+  `git clone obra/superpowers` 进技能目录即用。`test_use_skill` 6 例; `doc/技能系统与superpowers集成.md`。
+- **预置 4 条方法论技能** (`f781bd4`, 原创文字): brainstorming / writing_plans / systematic_debugging /
+  test_driven_development (放 skills/)。.gitignore 排除 `_auto_*.md` (自动沉淀不进库)。
+- **agent 评测台** (`03ed9a0`): `scripts/eval_agent.py` — 7 代表任务走真实 WS 流式打真 LLM, `--runs N`
+  量非确定性, 断言 no_error/nonempty/min_len/contains/not_refused, 出成功率+退出码 (接 CI/发版 gate)。
+  基线: 单次 7/7=100%; --runs 3 = 20/21=95.2% (1 次空答案疑瞬时, 标 PART/flaky)。
+- **治延迟** (`ee44ff9`): 无工具任务跳过最终答案重生成 (直接用 react final_answer) + 技能目录排除已
+  trigger 注入项 (不重复 use_skill)。规划 71→40s, 问答 15→8.5s, 7/7 仍 100%。
+
+### 流式 agent 健壮性 (一串实战 bug, 现由评测台守护)
+- **答案完整不截断** (`da52410`): 最终答案改非流式一次生成+切片 (SSE 中途断会留半截/空白)。
+- **解析失败兜底** (`01e05d1`): LLM 没按 JSON 输出时把自然语言当最终答案, 不报 AGENT_RUN_FAILED。
+- **网络抖动重试** (`4869c28`): react 计划 LLM 调用重试 3 次 (0.8s/1.6s 退避)。
+- **提示词重平衡** (`3ff454b`): 建议/规划/写作类直接答, 别过度搜工具 (治答非所问 + 踩 web_search 失败)。
+- **铁底兜底** (`5ecf6be`): 最终答案绝不为空白 (空则退回 final_answer / 提示)。
+- **并行工具空转修复** (`d7d1b66`): run_stream 补 Phase3 多动作 `actions:[]` 处理 (此前只非流式有,
+  流式下 LLM 并行多工具时 tool_name=None 空转)。
+
+### 体验 bug (前端, 需刷新)
+- **删会话残留** (`56160b4`): 删当前会话后清空主聊天区 + 右侧面板 (对齐 clearHistory)。
+- **停止后能再发** (`f9f71e6`): sendStream onClose 无条件 resolve (旧卫语句致 await 不解、inflight 锁不放)。
+- **侧栏开关桌面生效** (`c680c1d`): 顶栏 💬/▯ 桌面点击折叠/展开会话栏/右栏 (原只移动端 .open 有效)。
+- 缓存版本: app.js?v=190 / style.css?v=191。
+
 ## Unreleased (2026-06-04)
 
 > 主题: 回应"agent 能力太弱 / 不能操作" — 系统性增强 agent (模型档位 / 执行循环 / 自我校验 / 记忆个性化) + 修若干体验 bug。commit `b7e8ec6`..`bc78c26`。
