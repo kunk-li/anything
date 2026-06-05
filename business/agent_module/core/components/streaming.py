@@ -431,32 +431,43 @@ class StreamingMixin:
             # 再切片伪流给前端保留打字机观感; 生成失败/空则退回 react final_answer。保证答案完整。
             _streamed_text = []
             answer_out = final_answer or ""
-            # 治延迟 (#2): 仅"有工具结果"时才重生成 (把工具输出总结成自然语言 — react final_answer
-            # 未必完整带上工具输出)。无工具的纯回答/规划/建议: react 的 final_answer 已是在完整上下文
-            # (含命中技能/历史) 下生成的完整答案, 直接用 —— 省一次 LLM 调用, 且不丢上下文 (重生成只喂
-            # task 会丢掉技能/历史)。原先无论有无工具都重生成, 是规划/建议类慢 70s+ 的主因之一。
-            if tool_results:
+            # 治延迟 (#2): 默认"仅有工具结果时才重生成"(把工具输出总结成自然语言 — react final_answer
+            # 未必完整带上工具输出); 无工具的纯回答/规划/建议直接用 react 的 final_answer (已在完整
+            # 上下文含命中技能/历史下生成), 省一次 LLM 调用、不丢上下文。
+            # 例外 (健壮性, 勿删): react 输出解析失败时 final_answer 会退化成"原始 JSON 串"
+            # (react_engine parse-fail 兜底), 绝不能直接喷给用户 → 即便无工具也重生成一次干净作答。
+            # 这是无工具重生成原本承担的"洗净"职责, 治延迟时不能连它一起删 (否则解析失败就喷生 JSON)。
+            _fa = str(final_answer or "").strip()
+            _is_raw_react_json = _fa.startswith("{") and (
+                '"thought"' in _fa or '"action"' in _fa or '"final_answer"' in _fa)
+            if tool_results or _is_raw_react_json:
                 try:
-                    tool_ctx_parts = []
-                    for tr in tool_results:
-                        tn = tr.get("tool_name", "?")
-                        summary = self._summarize_tool_output(tr.get("output"))
-                        tool_ctx_parts.append(f"[工具 {tn} 结果]\n{summary}")
-                    tool_ctx = "\n\n".join(tool_ctx_parts)
-                    final_prompt = (
-                        f"用户任务: {task}\n\n已收集到的信息:\n{tool_ctx}\n\n"
-                        f"请基于以上信息, 用自然语言完整地直接回答用户 (一次写完整, 不要中途停下)."
-                    )
+                    if tool_results:
+                        tool_ctx_parts = []
+                        for tr in tool_results:
+                            tn = tr.get("tool_name", "?")
+                            summary = self._summarize_tool_output(tr.get("output"))
+                            tool_ctx_parts.append(f"[工具 {tn} 结果]\n{summary}")
+                        tool_ctx = "\n\n".join(tool_ctx_parts)
+                        final_prompt = (
+                            f"用户任务: {task}\n\n已收集到的信息:\n{tool_ctx}\n\n"
+                            f"请基于以上信息, 用自然语言完整地直接回答用户 (一次写完整, 不要中途停下)."
+                        )
+                    else:
+                        # 无工具但解析失败: 用 task 重新干净作答 (恢复"洗净", 生 JSON 不外泄)
+                        final_prompt = str(task or "")
                     _full = llm_call(final_prompt)
                     if _full and str(_full).strip():
                         answer_out = str(_full)
                 except Exception as e:
                     self.logger.warning(f"[react-stream] 最终答案重生成失败, 用 react final_answer: {e}")
-            # 铁底兜底: 绝不让最终答案为空白 (即便走了工具路径 + 重生成失败/空 + final_answer
-            # 异常凑到一起 — 用户曾遇到主答案区整段空白)。空就退回 final_answer, 再不行给提示。
-            if not (answer_out and str(answer_out).strip()):
-                answer_out = (str(final_answer or "").strip()
-                              or "抱歉, 这次没能生成有效回答, 请重试或换个说法描述你的需求。")
+            # 铁底兜底: 绝不让最终答案为 (a) 空白 或 (b) 解析失败残留的"原始 JSON 串"喷给用户
+            # (重生成也失败/异常时的最后一道防线 — 用户曾遇主答案区空白)。两种都退到干净提示语。
+            _ao = str(answer_out or "").strip()
+            _bad = (not _ao) or (_ao.startswith("{") and (
+                '"thought"' in _ao or '"final_answer"' in _ao or '"action"' in _ao))
+            if _bad:
+                answer_out = "抱歉, 这次没能正确组织出答案, 请重试或换个说法描述你的需求。"
             _streamed_text = [answer_out]
             chunk_size = max(1, len(answer_out) // 60)
             for i in range(0, len(answer_out), chunk_size):

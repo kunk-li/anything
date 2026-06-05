@@ -530,5 +530,73 @@ class TestReActParallel(unittest.TestCase):
         self.assertIn("py_sandbox", tools)
 
 
+class TestReActStreamRobustness(unittest.TestCase):
+    """run_stream (流式 ReAct) 健壮性 — 此前零单测覆盖, 正是本会话一堆"只在流式坏"bug 的盲区
+    (前端走的是 run_stream, 不是 execute, 两者历史上漂移)。重点锁住两件事:
+      1. 解析失败残留的"原始 JSON 串"绝不能当答案喷给用户 (重生成"洗净"职责);
+      2. 无工具 + 干净 final_answer 时不重生成 (治延迟红利, 别再退回原先无脑重生成)。
+    """
+
+    def _make_agent(self, responses):
+        reg = _DictRegistry()
+        reg.register("llm_generate", _stub_tool_success)
+        reg.register("rag_search", _stub_tool_success)
+        llm = _ScriptedLLM(responses)
+        agent = SimpleAgent(tool_registry=reg, llm_planner=llm)
+        agent.execution_strategy = "react"  # 走流式 ReAct (而非 _run_stream_direct / single_shot)
+        agent.enable_self_verify = False
+        agent.use_llm_planner = False
+        agent.tool_approval_required = set()
+        return agent, llm
+
+    def _stream(self, agent, task="测试任务"):
+        events = list(agent.run_stream({"task": task, "trace_id": "t", "session_id": "s"}))
+        answer = "".join(e.get("text", "") for e in events if e.get("type") == "chunk")
+        return events, answer
+
+    def test_clean_final_answer_no_regen(self):
+        """无工具 + 干净 final_answer: 直接用, 不重生成 (省一次 LLM 调用) → LLM 只调 1 次"""
+        agent, llm = self._make_agent(['{"thought":"直接答","final_answer":"干净答案ABC"}'])
+        events, answer = self._stream(agent)
+        self.assertEqual(answer, "干净答案ABC")
+        self.assertEqual(llm.call_count, 1)  # 关键: 无工具不重生成
+
+    def test_parsefail_raw_json_not_leaked(self):
+        """解析失败 → final_answer 退化成原始 JSON: 必须重生成洗净, 绝不把生 JSON 喷给用户"""
+        agent, llm = self._make_agent([
+            '{"thought":"想用某技能","action":{"tool":"不存在的工具XYZ","input":{}}}',  # parse=None → raw_text
+            "这是重新生成的干净答案。",  # 无工具但解析失败 → 触发重生成
+        ])
+        events, answer = self._stream(agent)
+        self.assertEqual(answer, "这是重新生成的干净答案。")
+        self.assertFalse(answer.strip().startswith("{"))
+        self.assertNotIn('"thought"', answer)
+        self.assertEqual(llm.call_count, 2)  # react 1 次 + 重生成洗净 1 次
+
+    def test_parsefail_regen_empty_falls_back_clean(self):
+        """解析失败 + 重生成也空: 铁底兜底给干净提示语, 仍绝不喷生 JSON"""
+        agent, llm = self._make_agent([
+            '{"thought":"x","action":{"tool":"不存在XYZ","input":{}}}',  # parse=None → 生 JSON
+            "",  # 重生成返回空 → 落到铁底兜底
+        ])
+        events, answer = self._stream(agent)
+        self.assertFalse(answer.strip().startswith("{"))
+        self.assertNotIn('"thought"', answer)
+        self.assertTrue(answer.strip())  # 非空: 干净兜底提示语
+
+    def test_tool_path_regenerates_summary(self):
+        """有工具结果: 重生成把工具输出总结成自然语言 (这条重生成保留)"""
+        agent, llm = self._make_agent([
+            '{"thought":"查一下","action":{"tool":"rag_search","input":{"query":"x"}}}',
+            '{"thought":"够了","final_answer":"基于检索的答案"}',
+            "根据检索结果, 这是完整的总结答案。",  # 有工具 → 重生成总结
+        ])
+        events, answer = self._stream(agent)
+        self.assertTrue(answer.strip())
+        self.assertFalse(answer.strip().startswith("{"))
+        tools = [e.get("tool_name") for e in events if e.get("type") == "observation"]
+        self.assertIn("rag_search", tools)
+
+
 if __name__ == "__main__":
     unittest.main()

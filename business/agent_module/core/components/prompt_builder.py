@@ -95,17 +95,19 @@ class PromptBuilderMixin:
         # 相关任务时先调 use_skill(name) 把该技能完整指南拉进来再做(模型驱动, 补 trigger 自动注入)。
         catalog_block = ""
         try:
-            # 排除已 trigger 自动注入的技能 (body 已在上面 skills_block), 免得 agent 又 use_skill
-            # 白跑一轮 (省一次 LLM 调用, 治延迟)。目录只列"没自动注入、需要时才按需加载"的技能。
-            _injected = {s.name for s in matched}
-            cat = [c for c in get_skill_registry().catalog() if c["name"] not in _injected]
-            if cat:
-                lines = "\n".join(f"- {c['name']}: {(c.get('description') or '')[:80]}"
-                                  for c in cat[:40])
-                catalog_block = (
-                    "\n可用技能(skill)目录 — 遇到与下面某条技能相关的任务时, 先调 use_skill(name) "
-                    "加载该技能的完整指南再动手:\n" + lines + "\n"
-                )
+            # 仅当"没有技能被 trigger 自动注入"时才展示技能目录: 让 agent 发现并按需 use_skill。
+            # 若已有相关技能自动注入 (body 在上面 skills_block), 说明手头已有方法论, 此时再列目录
+            # 只会诱导 agent 多调一次 use_skill 去加载其它技能 —— 实测对同类任务无质量增益 (答案反而
+            # 更短) 却平白 +20~25s。故有命中就抑制目录, 让它直接用已注入的技能作答 (治延迟尖峰)。
+            if not matched:
+                cat = get_skill_registry().catalog()
+                if cat:
+                    lines = "\n".join(f"- {c['name']}: {(c.get('description') or '')[:80]}"
+                                      for c in cat[:40])
+                    catalog_block = (
+                        "\n可用技能(skill)目录 — 遇到与下面某条技能相关的任务时, 先调 use_skill(name) "
+                        "加载该技能的完整指南再动手:\n" + lines + "\n"
+                    )
         except Exception:
             catalog_block = ""
 

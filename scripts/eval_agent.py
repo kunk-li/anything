@@ -55,10 +55,12 @@ TASKS = [
 _REFUSE_PAT = re.compile(r"我无法|无法访问|无法直接|我做不到|做不了|我只是.{0,6}(语言模型|AI|人工智能|模型)|请你?自己")
 
 
-async def run_one(url: str, key: str, task: str) -> dict:
+async def run_one(url: str, key: str, task: str, run_idx: int = 0) -> dict:
     full = f"{url}/invoke/stream?api_key={key}"
+    # 每次运行用独立 session_id (带 run_idx): 否则同任务多跑会复用 session、带上一跑的历史,
+    # 运行不独立 → 污染非确定性测量 (会看到雷同答案)。每跑干净起 session 才能真量稳定性。
     body = {"type": "agent", "task": task, "tenant_id": "default",
-            "session_id": f"eval_{abs(hash(task)) % 100000}", "trace_id": "eval"}
+            "session_id": f"eval_{abs(hash(task)) % 100000}_{run_idx}", "trace_id": "eval"}
     actions, chunks, end = [], [], None
     t0 = time.time()
     try:
@@ -110,8 +112,8 @@ async def main() -> None:
     print(f"== Agent 评测台 ==  {url}  每任务 {args.runs} 次\n")
     for spec in TASKS:
         ok_n, lat, last_fail = 0, [], ""
-        for _ in range(args.runs):
-            r = await run_one(url, args.key, spec["task"])
+        for ri in range(args.runs):
+            r = await run_one(url, args.key, spec["task"], ri)
             lat.append(r["latency"]); all_lat.append(r["latency"])
             fails = check(r, spec["assert"])
             total += 1
