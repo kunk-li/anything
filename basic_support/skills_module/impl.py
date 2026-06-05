@@ -145,8 +145,14 @@ def parse_skill_file(path: Path) -> Skill:
     )
 
 
+def _slugify(name: str) -> str:
+    """技能名 → 安全文件名 slug (保留中英文数字下划线)."""
+    s = re.sub(r"[^0-9A-Za-z_一-鿿]+", "_", (name or "skill").strip()).strip("_")
+    return (s or "skill")[:48]
+
+
 class SkillRegistry:
-    """skills/ 目录扫描 + 匹配."""
+    """skills/ 目录扫描 + 匹配 + (#1) 自动沉淀写入."""
 
     def __init__(self, skills_dir: Optional[str] = None):
         # 解析顺序: 显式参数 > env > 默认 'skills' (相对 cwd) > 项目根 'skills/'
@@ -224,6 +230,57 @@ class SkillRegistry:
                     for s in self._skills
                 ],
             }
+
+    # ---------- #1 自动沉淀: 可写能力 ----------
+    def writable_dir(self) -> Optional[Path]:
+        """返回可写的 skills 目录 (不存在则创建)。供自动沉淀 save_skill 用。"""
+        if self._skills_dir is not None:
+            p = Path(self._skills_dir).expanduser()
+        else:
+            env_dir = os.environ.get("ANYTHING_SKILLS_DIR")
+            p = Path(env_dir).expanduser() if env_dir else Path("skills")
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            return None
+
+    def find_by_triggers(self, triggers: List[str]) -> Optional[Skill]:
+        """找 trigger 高度重叠 (交集 ≥ 较小集合的一半) 的已有 skill, 用于去重/合并。"""
+        tset = {t.lower().strip() for t in (triggers or []) if t and t.strip()}
+        if not tset:
+            return None
+        with self._lock:
+            for s in self._skills:
+                sset = {t.lower().strip() for t in s.triggers if t}
+                if sset and len(tset & sset) >= max(1, min(len(tset), len(sset)) // 2):
+                    return s
+        return None
+
+    def save_skill(self, skill: Skill, source: str = "auto") -> Optional[str]:
+        """把 Skill 写成 .md 并加入内存 (即时可匹配)。auto 沉淀文件名带 _auto_ 前缀 +
+        frontmatter source 标记, 便于区分人写/自动 与后续清理。返回路径; 失败返回 None。"""
+        d = self.writable_dir()
+        if d is None or not (skill.name and skill.triggers):
+            return None
+        prefix = "_auto_" if source == "auto" else ""
+        path = d / f"{prefix}{_slugify(skill.name)}.md"
+        fm = ["---", f"name: {skill.name}", f"description: {skill.description}", "triggers:"]
+        fm += [f"  - {t}" for t in skill.triggers]
+        if skill.tools:
+            fm.append("tools:")
+            fm += [f"  - {t}" for t in skill.tools]
+        fm += [f"priority: {int(skill.priority)}", f"source: {source}", "---"]
+        content = "\n".join(fm) + "\n\n" + (skill.body or "").strip() + "\n"
+        try:
+            path.write_text(content, encoding="utf-8")
+        except Exception:
+            return None
+        skill.path = str(path)
+        with self._lock:
+            self._skills = [s for s in self._skills if s.name != skill.name]
+            self._skills.append(skill)
+        return str(path)
 
 
 def inject_skills_into_prompt(

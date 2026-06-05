@@ -176,6 +176,19 @@ class SimpleAgent(
             self.auto_approve_maintenance = (
                 set(str(t) for t in _aam if t) if isinstance(_aam, list) else set())
 
+        # #1 技能自动沉淀 (借鉴 Hermes 学习闭环): 默认关 (与 human-in-loop 一致)。开后, 成功且
+        # 复杂 (≥skill_distill_min_tools 个工具) 的任务收尾时, 后台 LLM 把"任务→工具序列→做法"
+        # 提炼成可复用 skill 写入 skill 库, 下次同类任务自动注入 prompt。去重 + fail-open + 后台
+        # 线程不阻塞主流程。
+        self.enable_skill_distill = self.config.get_effective_value(
+            "agent.enable_skill_distill", env_var="ANYTHING_AGENT_SKILL_DISTILL",
+            default=False, value_type=bool,
+        )
+        self.skill_distill_min_tools = self.config.get_effective_value(
+            "agent.skill_distill_min_tools", env_var="ANYTHING_AGENT_SKILL_DISTILL_MIN_TOOLS",
+            default=2, value_type=int,
+        )
+
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
         default_dangerous = [
@@ -690,6 +703,82 @@ class SimpleAgent(
         # 预算耗尽 / 不可修 → 返回 + 标记缺口
         response["details"]["verify_gaps"] = fixable_fb
         return response
+
+    # ============================================================
+    # #1 技能自动沉淀 (借鉴 Hermes 学习闭环): 成功复杂任务 → 提炼可复用 skill
+    # ============================================================
+    def _distill_skill_async(self, task, tool_results, final_answer, trace_id=None):
+        """成功复杂任务收尾时, 后台线程沉淀 skill (不阻塞主流程 / 不延迟 done)。默认关。"""
+        try:
+            if not getattr(self, "enable_skill_distill", False):
+                return
+            n_tools = len([tr for tr in (tool_results or []) if tr and tr.get("tool_name")])
+            if n_tools < int(getattr(self, "skill_distill_min_tools", 2)):
+                return  # 简单任务不沉淀
+            if not (final_answer and str(final_answer).strip()):
+                return
+            import threading
+            threading.Thread(
+                target=self._distill_skill,
+                args=(task, tool_results, final_answer, trace_id),
+                daemon=True,
+            ).start()
+        except Exception:
+            pass  # fail-open: 沉淀永不影响主流程
+
+    def _distill_skill(self, task, tool_results, final_answer, trace_id=None):
+        """LLM 从一次成功任务提炼一条可复用 skill 并写入 skill 库。去重 + 全程 fail-open。"""
+        try:
+            llm_call = self._resolve_llm_planner(trace_id=trace_id)
+            if llm_call is None:
+                return None
+            tools_used = [tr.get("tool_name") for tr in (tool_results or [])
+                          if tr and tr.get("tool_name")]
+            prompt = (
+                "下面是一次已成功完成的任务。请把它提炼成一条【可复用技能(skill)】, 供以后遇到\n"
+                "同类任务时直接复用 (作为提示注入)。要通用、可迁移, 不要带这次的具体数据。\n"
+                f"【任务】{str(task)[:500]}\n"
+                f"【用到的工具】{tools_used}\n"
+                f"【最终结果(节选)】{str(final_answer)[:500]}\n\n"
+                "只输出 JSON, 不要任何其他文字:\n"
+                '{"name": "蛇形小写英文名", "description": "一句话描述", '
+                '"triggers": ["会触发这类任务的关键词(3-6个,中英文皆可)"], '
+                '"tools": ["用到的工具名"], '
+                '"body": "遇到这类任务用什么步骤/工具/注意点去做的简明指南(中文,100-300字)"}'
+            )
+            raw = llm_call(prompt) or ""
+            import json as _json
+            import re as _re
+            m = _re.search(r"\{[\s\S]*\}", raw)
+            if not m:
+                return None
+            data = _json.loads(m.group(0))
+            name = str(data.get("name") or "").strip()
+            triggers = [str(t).strip() for t in (data.get("triggers") or []) if str(t).strip()]
+            body = str(data.get("body") or "").strip()
+            if not (name and triggers and body):
+                return None
+            from skills_module.impl import Skill, get_skill_registry
+            reg = get_skill_registry()
+            if reg.find_by_triggers(triggers) is not None:
+                self.logger.info(f"[skill-distill] 已有同类 skill, 跳过: name={name}")
+                return None  # 去重: 已有高度重叠的 skill (v1 不合并)
+            skill = Skill(
+                name=name,
+                description=str(data.get("description") or task)[:120],
+                triggers=triggers,
+                tools=[str(t) for t in (data.get("tools") or tools_used) if t],
+                priority=1,
+                body=body,
+            )
+            path = reg.save_skill(skill, source="auto")
+            if path:
+                self.logger.info(
+                    f"[skill-distill] 沉淀新技能: name={name} triggers={triggers} → {path}")
+            return path
+        except Exception as e:
+            self.logger.warning(f"[skill-distill] 沉淀失败 (忽略): {e}")
+            return None
 
     # ============================================================
     # 任务规划 (single_shot 路径)

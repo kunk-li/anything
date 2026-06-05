@@ -299,6 +299,42 @@ class StreamingMixin:
                     history.append({"thought": thought, "final_answer": final_answer})
                     break
 
+                # Phase3 修: 多动作并行 — 与非流式 _react_execute 对齐。此前流式漏处理 actions:[],
+                # 导致 LLM 并行多个独立工具时 tool_name=None 空转、工具不执行 (实测暴露)。审批整批门控。
+                multi_actions = step.get("actions")
+                if multi_actions:
+                    prepared = []
+                    blocked_tool = None
+                    for a in multi_actions:
+                        tn = a.get("tool")
+                        if self._needs_approval(tn, extra_params):
+                            blocked_tool = tn
+                            break
+                        ti = dict(a.get("input") or {})
+                        ti.setdefault("trace_id", trace_id)
+                        ti.setdefault("session_id", session_id)
+                        ti.setdefault("extra_params", extra_params)
+                        prepared.append((tn, ti))
+                        yield {"type": "action", "iteration": iteration, "tool_name": tn,
+                               "input": {k: v for k, v in ti.items()
+                                         if k not in ("trace_id", "session_id", "extra_params")}}
+                    if blocked_tool is not None:
+                        yield {"type": "error", "code": "TOOL_APPROVAL_REQUIRED",
+                               "message": f"工具 '{blocked_tool}' 需要审批; 请带 extra_params.approve_tools=['{blocked_tool}'] 重提.",
+                               "tool_name": blocked_tool,
+                               "required_tools": sorted(self.tool_approval_required)}
+                        return
+                    par_results = self._run_actions_parallel(prepared, session_id, trace_id, iteration)
+                    for (tn, ti), tr in zip(prepared, par_results):
+                        tool_results.append(tr)
+                        obs = self._summarize_tool_output(tr.get("output"))
+                        last_observation = tr
+                        history.append({"thought": thought, "action": {"tool": tn, "input": ti},
+                                        "observation": obs})
+                        yield {"type": "observation", "iteration": iteration, "tool_name": tn,
+                               "success": tr.get("success", False), "output_summary": obs}
+                    continue
+
                 # 执行 action
                 action = step.get("action") or {}
                 tool_name = action.get("tool")
@@ -441,6 +477,17 @@ class StreamingMixin:
                 )
             except Exception as _se:
                 self.logger.warning(f"[react-stream] 持久化失败(忽略): {_se}")
+
+            # #1 技能自动沉淀: 成功且复杂的任务 → 后台线程提炼可复用 skill (默认关, 不阻塞 done)。
+            try:
+                self._distill_skill_async(
+                    task=request.get("task"),  # 原始 task (未拼历史前缀), 提炼更通用
+                    tool_results=tool_results,
+                    final_answer="".join(_streamed_text) or final_answer,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                pass
 
             yield {
                 "type": "done",
