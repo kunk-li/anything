@@ -81,6 +81,9 @@ AGENT_CONFIG_SCHEMA: List[ConfigField] = [
                 None, "自主维护", "定时扫描的域: behavior/memory/code_doc"),
     ConfigField("agent.maintenance_auto_apply", None, "bool", None,
                 None, "自主维护", "定时扫描是否自动 apply (null=按 auto_approve_maintenance 名单)"),
+    ConfigField("agent.enable_self_update", "enable_self_update", "bool", False,
+                "ANYTHING_AGENT_SELF_UPDATE", "自主维护",
+                "影子模式自更新: 改动提议先在隔离 worktree 跑全量测试当安全闸 (绝不自动应用; 默认关)"),
     # 技能
     ConfigField("agent.enable_skill_distill", "enable_skill_distill", "bool", False,
                 "ANYTHING_AGENT_SKILL_DISTILL", "技能", "成功复杂任务后台提炼成可复用 skill (默认关)"),

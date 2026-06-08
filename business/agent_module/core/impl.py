@@ -215,6 +215,13 @@ class SimpleAgent(
             default=0, value_type=int,
         )
 
+        # 执行计划⑧ 自更新影子模式: 默认关。开后 verify_self_update 可在隔离 git worktree 应用改动
+        # 提议 + 跑全量测试当安全闸 (绝不自动应用到主工作树; advisory, 全绿才提请人审批)。
+        self.enable_self_update = self.config.get_effective_value(
+            "agent.enable_self_update", env_var="ANYTHING_AGENT_SELF_UPDATE",
+            default=False, value_type=bool,
+        )
+
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
         default_dangerous = [
@@ -1247,6 +1254,24 @@ class SimpleAgent(
             return root if os.path.isdir(root) else None
         except Exception:
             return None
+
+    def verify_self_update(self, proposal: Dict[str, Any]) -> Dict[str, Any]:
+        """执行计划⑧ (自更新影子模式): 在隔离 git worktree 应用改动提议 + 跑全量测试当安全闸。
+
+        **默认关** (agent.enable_self_update); **advisory** — 只返回闸门结果供人审批, **绝不自动
+        应用到主工作树/main**。proposal: {id?, description?, diff: unified-diff}。全程 fail-safe
+        (异常/测试不过 → gate_passed=False)。这是"执行性自主"的安全骨架, 把优化① 的全绿基线当闸门。
+        """
+        if not getattr(self, "enable_self_update", False):
+            return {"enabled": False, "gate_passed": False,
+                    "note": "self_update 未启用 (开: agent.enable_self_update)"}
+        try:
+            from .self_update import ShadowSelfUpdate
+            su = ShadowSelfUpdate(repo_root=self._resolve_project_root(), logger=self.logger)
+            return {"enabled": True, **su.verify_in_shadow(proposal or {})}
+        except Exception as e:
+            self.logger.warning(f"[self_update] 验证异常 (fail-safe 拒绝): {e}")
+            return {"enabled": True, "gate_passed": False, "note": f"异常: {e}"}
 
     # ============================================================
     # Task III (#95): Reflection 反思环 (Reflexion / Self-critique)
