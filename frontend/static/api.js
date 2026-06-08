@@ -272,6 +272,21 @@ const ApiClient = (() => {
         return _doFetch('POST', `/agent/maintenance/apply${qs ? '?' + qs : ''}`,
             { proposals: proposals || [], approved_ids: approvedIds || [] });
     }
+    /** GET /agent/user-analysis — 主动分析使用者 (洞察 + 画像增强提议; LLM 调用, 按需触发) */
+    async function getUserAnalysis(opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('GET', `/agent/user-analysis${qs ? '?' + qs : ''}`);
+    }
+    /** POST /agent/user-analysis/apply — 审批把画像增强提议反哺画像 */
+    async function applyUserInsights(proposals, approvedIds, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('POST', `/agent/user-analysis/apply${qs ? '?' + qs : ''}`,
+            { proposals: proposals || [], approved_ids: approvedIds || [] });
+    }
 
     // ============== 执行计划⑦ — 统一配置 APIs ==============
     /** GET /config/agent — agent 全部开关 (元数据 + 当前值, 分组) */
@@ -502,6 +517,8 @@ const ApiClient = (() => {
         getProfile,
         getMaintenanceProposals,
         applyMaintenance,
+        getUserAnalysis,
+        applyUserInsights,
         getAgentConfig,
         setAgentConfig,
         getAgentPresets,

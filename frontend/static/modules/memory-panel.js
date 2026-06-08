@@ -248,10 +248,77 @@
                 html += '</ul>';
             }
             html += '</div>';
+            // 用户洞察 (analyze_user): LLM 调用, 按需触发 (不随面板自动刷)
+            html += `<div class="vis-sec"><div class="vis-title">🔍 ${t('memory.ua_title') || '用户洞察'} `
+                + `<button class="small-btn ghost" id="ua-run-btn">${t('memory.ua_run') || '分析使用者'}</button></div>`
+                + `<div id="ua-result" class="vis-ua"></div></div>`;
             box.innerHTML = html;
             box.querySelectorAll('.vis-approve').forEach(btn => {
                 btn.addEventListener('click', () => _approveProposal(btn.dataset.pid, proposals));
             });
+            const uaBtn = box.querySelector('#ua-run-btn');
+            if (uaBtn) uaBtn.addEventListener('click', _runUserAnalysis);
+        }
+
+        async function _runUserAnalysis() {
+            const out = document.getElementById('ua-result');
+            if (!out) return;
+            out.innerHTML = `<div class="vis-empty">${t('memory.ua_running') || '分析中…'}</div>`;
+            try {
+                const { payload, status } = await ApiClient.getUserAnalysis({ tenant_id: _tenantId() });
+                if (status !== 200 || payload?.code !== 'SUCCESS') {
+                    out.innerHTML = `<div class="vis-empty error">× ${escapeHtml(payload?.message || String(status))}</div>`;
+                    return;
+                }
+                const d = payload.data || {};
+                if (!d.enabled) {
+                    out.innerHTML = `<div class="vis-empty">${escapeHtml(d.note || '用户分析未开启 (config: enable_user_analysis)')}</div>`;
+                    return;
+                }
+                _renderUA(out, d.insights || [], d.proposals || []);
+            } catch (e) {
+                out.innerHTML = `<div class="vis-empty error">× ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function _renderUA(out, insights, proposals) {
+            let html = '';
+            if (insights.length) {
+                html += '<ul class="vis-insights">'
+                    + insights.map(i => `<li>${escapeHtml(String(i))}</li>`).join('') + '</ul>';
+            } else {
+                html += `<div class="vis-empty">${t('memory.ua_none') || '暂无洞察 (记忆太少?)'}</div>`;
+            }
+            if (proposals.length) {
+                html += `<div class="vis-title" style="margin-top:6px">${t('memory.ua_props') || '画像增强提议'}</div>`
+                    + '<ul class="vis-props">';
+                for (const p of proposals) {
+                    html += `<li><span class="vis-prop-act">${escapeHtml(p.dim || '')}</span> `
+                        + `${escapeHtml(p.content || '')} `
+                        + `<button class="small-btn ghost ua-approve" data-pid="${escapeHtml(p.id || '')}">✓ 反哺</button></li>`;
+                }
+                html += '</ul>';
+            }
+            out.innerHTML = html;
+            out.querySelectorAll('.ua-approve').forEach(btn => {
+                btn.addEventListener('click', () => _approveUA(btn.dataset.pid, proposals));
+            });
+        }
+
+        async function _approveUA(pid, proposals) {
+            const p = (proposals || []).find(x => x.id === pid);
+            if (!p) return;
+            try {
+                const { payload, status } = await ApiClient.applyUserInsights([p], [pid], { tenant_id: _tenantId() });
+                if (status === 200 && payload?.code === 'SUCCESS') {
+                    toast('success', '已反哺画像', p.content || '');
+                    refreshVisibility();   // 画像变了, 刷新顶部"Agent 眼中的你"
+                } else {
+                    toast('error', payload?.code || status, payload?.message || '');
+                }
+            } catch (e) {
+                toast('error', '反哺失败', e.message);
+            }
         }
 
         async function _approveProposal(pid, proposals) {

@@ -3418,6 +3418,9 @@ body.share-readonly .msg-feedback {
 .memory-vis .vis-dim li, .memory-vis .vis-props li { font-size: 11px; color: var(--text, #ccc); margin: 2px 0; }
 .memory-vis .vis-prop-act { font-weight: 600; color: var(--warn, #c96); }
 .memory-vis .vis-approve { margin-left: 6px; }
+.memory-vis .vis-insights { margin: 0; padding-left: 16px; }
+.memory-vis .vis-insights li { font-size: 11px; color: var(--text, #ccc); margin: 2px 0; }
+.memory-vis .vis-ua { margin-top: 4px; }
 
 /* 执行计划⑦ 统一配置面板 */
 .config-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
