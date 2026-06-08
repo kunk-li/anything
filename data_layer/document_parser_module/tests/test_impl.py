@@ -6,11 +6,19 @@ import shutil
 import tempfile
 import unittest
 
-import pandas as pd
-import xmltodict
+import pytest
+
+# 这些解析/造测试数据用的第三方库都较重且可选 (document_parser 本体也是 optional import,
+# 见 core/impl.py)。缺任一就整模块 **skip** 而非 collection error — 让全量 pytest 不被中断;
+# 装了则照常跑。
+pd = pytest.importorskip("pandas")
+xmltodict = pytest.importorskip("xmltodict")
+pytest.importorskip("docx")
+pytest.importorskip("pptx")
+pytest.importorskip("reportlab")
+
 from docx import Document
 from pptx import Presentation
-
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 

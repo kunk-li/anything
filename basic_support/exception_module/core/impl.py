@@ -79,6 +79,15 @@ class AgentException(SystemBaseException):
     pass
 
 
+class OrchestratorException(SystemBaseException):
+    """协同调度模块相关异常（路由/参数校验/执行失败）。
+
+    补齐 per-domain 异常 (此前漏定义, 致 orchestrator_module.utils.tool_functions
+    及其测试 `from exception_module.core.impl import OrchestratorException` 失败 →
+    全量 pytest collection error)。构造同基类 (code, message, *, details)。"""
+    pass
+
+
 @dataclass(frozen=True)
 class ExceptionHandleResult:
     code: str

@@ -104,7 +104,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=... $PY -m pytest <module>/tests -q -p no:cach
 # ABC 检查:
 PYTHONPATH=... $PY scripts/check_abc_alignment.py
 ```
-⚠️ **全量 `pytest` 会被 2 个 pre-existing collection error 中断** (orchestrator 的 `OrchestratorException` import + document_parser 缺 `pandas`)。跑指定模块, 或加 `--continue-on-collection-errors`。这俩与本 session 改动无关。
+✅ **全量 `pytest` 现可一键跑通** (`2026-06-08` 优化①修复): 基线 **1159 passed, 4 skipped, 0 失败/0 collection error** (~60s)。此前两个 collection error 已修: ① `OrchestratorException` 补定义进 `exception_module`(per-domain 漏的) + 导出; ② `document_parser`/缺重型可选库(pandas/docx/pptx/reportlab)的测试改 `pytest.importorskip` 优雅 skip(模块本体早就是 optional import)。顺带修了 orchestrator 此前被 collection error 遮住的 7 个陈旧测试(对齐当前 envelope 契约)+ 补 `tool_functions` 测试。日常仍可只跑指定模块加速。
 
 ## 8. 关键文件位置
 | 用途 | 路径 |

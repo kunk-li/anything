@@ -3,7 +3,7 @@
 对外暴露：
 - ExceptionHandler: 异常处理器实现
 - BaseExceptionHandler: 抽象接口
-- SystemBaseException 及各业务异常：ConfigException/VectorDBException/RAGException/AgentException
+- SystemBaseException 及各业务异常：ConfigException/VectorDBException/RAGException/AgentException/OrchestratorException
 """
 
 from .core.base import BaseExceptionHandler
@@ -14,6 +14,7 @@ from .core.impl import (
     VectorDBException,
     RAGException,
     AgentException,
+    OrchestratorException,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "VectorDBException",
     "RAGException",
     "AgentException",
+    "OrchestratorException",
 ]
