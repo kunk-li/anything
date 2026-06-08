@@ -312,5 +312,34 @@ class TestBuildSchedulerWiring(unittest.TestCase):
             sch.stop()
 
 
+class TestGracefulShutdown(unittest.TestCase):
+    """优化②: app 退出收尾 — 停 scheduler + 关 external providers (各自 fail-safe)。"""
+
+    class _Sch:
+        def __init__(self): self.stopped = 0
+        def stop(self): self.stopped += 1
+
+    class _Prov:
+        def __init__(self, boom=False): self.closed = 0; self.boom = boom
+        def close(self):
+            self.closed += 1
+            if self.boom:
+                raise RuntimeError("close boom")
+
+    def test_stops_scheduler_and_closes_all_providers(self):
+        from factories.application_layer import _make_graceful_shutdown
+        sch = self._Sch()
+        p1, p2, p3 = self._Prov(), self._Prov(boom=True), self._Prov()
+        _make_graceful_shutdown(sch, [p1, p2, p3])()
+        self.assertEqual(sch.stopped, 1)
+        self.assertEqual(p1.closed, 1)
+        self.assertEqual(p2.closed, 1)         # boom 抛被吞
+        self.assertEqual(p3.closed, 1)         # 不受 p2 异常影响 (fail-safe)
+
+    def test_none_scheduler_and_empty_providers_no_throw(self):
+        from factories.application_layer import _make_graceful_shutdown
+        _make_graceful_shutdown(None, None)()  # 不抛
+
+
 if __name__ == "__main__":
     unittest.main()
