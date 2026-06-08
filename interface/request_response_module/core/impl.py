@@ -83,8 +83,6 @@ class RequestHandler(BaseRequestHandler):
           {type: 'done', cost_time, code}
           {type: 'error', code, message}
         """
-        import time as _time
-        start_time = _time.time()
         trace_id = trace_id or request.get("trace_id") or self._generate_trace_id()
 
         try:

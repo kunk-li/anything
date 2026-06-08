@@ -155,7 +155,7 @@ class _BaseMemoryTests:
     def test_list_sorted_by_last_accessed(self):
         f1 = self.memory.add_fact(Fact.make("old", tenant_id="t1"))
         time.sleep(0.01)
-        f2 = self.memory.add_fact(Fact.make("middle", tenant_id="t1"))
+        self.memory.add_fact(Fact.make("middle", tenant_id="t1"))
         time.sleep(0.01)
         f3 = self.memory.add_fact(Fact.make("new", tenant_id="t1"))
         facts = self.memory.list_facts("t1")

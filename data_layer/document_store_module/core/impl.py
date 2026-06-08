@@ -560,8 +560,6 @@ class LocalDocumentStore(BaseDocumentStore):
             raise ValueError("threshold_days不能小于0")
 
         zombies: List[dict] = []
-        now = datetime.now()
-        threshold_dt = now - timedelta(days=threshold_days)
 
         # Build doc_id set from info files
         info_files = self._list_info_files()
@@ -607,7 +605,7 @@ class LocalDocumentStore(BaseDocumentStore):
             m = base.split(".", 1)
             if len(m) != 2:
                 continue
-            doc_id, ext = m[0], m[1]
+            doc_id = m[0]
             info_path = get_info_file_path(self.storage_dir, doc_id)
             if not os.path.exists(info_path):
                 zombies.append({

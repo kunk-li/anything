@@ -65,7 +65,6 @@ def aggregate_results(results: List[Dict]) -> str:
     summary_parts = []
     for r in results:
         tool_name = r.get("tool", "unknown")
-        output = r.get("output", {})
         summary_parts.append(f"[{tool_name}] 执行完成")
 
     return "\n".join(summary_parts)

@@ -211,7 +211,7 @@ class LLMService(BaseLLMService):
             mcfg = self._model_configs.get(name) or getattr(self.adapters[name], "model_cfg", {}) or {}
             rt = str(mcfg.get("request_type", "")).upper()
         if rt not in {"VECTOR", "CHAT", "MULTIMODAL"}:
-            raise ValueError(f"无法推导 request_type, 请显式传参")
+            raise ValueError("无法推导 request_type, 请显式传参")
         self._default_overrides[rt] = name
         self.logger.info(f"[llm_adapter] set default {rt}={name}", logger_name="llm_adapter")
         return {"request_type": rt, "default_model": name}
@@ -398,7 +398,7 @@ class LLMService(BaseLLMService):
             adapter = self._get_adapter(model_name)
             if not adapter:
                 if health:
-                    health.record_failure(model_name, f"adapter not found")
+                    health.record_failure(model_name, "adapter not found")
                 tried.append(model_name)
                 continue
 

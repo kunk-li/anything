@@ -142,7 +142,7 @@ class PromptBuilderMixin:
             + f"\n{skills_block}当前任务: {task}\n"
             + f"\n历史:\n{history_text}\n"
             + f"\n这是第 {iteration}/{max_iterations} 轮。请输出下一步思考与动作。\n"
-            + f"如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
+            + "如果已经可以给出最终答案,直接输出 final_answer 而不要再调工具。\n"
         )
 
     @staticmethod

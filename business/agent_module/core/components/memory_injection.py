@@ -138,7 +138,7 @@ class MemoryMixin:
                 "2. 若歧义较大 (多种合理理解 / 关键信息缺失, 画像也定不了) → needs_clarify=true, "
                 "并给出一个简短、具体、单一焦点的澄清问题(中文), 帮用户把需求说清。\n"
                 "3. clarify_question 是反问用户的问题, 不是你对问题的回答, 也不要替用户臆测答案。\n"
-                f"\n[用户画像]\n" + "\n".join(profile_lines) +
+                "\n[用户画像]\n" + "\n".join(profile_lines) +
                 f"\n\n[用户的问题]\n{task}\n"
                 '\n只输出 JSON(不要解释): '
                 '{"needs_clarify": true/false, "clarify_question": "一句话澄清问题(needs_clarify=false 时留空)", '
@@ -152,7 +152,7 @@ class MemoryMixin:
                 "2. 若含糊且画像能补 → 基于画像补全缺省(语言/技术栈/格式/范围/默认值), "
                 "严格保留用户原意, 不得臆造用户没表达的新需求。\n"
                 "3. refined 应是 '用户本来就想问的更精确版本', 而不是你对问题的回答。\n"
-                f"\n[用户画像]\n" + "\n".join(profile_lines) +
+                "\n[用户画像]\n" + "\n".join(profile_lines) +
                 f"\n\n[用户的问题]\n{task}\n"
                 '\n只输出 JSON(不要解释): '
                 '{"needs_refine": true/false, "refined": "改写后的问题(needs_refine=false 时留空)", '

@@ -199,8 +199,8 @@ class TestUserProfile(unittest.TestCase):
 
     def test_pinned_and_access_ranked_first(self):
         m = _mem()
-        a = m.add_fact(Fact.make(content="低频偏好", content_type="preference", digest="低频"))
-        b = m.add_fact(Fact.make(content="高频偏好", content_type="preference", digest="高频", pinned=True))
+        m.add_fact(Fact.make(content="低频偏好", content_type="preference", digest="低频"))
+        m.add_fact(Fact.make(content="高频偏好", content_type="preference", digest="高频", pinned=True))
         p = m.get_user_profile(per_dim=1)
         self.assertEqual(p["preference"], ["高频"])   # pinned 排第一
 

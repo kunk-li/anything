@@ -645,7 +645,7 @@ class LongTermMemoryImpl(BaseLongTermMemory):
 
         try:
             raw = self._llm_client.generate(prompt)
-        except Exception as e:
+        except Exception:
             # LLM 失败不阻断主链路, 返回空 list
             return []
 

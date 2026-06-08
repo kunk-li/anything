@@ -175,7 +175,7 @@ class TestReActExecute(unittest.TestCase):
         agent, llm = self._make_agent([
             '{"thought":"t","final_answer":"x"}'
         ])
-        result = agent.execute({
+        agent.execute({
             "task": "...",
             "trace_id": "t1",
             "session_id": "s1",

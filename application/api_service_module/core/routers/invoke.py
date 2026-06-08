@@ -389,7 +389,6 @@ class InvokeRoutesMixin:
                     data = result.get("data") or {}
                     answer = str(data.get("answer") or "")
                     if answer:
-                        target_total_ms = 6000
                         base_interval_ms = 30
                         total_len = len(answer)
                         target_chunks = max(20, min(200, total_len // 3))

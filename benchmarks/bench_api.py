@@ -160,7 +160,7 @@ def print_report(report: Dict[str, Any]) -> None:
         print(f"  errors_by_code: {report['errors_by_code']}")
     print(f"  wall_time:   {report['wall_time_seconds']}s")
     print(f"  qps:         {report['qps']}")
-    print(f"  latency (s):")
+    print("  latency (s):")
     lat = report["latency_seconds"]
     print(f"    min  = {lat['min']:.3f}")
     print(f"    p50  = {lat['p50']:.3f}")

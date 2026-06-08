@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 try:
     from config_module.core.impl import ConfigManager
-except Exception as e:  # pragma: no cover
+except Exception:  # pragma: no cover
     ConfigManager = None  # type: ignore
 
 
