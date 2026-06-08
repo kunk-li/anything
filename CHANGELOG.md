@@ -7,8 +7,21 @@
 
 ## Unreleased (2026-06-08)
 
-> 主题: 接 backlog 往下做 (用户定优先级: react解析容错 → 方向1调度 → 外部工具余量 → 方向4定时维护)
-> 4 件 + 用户新需求 software_info 工具。commit `4ac29e7`..`95f4fa1`。agent 全套 431 passed; ABC ✓ (19 对)。
+> 主题: 接 backlog 4 件 (react解析/方向1调度/外部工具/方向4维护) + software_info 工具 +
+> 优化轮 ①②③ (测试基线/低风险小修/拆 god class)。commit `4ac29e7`..`3b59802`。
+> 终态: 全量 **1161 passed, 4 skipped, 0 fail** (一键可跑); ABC ✓ (19 对); impl.py 2051→1505。
+
+### 优化轮 (用户问"可优化部分在哪" → 定优先级 ①②③ 全做)
+- **① 修测试基线** (`b7b9ce0`): 全量 pytest 此前被 2 个 collection error 中断 (无一键全绿 gate)。
+  补 `OrchestratorException` 定义 (per-domain 漏的) + document_parser 测试改 `pytest.importorskip`
+  (重型可选库缺则 skip); 顺带修被遮住的 7 个 orchestrator 陈旧测试 + 补 tool_functions 测试。
+  基线: **1159 passed, 4 skipped, 0 fail/0 collection error** (~60s)。
+- **② 低风险小修** (`1256655`): app 退出统一收尾钩子 (停 scheduler + 关 MCP 子进程, 闭环本周 close/stop
+  能力) + eval台 `_REFUSE_PAT` 收紧 "无法访问"(误判"无法访问数据库") + start_dev.bat 强制 UTF-8。
+- **③ 拆 impl.py god class** (`3d32ecd` ③a + `3b59802` ③b, 纯搬移零行为变更): 2051 行 → **1505 行 (-27%)**。
+  方向4 自维护 9 方法 → `SelfMaintenanceMixin`; 长期记忆/画像 5 方法 → `MemoryMixin` (延续 ReAct/
+  Streaming 既有 mixin 范式)。每步全量 1161 passed + ABC 全绿护栏。剩余内聚组 (验证/状态历史/任务解析/
+  结果聚合) 留后续同范式抽。
 
 ### 新工具 (用户需求: "查安装软件的版本信息和使用说明")
 - **software_info** (`95f4fa1`): 只读 agent 工具 (照 system_info 范式, 不进审批)。`action=lookup`

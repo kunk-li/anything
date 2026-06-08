@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-08 · 最新 commit: `af680ec` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
+> 最后更新: 2026-06-08 · 最新 commit: `3b59802` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
 
 ---
 
@@ -18,7 +18,12 @@
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 建议性自主全档 done: 行为自反思/记忆健康/代码文档/定时提议通知/预授权自动(默认空); 终极目标持续演进 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
-0新. **最新会话 (2026-06-08): 接 backlog 优先级往下做 4 件 (全在 origin/main, `4ac29e7`..`af680ec`)** — 用户定优先级 react解析→方向1调度→外部工具→方向4。
+0新优. **同会话续 (2026-06-08): 用户问"可优化部分在哪" → 定优先级 ①②③ 全做 (`b7b9ce0`..`3b59802`)** —
+   ① **修测试基线** (`b7b9ce0`): 全量 pytest 此前被 2 个 collection error 中断(无一键全绿 gate)。补 `OrchestratorException` 定义(per-domain 漏)+ document_parser 测试改 `pytest.importorskip`(重型可选库缺则 skip); 顺修被遮的 7 个 orchestrator 陈旧测试 + 补 tool_functions 测试。**基线 1159 passed/4 skipped/0 fail (~60s)**, 见 §7。
+   ② **低风险小修** (`1256655`): app 退出收尾钩子(停 scheduler + 关 MCP 子进程, 闭环本周 close/stop)+ eval台 `_REFUSE_PAT` 收紧"无法访问"(误判"无法访问数据库")+ start_dev.bat 强制 UTF-8(`PYTHONUTF8`)。
+   ③ **拆 impl.py god class** (`3d32ecd` ③a + `3b59802` ③b, 纯搬移零行为变更): **2051→1505 行(-27%)**。方向4 自维护 9 方法→`SelfMaintenanceMixin`(`components/self_maintenance.py`); 长期记忆/画像 5 方法→`MemoryMixin`(`components/memory_injection.py`)。延续 ReAct/Streaming mixin 范式, SimpleAgent 多继承; `_resolve_project_root` 留 impl(`__file__` 定位, 位置相关)。每步全量 1161 passed + ABC 护栏。**剩余内聚组(留后续同范式抽): 方向3 验证(`_post_verify`)/状态历史/任务解析/结果聚合**。
+   全程: 全量 **1161 passed, 4 skipped, 0 fail**(一键可跑); ABC 19 全绿
+0新. **会话 (2026-06-08): 接 backlog 优先级往下做 4 件 (全在 origin/main, `4ac29e7`..`af680ec`)** — 用户定优先级 react解析→方向1调度→外部工具→方向4。
    ① **react 解析器容错** (`4ac29e7`, 治调试类延迟): 新 `_salvage_final_answer` 从畸形 react JSON (未转义换行/trailing comma/截断) 抠出 `final_answer`, 抠到即免"洗净重生成"(-20s); 非流式同步受益。eval 台 调试-方法论 ~62→30s, 7/7=100%。顺修 eval 台 `_REFUSE_PAT` 裸"无法直接"误判排查建议为拒绝。test +7
    ② **UP-4 ask 模式** (`da666f9`, 方向1): query refinement 加 ask 模式 — 歧义大、画像也定不了时反问澄清而非静默改写; execute 见 `action=clarify` 早退返 `clarification_needed`。`agent.query_refine_mode` 默认 auto (原行为不变)。仅非流式 execute。test +7
    ③ **TaskScheduler 接线 + 自维护定时** (`a7902d2`, 方向1+方向4 共同缺口): scheduler 类/路由/测早齐但从未在 app 实例化 → `_build_scheduler` 按配置组装+启动+注入 ApiService (**默认关**)。配 `agent.maintenance_schedule` 即注册 maintenance_scan 定时任务 (仅 `enable_self_reflection=true` 才注册=防呆; scope=["memory"]=方向1 / 省略=方向4 三域)。补 `build_maintenance_task` + `cancel_task` 别名。亲验经真 handler 跑通。test +7
@@ -114,7 +119,8 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 外部工具连接 (HTTP 连接器 + MCP stdio/HTTP + OpenAPI 生成) | `business/agent_module/tools/external/` (base/http_provider/mcp_provider/openapi/__init__) + `run/factories/business_layer.py` 接线 |
 | 计算机操作 (computer_use 工具, 危险/默认审批) | `business/agent_module/tools/tools_impl/computer_use.py` (pyautogui lazy, backend 可注入) |
 | 只读本机工具 (不审批): 系统状态 / 软件版本用法 | `tools_impl/system_info.py` (CPU/内存/磁盘…) · `tools_impl/software_info.py` (lookup 版本+用法 / list 已装清单; backend 可注入) |
-| Agent 核心(验证接入 `_post_verify` / 画像注入 `_inject_user_profile` / 超时 enforce) | `business/agent_module/core/impl.py` |
+| Agent 核心(execute 主循环 / `_post_verify` / parse_task / 超时 enforce) | `business/agent_module/core/impl.py` (1505 行; 优化③ 已抽 mixin) |
+| Agent mixin (SimpleAgent 多继承) | `core/components/`: react_engine / tool_executor / streaming / prompt_builder / **self_maintenance**(方向4) / **memory_injection**(记忆画像; `_refine_query`/`_inject_*`/`_extract_and_store_memory`) |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
 | git hook 安装 | `scripts/install-git-hooks.sh` |
