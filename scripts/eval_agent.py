@@ -50,6 +50,8 @@ TASKS = [
      "assert": {"no_error": True, "min_len": 80, "not_refused": True}},
     {"name": "问答-直接答", "task": "用一句话解释什么是 RAG",
      "assert": {"no_error": True, "nonempty": True}},
+    {"name": "软件版本", "task": "我电脑上装的 git 是什么版本",
+     "assert": {"no_error": True, "not_refused": True, "contains": ["版本", "version", "git"]}},
 ]
 
 # 注: "无法直接" 须带拒绝向宾语 (访问/操作/帮/为你/替你), 否则会误判正常排查建议里的

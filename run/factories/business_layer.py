@@ -210,6 +210,13 @@ def build_business_layer(
     )
     tool_registry.register("system_info", _make_system_info(), description=_SI_DESC)
 
+    # 已安装软件版本/用法只读查 (software_info): 给软件名查版本+自带 --help, 或列已装清单 —
+    # 让 agent 直接答"我装的 X 什么版本/怎么用"。只跑 PATH 已存在程序+固定参数, 只读 → 不进审批白名单。
+    from agent_module.tools.tools_impl.software_info import (
+        make_software_info_tool as _make_software_info, SOFTWARE_INFO_DESCRIPTION as _SW_DESC,
+    )
+    tool_registry.register("software_info", _make_software_info(), description=_SW_DESC)
+
     # 技能加载 (use_skill, 集成 superpowers 机制): 按名把技能完整指南拉进上下文。只读 → 不进审批白名单。
     from agent_module.tools.tools_impl.use_skill import (
         make_use_skill_tool as _make_use_skill, USE_SKILL_DESCRIPTION as _US_DESC,
