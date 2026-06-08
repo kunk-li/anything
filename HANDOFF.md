@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-08 · 最新 commit: `3502f5c` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
+> 最后更新: 2026-06-08 · 最新 commit: `7dcc2e5` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
 
 ---
 
@@ -18,6 +18,8 @@
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 建议性自主全档 done: 行为自反思/记忆健康/代码文档/定时提议通知/预授权自动(默认空); 终极目标持续演进 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
+0新分析. **同会话再续 (2026-06-08): 用户指出"缺失分析使用人的流程" → 补 analyze_user 闭环 (`d972e19`+`7dcc2e5`)** —
+   现状只有被动碎片 (每轮抽 fact + get_user_profile 分桶聚合), 缺主动分析。补对称于 self_reflect(分析 agent 自己)的"分析使用者": `components/user_analysis.py`(aggregate_user_signals + UserAnalysisInspector LLM 提炼 工作流/习惯/反复需求/领域/薄弱点) + SelfMaintenanceMixin `analyze_user`(insights 只读 + proposals 画像增强 dry-run)/`apply_user_insights`(审批反哺画像)/`_maybe_auto_user_analysis`(每N轮后台)。**三触发**: 按需 / 定时(execute `extra_params.user_analysis` 钩子, 镜像 maintenance_scan) / 每N轮(`user_analysis_every_n`)。端点 `/agent/user-analysis`(+/apply) + 前端记忆 tab "用户洞察"区(按需分析+✓反哺)。config `enable_user_analysis`/`user_analysis_every_n` **默认关**。test +16; 全量 1247 passed。
 0新计划. **同会话再续 (2026-06-08): 用户采纳 8 条建设性意见 → 制定执行计划按序全做 (`b1aa738`..`3502f5c`)** — 全量 **1235 passed**/ABC 全绿/新能力全默认关。
    ① **主 CI 切全量 pytest** (`b1aa738`): 硬编码 9 模块 → 全量 pytest (~1235); 修 document_parser 3 陈旧测试。"抽样"→"全量门禁"。
    ② **配置中枢 schema** (`f525bfd`): `agent_module/config/schema.py` — 26+ flag 集中声明 + `dump_agent_config`(喂配置界面) + `validate_agent_config`(启动校验, 接 business_layer)。
@@ -135,6 +137,7 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 自更新影子模式 (⑧, 默认关) | `core/self_update.py::ShadowSelfUpdate` (隔离 worktree 跑全量测试当安全闸, 绝不自动应用) + agent `verify_self_update` |
 | VCR 流式回放 (⑤) | `scripts/record_cassette.py`(录) + `agent_module/tests/cassettes/*.json` + `tests/test_stream_cassettes.py`(CI 回放) |
 | 可见性面板 (⑥) | 后端 `/memory/profile` + `/agent/maintenance/*`; 前端 `modules/memory-panel.js`(画像+维护) · `modules/config-panel.js`(配置 tab⑦) |
+| 用户分析流程 (analyze_user, 默认关) | `core/components/user_analysis.py` + `self_maintenance.py`(analyze_user/apply_user_insights/_maybe_auto) + `/agent/user-analysis(/apply)` + memory-panel"用户洞察"区 |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
 | git hook 安装 | `scripts/install-git-hooks.sh` |

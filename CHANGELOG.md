@@ -5,6 +5,19 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-08 · 用户分析流程 analyze_user)
+
+> 用户指出"缺失分析使用人的流程": 现状只有被动碎片 (每轮抽 fact + 分桶聚合画像), 无主动分析。
+> 补一个对称于 self_reflect(分析 agent 自己)的"分析使用者"闭环。commit `d972e19`(后端)+`7dcc2e5`(前端)。
+
+- **用户分析流程** (`d972e19`/`7dcc2e5`): `components/user_analysis.py` (aggregate_user_signals +
+  UserAnalysisInspector: LLM 提炼 工作流/习惯/反复需求/领域/薄弱点 → insights 只读 + proposals 画像增强,
+  fail-open) + SelfMaintenanceMixin `analyze_user`/`apply_user_insights`(审批反哺画像)/`_maybe_auto_
+  user_analysis`(每N轮后台 advisory)。**三触发**: 按需 / 定时(execute `user_analysis` 钩子, 可接
+  TaskScheduler) / 每 N 轮(`user_analysis_every_n`)。端点 GET `/agent/user-analysis` + POST `/apply`;
+  前端记忆 tab "用户洞察"区 (按需"分析使用者"按钮 + 洞察 + 提议✓反哺)。config `enable_user_analysis`/
+  `user_analysis_every_n` 默认关。test +16; 全量 1247 passed。
+
 ## Unreleased (2026-06-08 · 建设性意见执行计划 ①–⑧)
 
 > 用户采纳 8 条建设性意见 (+ 统一配置界面增强), 制定执行计划按序全做。commit `b1aa738`..`3502f5c`。
