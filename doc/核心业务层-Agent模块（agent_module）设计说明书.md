@@ -48,6 +48,7 @@
 | **自主维护·代码文档** (方向4扩域, advisory) | `self_reflection.py:scan_code_doc_health` + `impl.py:propose_code_doc_maintenance()` | 同上; **只读无 apply, 绝不自动改代码/文档** |
 | **自主维护·定时提议+通知** (方向4) | `impl.py:run_maintenance_scan()` + `execute` 的 `maintenance_scan` 钩子(可 TaskScheduler 触发) + `_notify_maintenance` 审计 | 同上 |
 | **更高自主档·预授权自动** (方向4) | `impl.py:auto_approve_maintenance` + `run_maintenance_scan(auto_apply)` | `agent.auto_approve_maintenance` 名单**默认空**=零自动; 仅 `{run_prune,run_degrade}` 可自动 |
+| **raw 结构化输出→自然语言合成** 工具直出 dict/JSON 时兜底转散文 | `impl.py:_looks_like_raw_json` + `_synthesize_natural_answer` (在 `aggregate_results` 末尾) | always-on; 仅检测命中且有 LLM 通道时触发, 合成失败/无通道保留 raw (fail-open)。详见 §6.8.1 |
 
 补充错误码(正文第 13 章错误码表未列): `TOOL_APPROVAL_REQUIRED`、`PLAN_PENDING`、`STREAM_INTERRUPTED`;
 补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`; 审计事件 `maintenance_scan`。
@@ -537,6 +538,23 @@ class ToolRegistry:
   ]
 }
 ```
+
+## 6.8.1 raw 结构化输出 → 自然语言合成（answer synthesis）
+
+部分工具（如 `calculator` / `datetime` / 结构化分析类）直接返回 dict/JSON。若该原始结构落到
+`final_answer`，会把 `{...}` 直喷给用户而非可读散文。聚合末尾因此加一道兜底：
+
+- **检测** `_looks_like_raw_json(s)`：`s` 去空白后以 `{` 或 `[` 开头，且能被解析为字面量。
+  两种形态都要识别——
+  - 严格 JSON（双引号）：`json.loads` 命中；
+  - **Python dict/list repr（单引号）**：`str(dict)` 的产物，`json.loads` 解析不了，用
+    `ast.literal_eval` 兜底（只解析字面量、不执行代码，安全）。
+- **合成** `_synthesize_natural_answer(task, raw, trace_id)`：检测命中时用一次 LLM（复用
+  `_resolve_llm_planner` 的通道）把 raw 转成回答用户问题的中文散文。
+- **fail-open**：无 LLM 通道或合成异常 → 返回空串，调用方保留原始 `final_answer`，绝不因合成失败丢答案。
+
+> 回归：单引号 Python repr 漏判曾导致字典串直喷用户，已修（加 `ast.literal_eval` 兜底）并由
+> `tests/test_answer_synthesis.py`（10 例）锁定。
 
 ## 6.9 状态存储规范
 

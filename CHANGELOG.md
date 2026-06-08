@@ -5,6 +5,24 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-08 · 代码质量收尾 + lint gate)
+
+> 用户"优化全部代码"→ 不盲扫, 只留真改 + 立 lint 配置; 再清 cosmetic; 接 CI lint 闸;
+> 修 dict-repr 答案 bug。commit `a85af26`..`9e26718`。终态 全量 **1261 passed**, ruff 全清。
+
+- **ruff 配置 + 2 真 bug** (`a85af26`): 立 `ruff.toml` (select F; ignore F401/F403/F405/F821,
+  注释警告**切勿盲跑 --fix**——多处 impl/__init__ 有意 re-export "看似未用"符号 + 单测 monkeypatch
+  锚点); 修 F601 (document_store 重复 dict key) + F811 (test_multiprocess 死 `tearDown` 遮真
+  `tearDown` 致 Windows 文件锁未释放)。
+- **清 17 项 cosmetic** (`7c70c4e`): F841 死变量 / F541 无占位 f-string, 逐个核对 RHS 副作用
+  (纯表达式删行; 测试里 add_fact/execute 等副作用保留调用、只删绑定)。ruff F841/F541 清零。
+- **ruff 接入 CI** (`2da9751`): ci.yml 加独立 `lint` job (与 test 并行), `ruff check .` 失败即红,
+  锁住清理成果防回潮。
+- **fix(agent) dict-repr 答案漏合成** (`9e26718`): `_looks_like_raw_json` 此前只认严格 JSON
+  (双引号), 单引号 Python dict repr (`str(dict)` 产物) 漏判 → 原始字典串直喷用户。加
+  `ast.literal_eval` 兜底 (只解析字面量, 不执行代码, 安全) → 命中则走 LLM 合成自然语言。
+  新增 `tests/test_answer_synthesis.py` (10 例) 锁定。详见 Agent 设计说明书 §6.8.1。
+
 ## Unreleased (2026-06-08 · 用户分析流程 analyze_user)
 
 > 用户指出"缺失分析使用人的流程": 现状只有被动碎片 (每轮抽 fact + 分桶聚合画像), 无主动分析。

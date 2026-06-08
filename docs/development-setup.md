@@ -112,6 +112,21 @@ export PYTHONPATH="$ANYTHING_ROOT/basic_support:$ANYTHING_ROOT/data_layer:$ANYTH
 
 | 步骤 | 严格度 |
 |---|---|
-| 9 模块单测 | 阻塞 |
+| Lint (ruff, 独立 job) | 阻塞 |
+| 全量 pytest（取代旧“9 模块单测”） | 阻塞 |
 | ABC alignment check | 阻塞 |
 | Smoke test 端到端 | 阻塞(Run #5 起) |
+
+## 11. 代码风格 / Lint（ruff）
+
+仓库用 [ruff](https://docs.astral.sh/ruff/) 做静态检查（pyflakes F 规则），配置见根目录 `ruff.toml`。
+
+```bash
+# 本地全仓检查（与 CI lint job 同口径）
+python -m ruff check .
+```
+
+- CI 有**独立 lint job**（与单测并行），`ruff check .` 失败即 CI 红。
+- **切勿对本仓盲跑 `ruff check --fix`**：多处 `impl.py` / `__init__.py` 有意 re-export
+  “看似未用”的符号（back-compat + 被测试 import），`--fix` 会按 F401 把它们删掉而破坏导入；
+  个别 import 带 `# 保留` 注释专供单测 monkeypatch。原因详见 `ruff.toml` 顶部注释，需要修时逐条人工核对。
