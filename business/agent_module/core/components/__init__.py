@@ -24,6 +24,7 @@ from .streaming import StreamingMixin
 from .prompt_builder import PromptBuilderMixin
 from .self_maintenance import SelfMaintenanceMixin
 from .memory_injection import MemoryMixin
+from .task_preprocess import TaskPreprocessMixin, TaskPreContext
 
 __all__ = [
     "ReActEngineMixin",
@@ -32,4 +33,6 @@ __all__ = [
     "PromptBuilderMixin",
     "SelfMaintenanceMixin",
     "MemoryMixin",
+    "TaskPreprocessMixin",
+    "TaskPreContext",
 ]

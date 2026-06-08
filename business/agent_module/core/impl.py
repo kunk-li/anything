@@ -24,7 +24,9 @@ from .components import (
     PromptBuilderMixin,
     SelfMaintenanceMixin,
     MemoryMixin,
+    TaskPreprocessMixin,
 )
+from .components.task_preprocess import TaskPreContext
 from .components.verifier import collect_specs, make_registry, run_verifiers
 from .model_routing import begin_routing, end_routing
 
@@ -40,6 +42,7 @@ class SimpleAgent(
     PromptBuilderMixin,
     SelfMaintenanceMixin,
     MemoryMixin,
+    TaskPreprocessMixin,
 ):
     """标准 Agent 实现: 任务解析 -> 工具调用 -> 状态记录 -> 结果聚合.
 
@@ -345,83 +348,22 @@ class SimpleAgent(
         execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
         strategy = extra_params.get("execution_strategy", self.execution_strategy)
 
-        # Task FFF (#92): 长期记忆 — 任务执行前注入相关 fact 作为前置上下文
+        # 任务前处理 (执行计划④): refine → 记忆注入 → 画像注入 → 历史 → 纠正反馈, 抽成可组合
+        # 步骤流水线 (components/task_preprocess.py)。某步早退 (UP-4 ask 澄清) → 直接返回其响应。
+        # 产出: ctx.task(已增强, 规划输入) / refine_meta / memory_hits_used; original_task 保持原话。
         original_task = task
         memory_tenant = self._memory_tenant(request)
-        memory_hits_used: List[Dict[str, Any]] = []
-
-        # UP-4 (方向1 阶段2): query refinement — 用户问得含糊时, 先基于画像把问题
-        # 补全/澄清, 再走下面的记忆/画像/历史注入与规划。只改 task(规划输入),
-        # original_task 保持用户原话(history 展示 / 记忆抽取用)。默认关, 纠正递归跳过。
-        refine_meta: Optional[Dict[str, Any]] = None
-        _refine_on = extra_params.get("enable_query_refine")
-        if _refine_on is None:
-            _refine_on = self.enable_query_refine
-        if (task and _refine_on and self.memory_enabled
-                and self.long_term_memory is not None
-                and not extra_params.get("_skip_history_prefix")):
-            try:
-                _refine_mode = str(extra_params.get("query_refine_mode")
-                                   or self.query_refine_mode).strip().lower()
-                _refined, refine_meta = self._refine_query(
-                    task, memory_tenant, trace_id, mode=_refine_mode)
-                if refine_meta and refine_meta.get("action") == "clarify":
-                    # UP-4 ask 模式: 歧义大 → 反问澄清, 不执行任务, 早退把澄清问题作为回答返回。
-                    # 用户的后续回答会作为新一轮请求进来 (本轮不落历史, 对齐 maintenance_scan 早退)。
-                    self.logger.info(f"[refine] ask 模式反问澄清 (不执行任务): trace_id={trace_id}")
-                    return {
-                        "code": "SUCCESS", "message": "clarification_needed",
-                        "data": {
-                            "answer": refine_meta["question"],
-                            "clarification_needed": True,
-                            "session_id": session_id, "trace_id": trace_id,
-                            "execution_mode": execution_mode,
-                        },
-                        "trace_id": trace_id, "retryable": False,
-                        "details": {"query_refinement": refine_meta},
-                        "cost_time": round(time.time() - start_time, 3),
-                    }
-                if refine_meta:
-                    task = _refined
-            except Exception as _rq_err:
-                self.logger.warning(
-                    f"[refine] query refinement 失败 (用原问题继续): "
-                    f"trace_id={trace_id} err={_rq_err}"
-                )
-
-        if task and self.memory_enabled and self.long_term_memory is not None:
-            try:
-                augmented_task, memory_hits_used = self._inject_long_term_memory(
-                    task=task, tenant_id=memory_tenant, trace_id=trace_id,
-                )
-                task = augmented_task
-            except Exception as _mem_err:
-                self.logger.warning(
-                    f"[memory] inject 失败 (continue without memory): "
-                    f"trace_id={trace_id} err={_mem_err}"
-                )
-
-        # UP-3 (方向1): always-on 注入用户画像 (不依赖 query, "这个人怎么做事")。
-        # 纠正递归时跳过 (画像已在原 task, 避免叠加), 复用 _skip_history_prefix flag。
-        if (task and self.memory_enabled and self.long_term_memory is not None
-                and not extra_params.get("_skip_history_prefix")):
-            try:
-                task = self._inject_user_profile(task, memory_tenant)
-            except Exception as _prof_err:
-                self.logger.warning(f"[profile] inject 失败: trace_id={trace_id} err={_prof_err}")
-
-        # ZZ-5: 多轮对话上下文 — 给 ReAct / single_shot 等非流式路径补历史 (默认流式已有).
-        # 放在 long_term_memory 注入之后, 让 [对话历史] 块位于 (memory + 当前任务) 之上.
-        # 方向3: 自我纠正递归时跳过 history 注入 (上下文已在原 task, 避免重复叠加)。
-        if task and not extra_params.get("_skip_history_prefix"):
-            _hist_prefix = self._history_prefix(session_id)
-            if _hist_prefix:
-                task = _hist_prefix + task
-
-        # 方向3: 若本次是自我纠正递归, 把上轮验证失败的 feedback 拼进 task 引导修正
-        _corr_fb = extra_params.get("_correction_feedback")
-        if _corr_fb:
-            task = f"{task}\n\n[上一轮验证未通过, 请针对性修正以下问题]\n{_corr_fb}"
+        _pre_ctx = TaskPreContext(
+            task=task, original_task=original_task, tenant_id=memory_tenant,
+            session_id=session_id, trace_id=trace_id, extra_params=extra_params,
+            execution_mode=execution_mode, start_time=start_time,
+        )
+        _early = self._preprocess_task(_pre_ctx)
+        if _early is not None:
+            return _early
+        task = _pre_ctx.task
+        refine_meta = _pre_ctx.refine_meta
+        memory_hits_used = _pre_ctx.memory_hits
 
         # 模型分级路由 (执行计划③): 按 *原始* 任务复杂度路由模型 + 设 token 预算 (写 ContextVar,
         # 供 LLMService.generate 读)。默认关; 用 original_task (而非已注入记忆/画像/历史的 task) 判复杂度。
