@@ -296,6 +296,14 @@ def build_business_layer(
         llm_client=llm_client,               # 真流式: Agent run_stream 直连 chat_stream
     )
 
+    # 配置中枢 (执行计划②): 启动期校验 config.yaml 的 agent.* 未知 key → WARN (防拼写错/废弃漂移)。
+    # fail-safe: 校验本身异常不阻断启动。
+    try:
+        from agent_module.config.schema import validate_agent_config
+        validate_agent_config(deps.config, deps.logger)
+    except Exception as _cfg_err:
+        deps.logger.warning(f"[config] agent 配置校验跳过 (异常): {_cfg_err}")
+
     # 外部工具连接 (RFC Stage1): 从 config agent.external_tools 注册 HTTP 外部工具,
     # 默认并入 agent 审批白名单 (human-in-loop)。无配置/失败均不阻断启动 (fail-safe)。
     _ext_providers: list = []   # 生命周期管理: 留引用, 经 result 透出供退出时 close (MCP 子进程)
