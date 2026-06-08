@@ -5,6 +5,48 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-08)
+
+> 主题: 接 backlog 往下做 (用户定优先级: react解析容错 → 方向1调度 → 外部工具余量 → 方向4定时维护)。
+> 本轮 4 件。commit `4ac29e7`..`af680ec`。agent 全套 413 + 广扫 648 passed; ABC ✓ (19 对)。
+
+### 治延迟 + 健壮性
+- **react 解析器容错抠 final_answer** (`4ac29e7`): qwen 长答案 react JSON 常畸形 (未转义换行 /
+  trailing comma / 截断) → `_parse_react_response` 返 None → 流式 parse-fail 兜底把"生 JSON"当答案
+  → 触发洗净重生成 (+20s)。新 `_salvage_final_answer` 从畸形 JSON 抠 final_answer (逐字符扫到未转义
+  闭合引号 / 截断到末尾 + unescape), 抠到即免重生成; 合法 JSON 但工具非法仍按原逻辑 None (最小改动);
+  非流式 `_react_execute` 同步受益。eval 台 调试-方法论 ~62→30s, 7/7=100%。顺修 eval 台 `_REFUSE_PAT`
+  裸"无法直接"误判排查建议"无法直接复现"为拒绝 → 收紧为 `无法直接(访问|操作|帮|为你|替你)`。test +7。
+
+### 方向1 (用户模型) — UP-4 ask 模式
+- **UP-4 ask 模式** (`da666f9`): query refinement 原只有 auto (歧义时静默改写问题)。加 ask: 歧义大、
+  画像也定不了时**反问澄清问题**, 不臆测、不执行任务。`_refine_query` 加 `mode` 参 (默认 auto 向后兼容);
+  execute 见 `action=clarify` 早退返 `code=SUCCESS/message=clarification_needed` + `data.answer=澄清问题`
+  + `details.query_refinement`。config `agent.query_refine_mode` 默认 auto; 沿用既有 gate + 安全阀 +
+  fail-open; 仅非流式 execute (与 auto 同域)。test +7。
+
+### 方向1 + 方向4 (调度 / 自主维护) — 接线 TaskScheduler
+- **TaskScheduler 接线 + 自维护定时注册** (`a7902d2`): TaskScheduler 类/路由/单测早齐, 但从未在运行
+  app 实例化/启动/注入 ApiService (scheduler 恒 None, /scheduler/* 全 SERVICE_UNAVAILABLE) — 这是
+  方向1"reconcile/consolidate/prune 接入调度"与方向4"maintenance_scan 注册进 TaskScheduler"共同缺口。
+  `factories/application_layer._build_scheduler`: 按配置组装任务 → 实例化+start → 注入 ApiService。
+  **默认关** (无 `scheduler.tasks` 且无 `agent.maintenance_schedule` → 返 None, 不起线程, 启动行为不变)。
+  配 `agent.maintenance_schedule` 即注册 maintenance_scan 定时任务 (body 走 agent + maintenance_scan
+  钩子 → run_maintenance_scan); **仅 enable_self_reflection=true 才注册** (防呆); scope=["memory"]=方向1
+  仅记忆域 / 省略=方向4 三域全扫; auto_apply 仍受安全天花板 (仅 run_prune/run_degrade)。补
+  `build_maintenance_task()` 纯函数 + `cancel_task()` 别名 (修 SchedulerRoutesMixin DELETE 调的名)。
+  test +7; 亲验: 经真实 handler.handle + TaskScheduler.trigger_once 跑通 maintenance_scan。
+
+### 外部工具余量
+- **OpenAPI spec_url 远程拉取** (`af680ec`): `fetch_openapi_spec()` 复用 SSRF 校验 + 禁跳转 fetch,
+  JSON 优先、退化 YAML; `agent.openapi_tools` 每项 `spec_url`(远程) / `spec`(inline) 二选一, entry 的
+  auth_* 也用于拉取。完成 openapi.py 里"留后续"TODO; fail-safe 跳过。
+- **MCP 连接生命周期管理** (`af680ec`): `ExternalToolProvider.close()` (base no-op; `McpToolProvider`
+  留已建连接引用, close 逐个释放/杀 stdio 子进程, fail-safe + 幂等); business_layer 经
+  `result["external_tool_providers"]` 透出 (不再 fire-and-forget)。
+- **MCP SSE 长连暂缓**: 现无消费方 (agent 一次性 discover 工具表、不动态刷新, list_changed 通知无人用),
+  此时建持久监听线程=造无用复杂度。RFC 记触发条件 (待"动态刷新工具表"需求出现再做)。test +12 (含 spec_url)。
+
 ## Unreleased (2026-06-05)
 
 > 主题: 研究 Hermes Agent + obra/superpowers, 落地"技能学习闭环 / 提示词缓存 / 技能机制"; 建 agent
