@@ -24,6 +24,7 @@
 
         async function refreshMemory() {
             if (!els.memoryList) return;
+            refreshVisibility();   // 执行计划⑥: 顺带刷新"画像 + 待审批维护"可见性块
             els.memoryList.innerHTML =
                 `<li class="empty-state">${t('memory.loading') || '加载中...'}</li>`;
             const tagSel = els.memoryTagFilter ? els.memoryTagFilter.value : '';
@@ -186,6 +187,89 @@
             }
         }
 
+        // ===== 执行计划⑥ 可见性: 画像 + 待审批维护提议 (插在 facts 列表上方) =====
+        function _visBox() {
+            if (!els.memoryList || !els.memoryList.parentNode) return null;
+            let box = document.getElementById('memory-vis-box');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'memory-vis-box';
+                box.className = 'memory-vis';
+                els.memoryList.parentNode.insertBefore(box, els.memoryList);
+            }
+            return box;
+        }
+
+        async function refreshVisibility() {
+            const box = _visBox();
+            if (!box) return;
+            const tenant = _tenantId();
+            let profile = {}, proposals = [], propEnabled = false;
+            try {
+                const r = await ApiClient.getProfile({ tenant_id: tenant });
+                if (r.status === 200 && r.payload?.code === 'SUCCESS') {
+                    profile = (r.payload.data || {}).profile || {};
+                }
+            } catch (e) { /* 静默, 不阻断 facts */ }
+            try {
+                const r = await ApiClient.getMaintenanceProposals({ tenant_id: tenant, scope: 'memory' });
+                if (r.status === 200 && r.payload?.code === 'SUCCESS') {
+                    propEnabled = !!(r.payload.data || {}).enabled;
+                    proposals = (r.payload.data || {}).proposals || [];
+                }
+            } catch (e) { /* 静默 */ }
+            _renderVisBox(box, profile, proposals, propEnabled);
+        }
+
+        function _renderVisBox(box, profile, proposals, propEnabled) {
+            const labels = { preference: '偏好', style: '风格', convention: '约定', domain: '领域', weakness: '需补位' };
+            const dims = Object.keys(profile || {}).filter(k => (profile[k] || []).length);
+            let html = `<div class="vis-sec"><div class="vis-title">🧠 ${t('memory.profile_title') || 'Agent 眼中的你'}</div>`;
+            if (!dims.length) {
+                html += `<div class="vis-empty">${t('memory.profile_empty') || '还没建立画像, 多聊聊'}</div>`;
+            } else {
+                for (const dim of dims) {
+                    const items = (profile[dim] || []).map(it => `<li>${escapeHtml(String(it))}</li>`).join('');
+                    html += `<div class="vis-dim"><span class="vis-dim-label">${escapeHtml(labels[dim] || dim)}</span><ul>${items}</ul></div>`;
+                }
+            }
+            html += `</div><div class="vis-sec"><div class="vis-title">🔧 ${t('memory.maint_title') || '待审批维护'}</div>`;
+            if (!propEnabled) {
+                html += `<div class="vis-empty">${t('memory.maint_off') || '自维护未开启 (config: enable_self_reflection)'}</div>`;
+            } else if (!proposals.length) {
+                html += `<div class="vis-empty">${t('memory.maint_none') || '暂无维护提议'}</div>`;
+            } else {
+                html += '<ul class="vis-props">';
+                for (const p of proposals) {
+                    html += `<li><span class="vis-prop-act">${escapeHtml(p.action_type || '?')}</span> `
+                        + `${escapeHtml(p.reason || p.problem || '')} `
+                        + `<button class="small-btn ghost vis-approve" data-pid="${escapeHtml(p.id || '')}">✓ 批准</button></li>`;
+                }
+                html += '</ul>';
+            }
+            html += '</div>';
+            box.innerHTML = html;
+            box.querySelectorAll('.vis-approve').forEach(btn => {
+                btn.addEventListener('click', () => _approveProposal(btn.dataset.pid, proposals));
+            });
+        }
+
+        async function _approveProposal(pid, proposals) {
+            const p = (proposals || []).find(x => x.id === pid);
+            if (!p) return;
+            try {
+                const { payload, status } = await ApiClient.applyMaintenance([p], [pid], { tenant_id: _tenantId() });
+                if (status === 200 && payload?.code === 'SUCCESS') {
+                    toast('success', '已执行', `应用 ${payload.data?.applied || 0} 项`);
+                    refreshMemory();   // prune 等会改 facts, 刷新列表 + 画像
+                } else {
+                    toast('error', payload?.code || status, payload?.message || '');
+                }
+            } catch (e) {
+                toast('error', '执行失败', e.message);
+            }
+        }
+
         // 把搜索 input 的 Enter 也绑成 search
         function bindEvents() {
             if (els.memoryRefreshBtn) {
@@ -207,6 +291,6 @@
             }
         }
 
-        return { refreshMemory, searchMemoryInPanel, pinFact, deleteFact, bindEvents };
+        return { refreshMemory, searchMemoryInPanel, pinFact, deleteFact, bindEvents, refreshVisibility };
     };
 })();

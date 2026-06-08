@@ -80,6 +80,35 @@ class MemoryRoutesMixin:
                     status_code=500,
                 )
 
+        # 执行计划⑥ (可见性面板): 用户画像 5 维度 — 把"Agent 眼中的你"从黑盒变可见。
+        # 注: 必须注册在 /memory/{fact_id} 之前, 否则 "profile" 会被当 fact_id 捕获。
+        @self.app.get("/memory/profile")
+        async def memory_profile(request: Request):
+            trace_id = request.state.trace_id
+            if self.long_term_memory is None:
+                return JSONResponse(
+                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=501,
+                )
+            tenant = self._memory_tenant_from_request(request)
+            try:
+                profile = self.long_term_memory.get_user_profile(tenant) or {}
+                dims = {str(k): list(v) for k, v in profile.items()}
+                total = sum(len(v) for v in dims.values())
+                return JSONResponse({
+                    "code": "SUCCESS", "message": "ok",
+                    "data": {"tenant_id": tenant, "total": total, "profile": dims},
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                })
+            except Exception as e:
+                self.logger.error(f"[memory] profile 失败 trace_id={trace_id}: {e}")
+                return JSONResponse(
+                    {"code": "MEMORY_PROFILE_FAILED", "message": str(e),
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=500,
+                )
+
         @self.app.get("/memory/{fact_id}")
         async def memory_get(fact_id: str, request: Request):
             trace_id = request.state.trace_id

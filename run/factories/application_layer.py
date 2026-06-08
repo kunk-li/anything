@@ -151,6 +151,8 @@ def build_application_layer(
         state_store = data_layer.get("state_store") if data_layer else None
         # Task FFFF (#123): 透传 tool_registry 给 /agent/tools 路由
         tool_registry = business_layer.get("tool_registry") if business_layer else None
+        # 执行计划⑥/⑦: 透传 agent 给 /agent/maintenance/* + /config/agent/* 路由
+        agent_for_routes = business_layer.get("agent") if business_layer else None
 
         # 方向1/4: 接线 TaskScheduler (默认关 — 无配置定时任务时返 None, 不起线程)。
         # 让 /scheduler/* 路由真正可用 + 自维护扫描 (reconcile/consolidate/prune / 全域) 能定时触发。
@@ -168,6 +170,7 @@ def build_application_layer(
             state_store=state_store,
             tool_registry=tool_registry,
             scheduler=scheduler,
+            agent=agent_for_routes,
         )
 
         # 优化②: app 退出统一收尾 — 停调度线程 + 关外部工具连接 (MCP 子进程)。daemon 线程/子进程

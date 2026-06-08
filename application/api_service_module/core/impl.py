@@ -77,6 +77,7 @@ class ApiService(
         scheduler=None,            # Task PPP (#102): /scheduler/* 路由用 (II #69 TaskScheduler)
         state_store=None,          # Task SSS (#105): /sessions/* 路由用
         tool_registry=None,        # Task FFFF (#123): /agent/tools 路由用
+        agent=None,                # 执行计划⑥/⑦: /agent/maintenance/* + /config/agent/* 路由用
     ):
         """
         Args:
@@ -106,6 +107,9 @@ class ApiService(
         self.state_store = state_store
         # Task FFFF (#123): /agent/tools 路由用. 注入 tool_registry 让前端能列工具.
         self.tool_registry = tool_registry
+        # 执行计划⑥/⑦: 注入 agent 实例供 /agent/maintenance/* (维护提议/审批) 与
+        # /config/agent/* (配置 dump/set) 路由用. None 时这些路由返 SERVICE_UNAVAILABLE.
+        self.agent = agent
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils

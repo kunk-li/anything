@@ -248,6 +248,31 @@ const ApiClient = (() => {
         );
     }
 
+    // ============== 执行计划⑥ — 可见性面板 APIs ==============
+    /** GET /memory/profile — 用户画像 5 维度 */
+    async function getProfile(opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('GET', `/memory/profile${qs ? '?' + qs : ''}`);
+    }
+    /** GET /agent/maintenance/proposals — 待审批自维护提议 (?scope) */
+    async function getMaintenanceProposals(opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        if (opts.scope) params.set('scope', opts.scope);
+        const qs = params.toString();
+        return _doFetch('GET', `/agent/maintenance/proposals${qs ? '?' + qs : ''}`);
+    }
+    /** POST /agent/maintenance/apply — 审批执行选中的提议 */
+    async function applyMaintenance(proposals, approvedIds, opts = {}) {
+        const params = new URLSearchParams();
+        if (opts.tenant_id) params.set('tenant_id', opts.tenant_id);
+        const qs = params.toString();
+        return _doFetch('POST', `/agent/maintenance/apply${qs ? '?' + qs : ''}`,
+            { proposals: proposals || [], approved_ids: approvedIds || [] });
+    }
+
     // ============== Task PPP (#102) — Scheduler APIs ==============
     async function listSchedulerTasks() {
         return _doFetch('GET', '/scheduler/list');
@@ -456,6 +481,9 @@ const ApiClient = (() => {
         getSettings,
         // Task GGG (#93) — Long-term Memory
         listMemory,
+        getProfile,
+        getMaintenanceProposals,
+        applyMaintenance,
         getMemoryFact,
         deleteMemoryFact,
         pinMemoryFact,

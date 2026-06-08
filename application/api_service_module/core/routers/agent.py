@@ -128,3 +128,62 @@ class AgentRoutesMixin:
                      "retryable": False, "details": None},
                     status_code=500,
                 )
+
+        # 执行计划⑥ (可见性面板): 自维护提议 (默认关, 需 agent.enable_self_reflection) + 人审批执行。
+        # 给"待审批维护提议"面板当数据源 + 一键 approve 出口 (方向4 提议终于有消费方)。
+        @self.app.get("/agent/maintenance/proposals")
+        async def agent_maintenance_proposals(request: Request):
+            trace_id = request.state.trace_id
+            agent = getattr(self, "agent", None)
+            if agent is None:
+                return JSONResponse(
+                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=501,
+                )
+            tenant = self._memory_tenant_from_request(request)
+            scope_raw = request.query_params.get("scope") or "memory"
+            scope = tuple(s.strip() for s in scope_raw.split(",") if s.strip()) or ("memory",)
+            try:
+                result = agent.run_maintenance_scan(tenant_id=tenant, trace_id=trace_id, scope=scope)
+                return JSONResponse({
+                    "code": "SUCCESS", "message": "ok", "data": result,
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                })
+            except Exception as e:
+                return JSONResponse(
+                    {"code": "MAINTENANCE_SCAN_FAILED", "message": str(e),
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=500,
+                )
+
+        @self.app.post("/agent/maintenance/apply")
+        async def agent_maintenance_apply(request: Request):
+            trace_id = request.state.trace_id
+            agent = getattr(self, "agent", None)
+            if agent is None:
+                return JSONResponse(
+                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=501,
+                )
+            tenant = self._memory_tenant_from_request(request)
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            proposals = body.get("proposals") or []
+            approved_ids = body.get("approved_ids") or []
+            try:
+                result = agent.apply_memory_maintenance(
+                    proposals, approved_ids, tenant_id=tenant, trace_id=trace_id)
+                return JSONResponse({
+                    "code": "SUCCESS", "message": "ok", "data": result,
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                })
+            except Exception as e:
+                return JSONResponse(
+                    {"code": "MAINTENANCE_APPLY_FAILED", "message": str(e),
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=500,
+                )

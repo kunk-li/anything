@@ -3400,3 +3400,21 @@ body.share-readonly .msg-feedback {
     font-size: 11px;
     color: var(--text-faint);
 }
+
+/* 执行计划⑥ 可见性面板: 画像 + 待审批维护 (memory tab 顶部) */
+.memory-vis { margin: 0 0 10px; display: flex; flex-direction: column; gap: 8px; }
+.memory-vis .vis-sec {
+    border: 1px solid var(--border, #2a2a2a); border-radius: 6px; padding: 8px 10px;
+    background: var(--surface-2, rgba(255,255,255,0.02));
+}
+.memory-vis .vis-title { font-size: 12px; font-weight: 600; color: var(--text, #ddd); margin-bottom: 6px; }
+.memory-vis .vis-empty { font-size: 11px; color: var(--text-faint, #888); }
+.memory-vis .vis-dim { display: flex; gap: 6px; align-items: baseline; margin: 3px 0; }
+.memory-vis .vis-dim-label {
+    flex: 0 0 auto; font-size: 11px; color: var(--accent, #6aa); background: var(--surface-3, rgba(255,255,255,0.04));
+    border-radius: 4px; padding: 1px 6px;
+}
+.memory-vis .vis-dim ul, .memory-vis .vis-props { margin: 0; padding-left: 16px; }
+.memory-vis .vis-dim li, .memory-vis .vis-props li { font-size: 11px; color: var(--text, #ccc); margin: 2px 0; }
+.memory-vis .vis-prop-act { font-weight: 600; color: var(--warn, #c96); }
+.memory-vis .vis-approve { margin-left: 6px; }
