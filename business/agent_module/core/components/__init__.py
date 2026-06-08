@@ -9,6 +9,7 @@ SimpleAgent 组件 mixins (Task KK #71)
     StreamingMixin       — run_stream (Agent 流式版)
     PromptBuilderMixin   — _build_react_prompt / _build_planner_prompt / _parse_planner_response
     SelfMaintenanceMixin — 方向4 自维护 (self_reflect / *_memory_maintenance / run_maintenance_scan …)
+    MemoryMixin          — 长期记忆/画像注入 (_inject_long_term_memory / _inject_user_profile / _refine_query …)
 
 设计:
     - 全用 mixin 而非 composition, 保持 self.xxx 调用风格不变, 测试 0 改动
@@ -22,6 +23,7 @@ from .tool_executor import ToolExecutorMixin
 from .streaming import StreamingMixin
 from .prompt_builder import PromptBuilderMixin
 from .self_maintenance import SelfMaintenanceMixin
+from .memory_injection import MemoryMixin
 
 __all__ = [
     "ReActEngineMixin",
@@ -29,4 +31,5 @@ __all__ = [
     "StreamingMixin",
     "PromptBuilderMixin",
     "SelfMaintenanceMixin",
+    "MemoryMixin",
 ]
