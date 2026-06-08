@@ -96,6 +96,41 @@ def _next_fire_time(schedule: Dict[str, Any], now: Optional[datetime] = None) ->
     raise ValueError(f"unknown schedule kind: {kind}")
 
 
+def build_maintenance_task(
+    schedule: str,
+    scope: Optional[List[str]] = None,
+    auto_apply: Optional[bool] = None,
+    tenant_id: str = "default",
+    task_id: str = "maintenance_scan",
+) -> Dict[str, Any]:
+    """方向1/4: 构造一条"自维护扫描"定时任务声明 (供 TaskScheduler.register)。
+
+    body 走 agent 链路 + extra_params.maintenance_scan=true → 命中 SimpleAgent.execute 的
+    maintenance_scan 钩子 → run_maintenance_scan(聚合 行为/记忆/代码文档 三域提议 + 通知)。
+    scope 选域: 方向1 仅记忆域 ["memory"](reconcile/consolidate/prune); 全域省略 = 三域全扫。
+    auto_apply: None=按 agent.auto_approve_maintenance 名单; 注意 reconcile/consolidate 永不自动
+    (仅安全确定性算子 run_prune/run_degrade 可自动, 见 run_maintenance_scan 安全天花板)。
+    注: 钩子要求 agent.enable_self_reflection=true, 否则 body 会被当普通 agent 任务执行
+    (调用方 _build_scheduler 已在注册前 gate 此前提)。
+    """
+    return {
+        "id": task_id,
+        "schedule": schedule,
+        "type": "agent",
+        "body": {
+            "type": "agent",
+            "task": "scheduled maintenance scan",
+            "tenant_id": tenant_id,
+            "extra_params": {
+                "maintenance_scan": True,
+                "maintenance_scope": list(scope) if scope else ["behavior", "memory", "code_doc"],
+                "auto_apply": auto_apply,
+            },
+        },
+        "enabled": True,
+    }
+
+
 class TaskScheduler:
     """简单线程版任务调度器.
 
@@ -159,6 +194,11 @@ class TaskScheduler:
     def unregister(self, task_id: str) -> bool:
         with self._lock:
             return self._tasks.pop(task_id, None) is not None
+
+    # SchedulerRoutesMixin 的 DELETE /scheduler/{id} 调的是 cancel_task — 提供别名,
+    # 让该路由在 scheduler 被接线后能正常工作 (此前 scheduler 恒为 None, 路由走不到此)。
+    def cancel_task(self, task_id: str) -> bool:
+        return self.unregister(task_id)
 
     def list_tasks(self) -> List[Dict[str, Any]]:
         with self._lock:

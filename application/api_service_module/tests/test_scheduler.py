@@ -211,5 +211,106 @@ class TestTaskScheduler(unittest.TestCase):
         self.scheduler.stop()  # 第二次停止也不应抛
 
 
+# ============ 方向1/4: 自维护扫描任务声明 + cancel 别名 ============
+
+class TestMaintenanceTaskAndAlias(unittest.TestCase):
+
+    def test_build_maintenance_task_memory_scope(self):
+        from api_service_module.utils.scheduler import build_maintenance_task
+        t = build_maintenance_task("@daily 04:00", scope=["memory"], auto_apply=None)
+        self.assertEqual(t["id"], "maintenance_scan")
+        self.assertEqual(t["schedule"], "@daily 04:00")
+        self.assertEqual(t["body"]["type"], "agent")
+        ep = t["body"]["extra_params"]
+        self.assertTrue(ep["maintenance_scan"])
+        self.assertEqual(ep["maintenance_scope"], ["memory"])   # 方向1 仅记忆域
+        self.assertIsNone(ep["auto_apply"])
+
+    def test_build_maintenance_task_default_full_scope(self):
+        from api_service_module.utils.scheduler import build_maintenance_task
+        t = build_maintenance_task("every 6h")               # scope 省略 → 三域全扫 (方向4)
+        self.assertEqual(t["body"]["extra_params"]["maintenance_scope"],
+                         ["behavior", "memory", "code_doc"])
+        # 声明可被 TaskScheduler 接受 (register 不抛)
+        sch = TaskScheduler(handler=_MockHandler())
+        sch.register(t)
+        self.assertEqual(sch.list_tasks()[0]["id"], "maintenance_scan")
+
+    def test_cancel_task_alias(self):
+        # SchedulerRoutesMixin DELETE /scheduler/{id} 调 cancel_task — 须等价 unregister
+        sch = TaskScheduler(handler=_MockHandler())
+        sch.register({"id": "x", "schedule": "every 30s", "body": {"type": "rag"}})
+        self.assertTrue(sch.cancel_task("x"))
+        self.assertFalse(sch.cancel_task("x"))               # 已删, 再删返 False
+        self.assertEqual(len(sch.list_tasks()), 0)
+
+
+# ============ 方向1/4: 工厂接线 _build_scheduler ============
+
+class _FakeConfig:
+    """最小 config: get_config(dotted, default) + get_effective_value(...)."""
+    def __init__(self, values):
+        self._v = values
+
+    def get_config(self, key, default=None):
+        return self._v.get(key, default)
+
+    def get_effective_value(self, key, env_var=None, default=None, value_type=None):
+        return self._v.get(key, default)
+
+
+class _FakeDeps:
+    def __init__(self, config):
+        self.config = config
+        self.logger = None
+        self.audit_logger = None
+
+
+class TestBuildSchedulerWiring(unittest.TestCase):
+
+    def _build(self, values):
+        from factories.application_layer import _build_scheduler
+        return _build_scheduler(_MockHandler(), _FakeDeps(_FakeConfig(values)))
+
+    def test_no_config_returns_none(self):
+        # 默认 (无 tasks / 无 maintenance_schedule) → 不接线, 不起线程
+        self.assertIsNone(self._build({}))
+
+    def test_maintenance_gated_off_when_self_reflection_off(self):
+        # 配了 schedule 但 enable_self_reflection=false → 防呆跳过 (不会把扫描当普通任务跑)
+        sch = self._build({"agent.maintenance_schedule": "@daily 04:00",
+                           "agent.enable_self_reflection": False})
+        self.assertIsNone(sch)
+
+    def test_maintenance_registered_when_enabled(self):
+        sch = self._build({"agent.maintenance_schedule": "@daily 04:00",
+                           "agent.enable_self_reflection": True,
+                           "agent.maintenance_scope": ["memory"]})
+        self.assertIsNotNone(sch)
+        try:
+            tasks = sch.list_tasks()
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(tasks[0]["id"], "maintenance_scan")
+        finally:
+            sch.stop()
+
+    def test_generic_tasks_registered_and_trigger_routes_to_handler(self):
+        handler = _MockHandler()
+        from factories.application_layer import _build_scheduler
+        sch = _build_scheduler(handler, _FakeDeps(_FakeConfig({
+            "scheduler": {"tasks": [
+                {"id": "digest", "schedule": "every 1h",
+                 "body": {"type": "rag", "query": "今天有什么新文档?"}},
+            ]},
+        })))
+        self.assertIsNotNone(sch)
+        try:
+            res = sch.trigger_once("digest")          # 手动触发 → 走 handler.handle
+            self.assertEqual(res["code"], "SUCCESS")
+            self.assertEqual(handler.calls[0]["request"]["query"], "今天有什么新文档?")
+        finally:
+            sch.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

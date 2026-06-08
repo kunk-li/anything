@@ -12,9 +12,62 @@ from typing import Any, Dict, Optional
 from deps_module import BasicDeps, build_basic_deps
 from document_store_module import LocalDocumentStore
 from api_service_module import ApiService
+from api_service_module.utils.scheduler import TaskScheduler, build_maintenance_task
 from console_app_module.core.impl import ConsoleApp
 
 from .interface_layer import build_interface_layer
+
+
+def _build_scheduler(handler: Any, deps: BasicDeps) -> Optional[TaskScheduler]:
+    """方向1/4: 按配置构建并启动 TaskScheduler。默认关 — 无配置任务则返 None (零后台线程)。
+
+    任务来源 (合并):
+      - scheduler.tasks: 通用定时任务列表 (每条 {id, schedule, type, body, enabled})。
+      - agent.maintenance_schedule: 便捷自维护扫描 (方向1/4)。**仅当 enable_self_reflection=true**
+        才注册 (否则 maintenance_scan 钩子不触发, body 会被当普通 agent 任务跑 → 防呆 gate)。
+    无任务 → None (不起线程 / 零意外 LLM 成本)。单条声明出错只 WARN, 不阻断启动 (fail-safe)。
+    """
+    cfg = deps.config
+    log = deps.logger
+    tasks: list = []
+
+    sched_cfg = cfg.get_config("scheduler", {}) or {}
+    for t in (sched_cfg.get("tasks") or []):
+        if isinstance(t, dict):
+            tasks.append(t)
+
+    maint_schedule = str(cfg.get_config("agent.maintenance_schedule", "") or "").strip()
+    if maint_schedule:
+        self_reflect_on = cfg.get_effective_value(
+            "agent.enable_self_reflection", env_var="ANYTHING_AGENT_SELF_REFLECTION",
+            default=False, value_type=bool,
+        )
+        if self_reflect_on:
+            tasks.append(build_maintenance_task(
+                schedule=maint_schedule,
+                scope=cfg.get_config("agent.maintenance_scope", None),
+                auto_apply=cfg.get_config("agent.maintenance_auto_apply", None),
+            ))
+        elif log:
+            log.warning(
+                "[scheduler] agent.maintenance_schedule 已配置但 enable_self_reflection=false, "
+                "跳过自维护扫描注册 (先开 agent.enable_self_reflection)"
+            )
+
+    if not tasks:
+        return None
+
+    scheduler = TaskScheduler(handler=handler, logger=log, audit_logger=deps.audit_logger)
+    for t in tasks:
+        try:
+            scheduler.register(t)
+        except Exception as e:
+            if log:
+                log.warning(f"[scheduler] 任务注册失败 (跳过): id={t.get('id')!r} err={e}")
+    scheduler.start()
+    if log:
+        log.info(f"[scheduler] 已启动, 注册 {len(scheduler.list_tasks())} 个定时任务")
+    return scheduler
 
 
 def build_application_layer(
@@ -82,6 +135,10 @@ def build_application_layer(
         # Task FFFF (#123): 透传 tool_registry 给 /agent/tools 路由
         tool_registry = business_layer.get("tool_registry") if business_layer else None
 
+        # 方向1/4: 接线 TaskScheduler (默认关 — 无配置定时任务时返 None, 不起线程)。
+        # 让 /scheduler/* 路由真正可用 + 自维护扫描 (reconcile/consolidate/prune / 全域) 能定时触发。
+        scheduler = _build_scheduler(handler, deps)
+
         result["api_service"] = ApiService(
             handler=handler,
             deps=deps,
@@ -93,6 +150,7 @@ def build_application_layer(
             long_term_memory=long_term_memory,
             state_store=state_store,
             tool_registry=tool_registry,
+            scheduler=scheduler,
         )
 
     if build_console:

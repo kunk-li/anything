@@ -114,6 +114,18 @@ agent:
   # query_refine_mode: auto=歧义时静默改写问题(原行为) / ask=歧义大时反问澄清(不改写,
   # 早退把一个澄清问题返回给用户)。单次可 extra_params.query_refine_mode 覆盖。
   query_refine_mode: "auto"
+  # 自维护定时扫描 (方向1/4): 需先 enable_self_reflection=true 才会注册 (否则跳过+WARN)。
+  # 不配 maintenance_schedule = 不注册 = 不起调度线程 (默认行为)。配置后由 TaskScheduler 周期触发
+  # run_maintenance_scan (聚合 行为/记忆/代码文档 提议 + 通知; auto_apply 仅安全算子 run_prune/
+  # run_degrade, reconcile/consolidate 永不自动)。schedule 支持 "every Xs/m/h" 或 "@daily HH:MM"(UTC)。
+  # maintenance_schedule: "@daily 04:00"
+  # maintenance_scope: ["memory"]        # 方向1 仅记忆域(reconcile/consolidate/prune); 全域省略=三域全扫
+  # maintenance_auto_apply: null         # null=按 auto_approve_maintenance 名单决定
+
+# 任务调度 (方向1/4): 仅当配置了定时任务 (下面 tasks 或 agent.maintenance_schedule) 时
+# 才起后台调度线程; 否则不接线 (/scheduler/* 路由返 SERVICE_UNAVAILABLE)。默认空 = 关。
+scheduler:
+  tasks: []   # 通用定时任务; 每条 {id, schedule, type, body, enabled}; schedule 见上 maintenance_schedule
 
 document_store:
   dir: "documents"
