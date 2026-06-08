@@ -511,9 +511,8 @@ class LocalDocumentStore(BaseDocumentStore):
                     "doc_id": info.get("doc_id"),
                     "file_name": info.get("file_name"),
                     "file_type": info.get("file_type"),
-                    "content_length": info.get("content_length") or info.get("content_length") or info.get("content_length"),
-                    # content_length might not exist in info; fallback to len(content) is too expensive; store when saving
-                    "content_length": info.get("content_length") or info.get("content_length") or info.get("content_length"),
+                    # content_length 可能不存在; 缺失时下面 (if not content_length) 再从存储文件估算
+                    "content_length": info.get("content_length"),
                 })
                 # If older info doesn't have content_length, compute from stored doc file size approx by reading content
                 if not docs[-1].get("content_length"):

@@ -96,9 +96,8 @@ class TestSystemLoggerMultiprocess(unittest.TestCase):
             self.assertGreaterEqual(len(parts), 6)
             self.assertTrue(parts[1].isdigit())
 
-    def tearDown(self):
-        # 测试完成后不强制删除，便于排查；可按需开启
-        pass
+    # 注: 原第二个 tearDown(pass) 会遮蔽上面 @line51 真正释放文件句柄的 tearDown (F811),
+    # 已删除 — 让 _close_root_handlers 收尾真正生效 (Windows 文件锁)。
 
 
 if __name__ == "__main__":

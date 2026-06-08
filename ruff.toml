@@ -1,0 +1,17 @@
+# Ruff 配置 — 高信号静态分析 (执行: ruff check .)
+# 只选 pyflakes (F) 正确性规则 (死代码 / 重复 key / 重定义 等), 不选 E/W 风格噪音
+# (本仓不追求统一风格, 只抓"真问题/死代码")。
+#
+# ⚠️ 切勿对本仓盲跑 `ruff check --fix`! F401(未用 import) 在这里**不可自动删**:
+#    - 多处 impl.py / __init__.py 有意 re-export "看似未用"的符号 (back-compat + 被测试 import,
+#      如 llm_adapter impl 的 _BaseHTTPAdapterMixin);
+#    - 个别 import 带 `# 保留` 注释专供单测 monkeypatch (如 ...impl.requests.post)。
+#    实测盲 --fix 会删掉这些 → 破坏 re-export / 测试。F401 仅供**人工**审视, 逐个确认才删。
+target-version = "py310"
+
+[lint]
+select = ["F"]
+# F403/F405 (star-import): 个别聚合模块有意为之。
+# F821 (undefined-name): 多为 `from __future__ import annotations` 下注解未求值的误报。
+# F401 (unused-import): 见上 — 大量是有意 re-export, 不当死代码; 故默认 ignore, 需要时临时去掉手查。
+ignore = ["F401", "F403", "F405", "F821"]
