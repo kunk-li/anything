@@ -534,11 +534,25 @@ class LLMService(BaseLLMService):
           单 chunk yield, 调用方仍是 generator 接口不破坏。
         - 失败抛 RuntimeError (不像 generate 那样会兜底返回错误字符串)
         """
+        # 模型分级路由 (执行计划③): 调用方未显式指定模型("default") 时, 读 model_routing ContextVar
+        # 路由到 便宜/强 模型 + 设 token 上限 (agent 按任务复杂度设)。显式指定模型则尊重不覆盖。fail-safe。
+        param = LLMParam()
+        if model_name == "default":
+            try:
+                from observability_module import get_model_routing
+                routed_model, routed_max_tokens = get_model_routing()
+                if routed_model and routed_model in self.adapters:
+                    model_name = routed_model
+                if routed_max_tokens:
+                    param = LLMParam(max_tokens=int(routed_max_tokens))
+            except Exception:
+                model_name, param = "default", LLMParam()
+
         request = LLMRequest(
             request_type="CHAT",
             input_text=prompt,
             model_name=model_name,
-            model_param=LLMParam(),
+            model_param=param,
         )
         resolved_name = self._resolve_model_name(request)
         adapter = self._get_adapter(resolved_name)
@@ -560,12 +574,28 @@ class LLMService(BaseLLMService):
         """统一文本生成入口（实现 BaseLLMService.generate 契约）。
 
         返回纯文本，不返回 LLMResponse 对象。失败时直接抛 RuntimeError。
+
+        模型分级路由 (执行计划③): 读 observability 的 model_routing ContextVar (agent 按任务复杂度设),
+        命中**已注册**的模型则用它 (否则回退 default); max_tokens 设进 LLMParam。fail-safe: 路由读取
+        异常一律退回 default + 默认参数, 不影响主链路。
         """
+        model_name = "default"
+        param = LLMParam()
+        try:
+            from observability_module import get_model_routing
+            routed_model, routed_max_tokens = get_model_routing()
+            if routed_model and routed_model in self.adapters:   # 仅用已注册模型
+                model_name = routed_model
+            if routed_max_tokens:
+                param = LLMParam(max_tokens=int(routed_max_tokens))
+        except Exception:
+            model_name, param = "default", LLMParam()
+
         request = LLMRequest(
             request_type="CHAT",
             input_text=prompt,
-            model_name="default",
-            model_param=LLMParam(),
+            model_name=model_name,
+            model_param=param,
         )
 
         resp = self.call_llm(request)

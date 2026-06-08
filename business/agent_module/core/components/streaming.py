@@ -117,6 +117,17 @@ class StreamingMixin:
         return True
 
     def run_stream(self, request: Dict[str, Any]):
+        """Agent 流式入口: 包一层模型分级路由 (执行计划③) 后委托 _run_stream_impl。
+        generator: set 路由 (按任务复杂度) → yield from 实现 → finally 重置 (耗尽/关闭都重置)。
+        默认关 → begin_routing 返 None → 零行为变化。"""
+        from ..model_routing import begin_routing, end_routing
+        _tok = begin_routing(self, (request or {}).get("task"))
+        try:
+            yield from self._run_stream_impl(request)
+        finally:
+            end_routing(_tok)
+
+    def _run_stream_impl(self, request: Dict[str, Any]):
         """Agent 流式 generator: yield ReAct 每一步 + final answer.
 
         Event 类型:

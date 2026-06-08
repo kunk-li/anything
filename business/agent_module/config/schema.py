@@ -90,6 +90,16 @@ AGENT_CONFIG_SCHEMA: List[ConfigField] = [
     ConfigField("agent.tool_approval_required", "tool_approval_required", "list",
                 ["py_sandbox", "http_request", "file_write", "email_send", "shell_exec", "computer_use"],
                 "ANYTHING_AGENT_APPROVAL", "安全", "危险工具白名单: 被选中须 extra_params.approve_tools 显式放行"),
+    # 成本 (模型分级路由)
+    ConfigField("agent.model_routing_enabled", "model_routing_enabled", "bool", False,
+                "ANYTHING_AGENT_MODEL_ROUTING", "成本",
+                "按任务复杂度分级路由模型 (简单→便宜模型降本; 拿不准→强模型)。默认关"),
+    ConfigField("agent.model_simple", "model_simple", "str", "",
+                None, "成本", "简单任务用的模型名 (如 qwen-plus); 空=不路由该档"),
+    ConfigField("agent.model_complex", "model_complex", "str", "",
+                None, "成本", "复杂任务用的模型名 (如 qwen-max); 空=不路由该档"),
+    ConfigField("agent.max_task_tokens", "max_task_tokens", "int", 0,
+                "ANYTHING_AGENT_MAX_TASK_TOKENS", "成本", "单任务 LLM max_tokens 上限 (0=不限)"),
     # 性能
     ConfigField("agent.cacheable_tools", "cacheable_tools", "list",
                 ["rag_search", "calculator", "currency_convert", "weather", "wikipedia",

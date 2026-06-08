@@ -26,6 +26,7 @@ from .components import (
     MemoryMixin,
 )
 from .components.verifier import collect_specs, make_registry, run_verifiers
+from .model_routing import begin_routing, end_routing
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
 from observability_module import trace_span
@@ -195,6 +196,20 @@ class SimpleAgent(
         self.skill_distill_min_tools = self.config.get_effective_value(
             "agent.skill_distill_min_tools", env_var="ANYTHING_AGENT_SKILL_DISTILL_MIN_TOOLS",
             default=2, value_type=int,
+        )
+
+        # 模型分级路由 + per-task token 预算 (执行计划③): 默认关。开后 execute/run_stream 按任务
+        # 复杂度把模型路由到 简单→model_simple(便宜) / 复杂→model_complex(强); 拿不准用强模型(保守)。
+        # model_simple/complex 为空则该档不路由 (用 default_chat_model)。max_task_tokens 0=不限。
+        self.model_routing_enabled = self.config.get_effective_value(
+            "agent.model_routing_enabled", env_var="ANYTHING_AGENT_MODEL_ROUTING",
+            default=False, value_type=bool,
+        )
+        self.model_simple = str(self.config.get_config("agent.model_simple", "") or "").strip()
+        self.model_complex = str(self.config.get_config("agent.model_complex", "") or "").strip()
+        self.max_task_tokens = self.config.get_effective_value(
+            "agent.max_task_tokens", env_var="ANYTHING_AGENT_MAX_TASK_TOKENS",
+            default=0, value_type=int,
         )
 
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
@@ -408,6 +423,11 @@ class SimpleAgent(
         if _corr_fb:
             task = f"{task}\n\n[上一轮验证未通过, 请针对性修正以下问题]\n{_corr_fb}"
 
+        # 模型分级路由 (执行计划③): 按 *原始* 任务复杂度路由模型 + 设 token 预算 (写 ContextVar,
+        # 供 LLMService.generate 读)。默认关; 用 original_task (而非已注入记忆/画像/历史的 task) 判复杂度。
+        # 覆盖下面 react + single_shot 主执行; 每个出口须 end_routing (react 出口显式, 其余走 finally)。
+        _routing_tok = begin_routing(self, original_task)
+
         # ReAct 模式优先 (hybrid 由文档定义为固定流水线, 不走 ReAct)
         if strategy == "react" and execution_mode != "hybrid":
             react_result = self._react_execute(
@@ -422,6 +442,7 @@ class SimpleAgent(
                         _rd = {}
                     _rd["query_refinement"] = refine_meta
                     react_result["details"] = _rd
+                end_routing(_routing_tok)   # react 出口在 single_shot try 之前, 显式重置
                 return self._post_verify(request, react_result, original_task, start_time)
             self.logger.warning(
                 f"[react] 多轮规划不可用(无 LLM 通道/任务不适合), fallback 到 single_shot: trace_id={trace_id}"
@@ -592,6 +613,9 @@ class SimpleAgent(
             return self._handle_exception(
                 exception=e, trace_id=trace_id, session_id=session_id, task=task,
             )
+        finally:
+            # 模型分级路由收尾: single_shot / 异常 等出口在此重置 (react 出口已在上面显式重置)
+            end_routing(_routing_tok)
 
     # ============================================================
     # 方向3: 自我验证闭环 (验证 + 自纠正)

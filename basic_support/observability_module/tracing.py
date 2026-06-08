@@ -52,6 +52,33 @@ def reset_current_tenant(token: "contextvars.Token[Optional[str]]") -> None:
     _current_tenant.reset(token)
 
 
+# ===========================================================================
+# 模型分级路由 ContextVar (执行计划③, 模型分级降本)
+# ===========================================================================
+# agent 按任务复杂度在 execute/run_stream 入口设 (model_name, max_tokens);
+# LLMService.generate 读取以路由到 便宜/强 模型 + 设 token 上限。每请求 Context 天然隔离,
+# set/reset 配对 (与 tenant 同范式)。默认 (None, None) = 不路由 (用 default_chat_model)。
+
+_current_model_routing: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
+    "anything_model_routing", default=(None, None)   # (model_name, max_tokens)
+)
+
+
+def set_model_routing(model: Optional[str], max_tokens: Optional[int] = None):
+    """设置当前请求路由的 (模型名, token 上限)。返回 token 用于 reset。max_tokens None=不限。"""
+    return _current_model_routing.set((model, max_tokens))
+
+
+def get_model_routing() -> tuple:
+    """读当前请求的 (model_name, max_tokens); 未设置 → (None, None)。"""
+    return _current_model_routing.get()
+
+
+def reset_model_routing(token) -> None:
+    """重置路由 ContextVar 到之前状态。必须与 set_model_routing 配对。"""
+    _current_model_routing.reset(token)
+
+
 def get_current_tenant() -> Optional[str]:
     """读取当前 ContextVar 中的 tenant_id (没设过时返回 None)."""
     return _current_tenant.get()

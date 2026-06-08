@@ -36,6 +36,9 @@ from .tracing import (
     set_current_tenant,
     reset_current_tenant,
     get_current_tenant,
+    set_model_routing,
+    get_model_routing,
+    reset_model_routing,
 )
 # Task Y (#59): token / cost 跟踪
 from .usage_tracker import (
@@ -52,6 +55,9 @@ __all__ = [
     "set_current_tenant",
     "reset_current_tenant",
     "get_current_tenant",
+    "set_model_routing",
+    "get_model_routing",
+    "reset_model_routing",
     "UsageTracker",
     "get_usage_tracker",
     "reset_usage_tracker",
