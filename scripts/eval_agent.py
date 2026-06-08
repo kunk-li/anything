@@ -52,7 +52,9 @@ TASKS = [
      "assert": {"no_error": True, "nonempty": True}},
 ]
 
-_REFUSE_PAT = re.compile(r"我无法|无法访问|无法直接|我做不到|做不了|我只是.{0,6}(语言模型|AI|人工智能|模型)|请你?自己")
+# 注: "无法直接" 须带拒绝向宾语 (访问/操作/帮/为你/替你), 否则会误判正常排查建议里的
+# "无法直接复现/定位/获取" 等措辞为拒绝 (这些是教方法, 非拒绝)。原裸 "无法直接" over-broad。
+_REFUSE_PAT = re.compile(r"我无法|无法访问|无法直接(访问|操作|帮|为你|替你)|我做不到|做不了|我只是.{0,6}(语言模型|AI|人工智能|模型)|请你?自己")
 
 
 async def run_one(url: str, key: str, task: str, run_idx: int = 0) -> dict:

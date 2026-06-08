@@ -493,6 +493,41 @@ class TestReActParallel(unittest.TestCase):
         raw = '{"thought":"t","actions":[{"tool":"nope","input":{}}]}'
         self.assertIsNone(SimpleAgent._parse_react_response(raw, ["rag_search"]))
 
+    # ---- 畸形 JSON 容错抠 final_answer (治调试类延迟: 抠到就不必重生成洗净) ----
+    def test_salvage_trailing_comma(self):
+        # trailing comma → json.loads 失败, 但应抠出 final_answer
+        raw = '{"thought":"t","final_answer":"答案内容",}'
+        step = SimpleAgent._parse_react_response(raw, ["rag_search"])
+        self.assertEqual(step.get("final_answer"), "答案内容")
+
+    def test_salvage_unescaped_newline(self):
+        # 未转义字面换行 (qwen 长答案最常见畸形) → json.loads 失败, 抠出含换行的纯文本
+        raw = '{"thought":"x","final_answer":"第一行\n第二行\n第三行"}'
+        step = SimpleAgent._parse_react_response(raw, ["rag_search"])
+        self.assertEqual(step.get("final_answer"), "第一行\n第二行\n第三行")
+
+    def test_salvage_truncated_no_closing(self):
+        # 被截断: 无闭合引号/括号 → 抠出已生成的部分, 不丢
+        raw = '{"thought":"x","final_answer":"这段答案很长结果被截断了'
+        step = SimpleAgent._parse_react_response(raw, ["rag_search"])
+        self.assertEqual(step.get("final_answer"), "这段答案很长结果被截断了")
+
+    def test_salvage_escaped_sequences_unescaped(self):
+        # 合规转义 \n \" 应被还原成真实字符 (即便整体因别处畸形解析失败)
+        raw = '{"final_answer":"行一\\n带\\"引号\\"",}'
+        step = SimpleAgent._parse_react_response(raw, ["rag_search"])
+        self.assertEqual(step.get("final_answer"), '行一\n带"引号"')
+
+    def test_salvage_no_final_answer_still_none(self):
+        # 畸形 JSON 但无 final_answer (本想调工具) → 不强抠, 仍 None 走原 fallback
+        raw = '{"thought":"t","action":{"tool":"rag_search","input":{"q":"x"}'  # 截断
+        self.assertIsNone(SimpleAgent._parse_react_response(raw, ["rag_search"]))
+
+    def test_valid_json_unknown_tool_skips_salvage(self):
+        # 合法 JSON (能 loads) 但工具非法 → 仍返 None (不触发 salvage, 保最小改动)
+        raw = '{"thought":"t","action":{"tool":"nope","input":{}}}'
+        self.assertIsNone(SimpleAgent._parse_react_response(raw, ["rag_search"]))
+
     # ---- 执行 ----
     def test_parallel_executes_all_tools(self):
         agent = self._make_agent([
@@ -560,6 +595,18 @@ class TestReActStreamRobustness(unittest.TestCase):
         events, answer = self._stream(agent)
         self.assertEqual(answer, "干净答案ABC")
         self.assertEqual(llm.call_count, 1)  # 关键: 无工具不重生成
+
+    def test_parsefail_salvage_no_regen(self):
+        """畸形 JSON 但含 final_answer (qwen 长答案最常见: 未转义换行): 抠出干净答案直接用,
+        不重生成 → LLM 只调 1 次 (治调试类延迟核心红利)。此前会退化成生 JSON → 触发洗净重生成。"""
+        agent, llm = self._make_agent([
+            '{"thought":"排查思路","final_answer":"第一步看日志\n第二步查配置\n第三步复现"}',
+        ])
+        events, answer = self._stream(agent)
+        self.assertEqual(answer, "第一步看日志\n第二步查配置\n第三步复现")
+        self.assertEqual(llm.call_count, 1)  # 关键: 抠到干净 final_answer, 不重生成洗净
+        self.assertNotIn('"final_answer"', answer)
+        self.assertFalse(answer.strip().startswith("{"))
 
     def test_parsefail_raw_json_not_leaked(self):
         """解析失败 → final_answer 退化成原始 JSON: 必须重生成洗净, 绝不把生 JSON 喷给用户"""

@@ -495,13 +495,20 @@ class ReActEngineMixin:
             candidate = re.sub(r"^```[a-zA-Z]*\n?", "", candidate)
             candidate = re.sub(r"```\s*$", "", candidate).strip()
         match = re.search(r"\{[\s\S]*\}", candidate)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except (json.JSONDecodeError, ValueError):
-            return None
+        parsed = None
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
         if not isinstance(parsed, dict):
+            # 严格 JSON 解析失败 (畸形 / 截断未闭合 / 无闭合括号) — qwen 给长答案时
+            # react JSON 常畸形 (trailing comma / 未转义换行 / 被截断)。此前直接返 None →
+            # 流式走 parse-fail 兜底把"原始 JSON 串"当答案 → 触发洗净重生成 (+20s)。
+            # 这里尽量从畸形 JSON 里抠出干净 final_answer, 抠到就不必重生成 (治调试类延迟)。
+            salvaged = ReActEngineMixin._salvage_final_answer(candidate)
+            if salvaged is not None:
+                return {"thought": "", "final_answer": salvaged}
             return None
 
         # 三选一: final_answer / actions(并行多动作) / action(单动作)
@@ -535,6 +542,44 @@ class ReActEngineMixin:
                 "input": action.get("input") or {},
             },
         }
+
+    @staticmethod
+    def _salvage_final_answer(raw: str) -> Optional[str]:
+        """从畸形 JSON 里尽量抠出 final_answer 字符串值, 抠到返回纯文本否则 None.
+
+        容错三类 qwen 长答案常见畸形: trailing comma / 未转义换行 / 被截断未闭合。
+        策略: 定位 "final_answer": " 起点后逐字符扫到 *未转义* 闭合引号 (截断则到末尾),
+        保留转义对交给 unescape。只针对 final_answer (有意给答案的场景), 抠不到不强解,
+        不影响 action/actions 路径 (那些畸形仍按原逻辑 fallback)。best-effort, 不抛异常。
+        """
+        if not raw or not isinstance(raw, str):
+            return None
+        m = re.search(r'"final_answer"\s*:\s*"', raw)
+        if not m:
+            return None
+        body = raw[m.end():]
+        out: List[str] = []
+        i, n = 0, len(body)
+        while i < n:
+            c = body[i]
+            if c == "\\" and i + 1 < n:
+                out.append(body[i:i + 2])  # 保留转义对 (\n \" \\ 等), 交给下面 unescape
+                i += 2
+                continue
+            if c == '"':  # 未转义闭合引号 → 字符串体结束
+                break
+            out.append(c)
+            i += 1
+        captured = "".join(out)
+        if not captured.strip():
+            return None
+        # 把抠出的 JSON 字符串体 unescape 成纯文本; 含字面换行 (控制符) 会让严格解析失败 →
+        # 退回手动还原常见转义 (字面换行本身即真实内容, 原样保留)。
+        try:
+            return json.loads('"' + captured + '"')
+        except (json.JSONDecodeError, ValueError):
+            return (captured.replace('\\n', '\n').replace('\\t', '\t')
+                    .replace('\\"', '"').replace('\\/', '/').replace('\\\\', '\\'))
 
     def _generate_plan(
             self,
