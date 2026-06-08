@@ -1032,7 +1032,14 @@ class SimpleAgent(
 
     @staticmethod
     def _looks_like_raw_json(s: str) -> bool:
-        """检测字符串是不是 raw JSON/dict 字面值 (开头 { 或 [ 且能 json.loads)."""
+        """检测字符串是不是 raw JSON / dict 字面值 (开头 { 或 [, 能被 JSON 或 Python 字面量解析).
+
+        两种形态都要兜, 否则原始结构会直喷给用户:
+        - 严格 JSON (双引号): 工具直接返回 json.dumps 的输出;
+        - Python dict/list repr (单引号): final_answer 来自 str(dict) (如结构化输出未经
+          合成就落到 answer 字段), json.loads 解析不了 → 用 ast.literal_eval 兜
+          (只解析字面量, 不执行代码, 安全)。
+        """
         if not isinstance(s, str):
             return False
         s = s.strip()
@@ -1042,6 +1049,11 @@ class SimpleAgent(
             import json as _j
             _j.loads(s)
             return True
+        except Exception:
+            pass
+        try:
+            import ast as _ast
+            return isinstance(_ast.literal_eval(s), (dict, list))
         except Exception:
             return False
 
@@ -1055,7 +1067,7 @@ class SimpleAgent(
                 return ""
             prompt = (
                 "用户问题: " + str(task) + "\n\n"
-                "工具的原始输出 (JSON):\n" + str(raw)[:1500] + "\n\n"
+                "工具的原始输出 (结构化数据):\n" + str(raw)[:1500] + "\n\n"
                 "请基于上面的工具输出, 用中文自然语言简洁回答用户问题. "
                 "不要再贴 JSON 也不要解释字段名, 直接给答案."
             )
