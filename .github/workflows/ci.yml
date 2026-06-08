@@ -8,6 +8,26 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # =====================================================================
+  # 快速 lint 闸 (独立 job, 与 test 并行): ruff 静态检查。
+  # 仓库已 ruff-clean; 配置见 ruff.toml (F401 等有意忽略, 注释说明原因)。
+  # 失败 -> CI 红, 防止死代码/未用变量/无占位 f-string 等回潮。
+  # =====================================================================
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+      - name: ruff check (按 ruff.toml)
+        run: ruff check .
+
   test:
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
