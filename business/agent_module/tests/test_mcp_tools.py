@@ -229,6 +229,58 @@ while True:
 """
 
 
+class _ClosableClient:
+    """fake client 带 close 计数, 测生命周期管理。"""
+    def __init__(self, tools, close_boom=False):
+        self._tools, self._boom = tools, close_boom
+        self.closed = 0
+    def list_tools(self): return self._tools
+    def call_tool(self, name, args): return {}
+    def close(self):
+        self.closed += 1
+        if self._boom:
+            raise RuntimeError("close boom")
+
+
+class TestMcpProviderLifecycle(unittest.TestCase):
+    """生命周期管理: McpToolProvider 留已建连接引用, close() 逐个释放 (stdio 杀子进程)。"""
+
+    def test_close_closes_connected_clients(self):
+        fc = _ClosableClient([{"name": "t"}])
+        p = McpToolProvider([McpServerSpec(name="s", command="x")], client_factory=lambda spec: fc)
+        p.discover()                       # 连上 → 留引用
+        self.assertEqual(len(p._clients), 1)
+        p.close()
+        self.assertEqual(fc.closed, 1)     # 关闭被调用
+        self.assertEqual(p._clients, [])   # 幂等清空
+        p.close()                          # 再关不抛, 不重复 close
+        self.assertEqual(fc.closed, 1)
+
+    def test_failed_connection_not_tracked(self):
+        # 连不上的 server (discover fail-safe 跳过) → 不留引用, close 无事可做
+        p = McpToolProvider([McpServerSpec(name="s", command="x")],
+                            client_factory=lambda spec: _FakeClient([], fail=True))
+        p.discover()
+        self.assertEqual(p._clients, [])
+        p.close()                          # 不抛
+
+    def test_close_failure_isolated(self):
+        # 单个 client close 抛 → 吞掉不外泄, 其余仍关 (fail-safe)
+        boom = _ClosableClient([{"name": "t"}], close_boom=True)
+        ok = _ClosableClient([{"name": "t"}])
+        clients = iter([boom, ok])
+        p = McpToolProvider([McpServerSpec(name="a", command="x"), McpServerSpec(name="b", command="y")],
+                            client_factory=lambda spec: next(clients))
+        p.discover()
+        p.close()                          # boom 抛被吞, ok 仍被关
+        self.assertEqual(ok.closed, 1)
+
+    def test_http_provider_close_noop(self):
+        # 无状态 provider (HTTP) close 走 base no-op, 不抛
+        from agent_module.tools.external import HttpToolProvider, HttpToolSpec
+        HttpToolProvider([HttpToolSpec(name="x", url="https://1.1.1.1/")]).close()
+
+
 class TestMcpStdioIntegration(unittest.TestCase):
     """真实 server 试跑: 起真子进程 (python -c 跑自带 echo MCP server), 端到端走 stdio JSON-RPC。
     无网络/npx 依赖。验证 McpStdioClient 与真实 MCP server 的握手+列举+调用互通。"""

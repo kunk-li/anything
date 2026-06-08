@@ -14,11 +14,49 @@ OpenAPI → HTTP 外部工具自动生成 (外部工具连接 RFC · 增量).
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import json
+from typing import Any, Callable, Dict, List, Optional
 
 from .http_provider import HttpToolSpec
 
 _METHODS = ("get", "post", "put", "patch", "delete")
+
+
+def fetch_openapi_spec(
+    url: str,
+    timeout: int = 10,
+    max_bytes: int = 2 * 1024 * 1024,
+    headers: Optional[Dict[str, str]] = None,
+    fetch: Optional[Callable] = None,
+) -> Dict[str, Any]:
+    """远程拉取 OpenAPI spec 并解析成 dict (外部工具连接 RFC · spec_url 远程拉取)。
+
+    复用 http_provider 的 **SSRF 校验** + 禁跳转 fetch (拒私网/非 http(s)); 优先按 JSON 解析,
+    失败再退化尝试 YAML (PyYAML 可用时)。fetch 可注入 (测试不发真网络)。
+    失败抛 ValueError/RuntimeError, 由调用方 (build_providers_from_config) fail-safe 跳过该项。
+    """
+    from .http_provider import _url_ssrf_error, _default_fetch
+    err = _url_ssrf_error(url)
+    if err:
+        raise ValueError(f"spec_url 不安全 (SSRF 防御): {err}")
+    do_fetch = fetch or _default_fetch
+    req_headers = {"User-Agent": "anything-agent/1.0",
+                   "Accept": "application/json, application/yaml, text/yaml", **(headers or {})}
+    status, text = do_fetch("GET", url, req_headers, None, timeout, max_bytes)
+    if not (200 <= int(status) < 300):
+        raise RuntimeError(f"拉取 spec_url 失败: status={status}")
+    spec: Any = None
+    try:
+        spec = json.loads(text)
+    except ValueError:
+        try:
+            import yaml  # PyYAML (本项目 config 已用, 一般可用); 不可用则放弃 YAML 退化
+            spec = yaml.safe_load(text)
+        except Exception:
+            raise ValueError("spec_url 内容既非合法 JSON 也无法按 YAML 解析")
+    if not isinstance(spec, dict):
+        raise ValueError("spec_url 解析结果顶层不是对象")
+    return spec
 
 
 def _first_server_url(openapi: Dict[str, Any]) -> str:

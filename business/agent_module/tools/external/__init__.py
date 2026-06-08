@@ -15,13 +15,13 @@ from .http_provider import HttpToolProvider, HttpToolSpec, make_http_tool
 from .mcp_provider import (
     McpServerSpec, McpStdioClient, McpHttpClient, McpToolProvider,
 )
-from .openapi import openapi_to_specs
+from .openapi import openapi_to_specs, fetch_openapi_spec
 
 __all__ = [
     "ExternalToolProvider", "ExternalToolDef",
     "HttpToolProvider", "HttpToolSpec", "make_http_tool",
     "McpToolProvider", "McpServerSpec", "McpStdioClient", "McpHttpClient",
-    "openapi_to_specs",
+    "openapi_to_specs", "fetch_openapi_spec",
     "register_external_tools", "build_providers_from_config",
 ]
 
@@ -71,8 +71,10 @@ def _specs_from(config: Any, key: str, spec_cls: type, required: tuple) -> list:
 
 
 def _openapi_specs_from(config: Any) -> list:
-    """从 config `agent.openapi_tools` (每项 {spec: OpenAPI dict, base_url, name_prefix, auth_*})
-    生成 HttpToolSpec 列表。inline `spec` dict 为主 (spec_url 远程拉取留后续)。异常自动跳过。"""
+    """从 config `agent.openapi_tools` 生成 HttpToolSpec 列表。每项二选一取 spec 来源:
+      - inline `spec`: OpenAPI dict (本地直接给);
+      - `spec_url`:    远程 OpenAPI 地址 (SSRF 安全拉取 + JSON/YAML 解析)。
+    其余键 base_url/name_prefix/auth_* 同。拉取/解析/生成异常自动跳过该项 (fail-safe)。"""
     try:
         raw = config.get_config("agent.openapi_tools", []) or []
     except Exception:
@@ -81,11 +83,24 @@ def _openapi_specs_from(config: Any) -> list:
         return []
     out = []
     for entry in raw:
-        if not isinstance(entry, dict) or not isinstance(entry.get("spec"), dict):
+        if not isinstance(entry, dict):
             continue
+        spec = entry.get("spec")
+        if not isinstance(spec, dict):
+            # spec_url 远程拉取 (inline spec 缺省时)。拉取用 entry 的 auth (若有), fail-safe。
+            spec_url = entry.get("spec_url")
+            if not (isinstance(spec_url, str) and spec_url.strip()):
+                continue
+            _fetch_headers = {}
+            if entry.get("auth_header") and entry.get("auth_value"):
+                _fetch_headers[entry["auth_header"]] = entry["auth_value"]
+            try:
+                spec = fetch_openapi_spec(spec_url.strip(), headers=_fetch_headers or None)
+            except Exception:
+                continue
         try:
             out.extend(openapi_to_specs(
-                entry["spec"],
+                spec,
                 base_url=entry.get("base_url", ""),
                 name_prefix=entry.get("name_prefix", ""),
                 auth_header=entry.get("auth_header", ""),

@@ -291,6 +291,7 @@ def build_business_layer(
 
     # 外部工具连接 (RFC Stage1): 从 config agent.external_tools 注册 HTTP 外部工具,
     # 默认并入 agent 审批白名单 (human-in-loop)。无配置/失败均不阻断启动 (fail-safe)。
+    _ext_providers: list = []   # 生命周期管理: 留引用, 经 result 透出供退出时 close (MCP 子进程)
     try:
         from agent_module.tools.external import (
             build_providers_from_config, register_external_tools,
@@ -335,4 +336,6 @@ def build_business_layer(
         "bm25_index_path": bm25_index_path,
         # Task KKK (#97): 透传给 application_layer 让 ApiService /memory/* 路由可用
         "long_term_memory": long_term_memory,
+        # 生命周期管理: 外部工具 providers (含 MCP 连接), 退出时可逐个 .close() 释放子进程/会话
+        "external_tool_providers": _ext_providers,
     }

@@ -104,4 +104,15 @@
 4. **配置形式**: → ✅ **`config.yaml` 的 `agent.external_tools`**(HttpToolSpec dict 列表) + 兼容运行时 `register_tool`。
 5. **范围**: → ✅ 先建**机制 + 测试 spec**(用户之后填真实 API; 凭据建议走 env/加密 secret, 勿明文入配置)。
 
-> 用户拍板"推进 RFC"+"参考 codex/claude code 实现"; Q1-Q5 均已定 + 落地。已完成: Stage1 HTTP 连接器 + Stage2 MCP stdio 客户端 + 增量(MCP **HTTP/SSE 传输** `102e942` / **真实 server 集成测试**(自带 echo server, 真子进程) `fe10cab` / **OpenAPI 自动生成 HTTP 工具** `062cccb`)。剩: MCP **SSE 长连**(server→client 流式通知, 现 HTTP 只做请求/响应) + 连接生命周期管理 + OpenAPI `spec_url` 远程拉取。
+> 用户拍板"推进 RFC"+"参考 codex/claude code 实现"; Q1-Q5 均已定 + 落地。已完成: Stage1 HTTP 连接器 + Stage2 MCP stdio 客户端 + 增量(MCP **HTTP/SSE 传输** `102e942` / **真实 server 集成测试**(自带 echo server, 真子进程) `fe10cab` / **OpenAPI 自动生成 HTTP 工具** `062cccb`)。
+
+> **余量收尾 (2026-06-08)**:
+> - ✅ **OpenAPI `spec_url` 远程拉取**: `fetch_openapi_spec()` (SSRF 安全 + JSON/YAML 解析, fetch 可注入);
+>   `agent.openapi_tools` 每项可填 `spec_url` (远程) 或 `spec` (inline), entry 的 auth_* 也用于拉取。fail-safe 跳过。
+> - ✅ **连接生命周期管理**: `ExternalToolProvider.close()` (base no-op; `McpToolProvider` 覆写: 留已建连接引用,
+>   close 逐个释放/杀 stdio 子进程, fail-safe + 幂等); business_layer 经 `result["external_tool_providers"]` 透出
+>   providers 供管理。注: app 退出时统一 close 的 shutdown 钩子尚未接 (子进程随主进程退出回收, 影响小), 留作可选。
+> - ⏸️ **MCP SSE 长连** (server→client 流式通知): **暂缓**。现 HTTP 已支持请求/响应 (含解析 SSE 响应帧),
+>   但"持久 SSE 监听线程接收 server 主动通知"目前**无消费方** —— agent 启动时一次性 discover 工具表、不做动态刷新,
+>   故 `notifications/tools/list_changed` 等通知无人消费。此时建持久监听线程=造无用复杂度 (违 minimal-change)。
+>   **触发条件**: 待出现"动态刷新工具表/订阅 server 通知"的真实需求时再做 (届时与 close() 生命周期配套关闭监听)。

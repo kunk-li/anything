@@ -277,6 +277,7 @@ class McpToolProvider(ExternalToolProvider):
                  client_factory: Optional[Callable[[McpServerSpec], _McpClientBase]] = None):
         self.specs = [s for s in specs if s.enabled]
         self._client_factory = client_factory or _default_client_for
+        self._clients: List[_McpClientBase] = []   # 生命周期管理: 持有已建连接, 供 close() 释放
 
     def discover(self) -> List[ExternalToolDef]:
         out: List[ExternalToolDef] = []
@@ -286,6 +287,7 @@ class McpToolProvider(ExternalToolProvider):
                 tools = client.list_tools()
             except Exception:
                 continue  # fail-safe: server 连不上 → 跳过, 不拖垮启动
+            self._clients.append(client)   # 连上的 client 留引用, 退出时可 close (stdio 杀子进程)
             for t in tools:
                 rname = t.get("name") if isinstance(t, dict) else None
                 if not rname:
@@ -310,3 +312,13 @@ class McpToolProvider(ExternalToolProvider):
                         "data": None, "retryable": True}
             return _mcp_result_to_envelope(result)
         return tool
+
+    def close(self) -> None:
+        """生命周期管理: 关闭所有已建连接 (stdio 终止子进程, http 释放会话)。
+        逐个 fail-safe (单个关闭失败不影响其余); 幂等 (关后清空引用)。"""
+        for c in self._clients:
+            try:
+                c.close()
+            except Exception:
+                pass
+        self._clients = []

@@ -37,3 +37,8 @@ class ExternalToolProvider(ABC):
         实现须 **fail-safe**: 连接/解析失败应返回 `[]` 而非抛异常, 不拖垮启动。
         """
         ...
+
+    def close(self) -> None:
+        """释放该 provider 持有的连接/子进程 (生命周期管理)。默认 no-op (无状态 provider 如
+        HTTP 无需关)。持有长连接/子进程的 provider (如 MCP stdio) 覆写。须 fail-safe 不抛。"""
+        return None

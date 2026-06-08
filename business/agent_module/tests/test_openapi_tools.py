@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """外部工具连接 RFC · 增量: OpenAPI → HTTP 工具自动生成 (复用 Stage1 HttpToolProvider)。"""
+import json
 import unittest
+from unittest import mock
 
 from agent_module.tools.external import (
-    openapi_to_specs, build_providers_from_config, HttpToolProvider,
+    openapi_to_specs, build_providers_from_config, HttpToolProvider, fetch_openapi_spec,
 )
 from agent_module.tools.external.http_provider import make_http_tool
 
@@ -79,6 +81,86 @@ class TestBuildOpenapiFromConfig(unittest.TestCase):
         names = [d.name for d in providers[0].discover()]
         self.assertIn("api_getUser", names)
         self.assertIn("api_createUser", names)
+
+
+class TestFetchOpenapiSpec(unittest.TestCase):
+    """spec_url 远程拉取: SSRF 安全 + JSON/YAML 解析 (fetch 注入, 不发真网络)。"""
+
+    def test_fetch_json_spec(self):
+        def fake(method, url, headers, body, timeout, max_bytes):
+            return 200, json.dumps(_SAMPLE)
+        spec = fetch_openapi_spec("https://1.1.1.1/openapi.json", fetch=fake)
+        self.assertIn("paths", spec)
+
+    def test_non_2xx_raises(self):
+        def fake(*a):
+            return 404, "not found"
+        with self.assertRaises(RuntimeError):
+            fetch_openapi_spec("https://1.1.1.1/x", fetch=fake)
+
+    def test_ssrf_private_ip_rejected_before_fetch(self):
+        calls = []
+        def fake(*a):
+            calls.append(1)
+            return 200, "{}"
+        with self.assertRaises(ValueError):
+            fetch_openapi_spec("http://127.0.0.1/openapi.json", fetch=fake)
+        self.assertEqual(calls, [])          # SSRF 校验在 fetch 前, 私网根本不发请求
+
+    def test_non_dict_top_level_raises(self):
+        def fake(*a):
+            return 200, "[1, 2, 3]"
+        with self.assertRaises(ValueError):
+            fetch_openapi_spec("https://1.1.1.1/x", fetch=fake)
+
+    def test_yaml_fallback(self):
+        try:
+            import yaml  # noqa: F401
+        except Exception:
+            self.skipTest("PyYAML 不可用, 跳过 YAML 退化")
+        def fake(*a):
+            return 200, "openapi: 3.0.0\npaths: {}\n"
+        spec = fetch_openapi_spec("https://1.1.1.1/x", fetch=fake)
+        self.assertEqual(spec["openapi"], "3.0.0")
+
+
+class TestOpenapiSpecUrlFromConfig(unittest.TestCase):
+    """build_providers_from_config 走 spec_url 分支 (mock 掉远程拉取)。"""
+
+    class _Cfg:
+        def __init__(self, entry):
+            self._entry = entry
+        def get_config(self, k, default=None):
+            return [self._entry] if k == "agent.openapi_tools" else default
+
+    def test_spec_url_fetched_and_built(self):
+        cfg = self._Cfg({"spec_url": "https://1.1.1.1/openapi.json",
+                         "base_url": "https://1.1.1.1", "name_prefix": "rem_"})
+        with mock.patch("agent_module.tools.external.fetch_openapi_spec",
+                        return_value=_SAMPLE) as m:
+            providers = build_providers_from_config(cfg)
+        m.assert_called_once()
+        self.assertEqual(len(providers), 1)
+        names = [d.name for d in providers[0].discover()]
+        self.assertIn("rem_getUser", names)
+
+    def test_spec_url_fetch_failure_skipped(self):
+        # 拉取/解析失败 → 该项 fail-safe 跳过 → 无 provider (不阻断启动)
+        cfg = self._Cfg({"spec_url": "https://1.1.1.1/bad"})
+        with mock.patch("agent_module.tools.external.fetch_openapi_spec",
+                        side_effect=RuntimeError("boom")):
+            providers = build_providers_from_config(cfg)
+        self.assertEqual(providers, [])
+
+    def test_spec_url_auth_passed_to_fetch(self):
+        # entry 的 auth_* 应作为拉取 spec 的请求头传给 fetch
+        cfg = self._Cfg({"spec_url": "https://1.1.1.1/openapi.json",
+                         "auth_header": "Authorization", "auth_value": "Bearer T"})
+        with mock.patch("agent_module.tools.external.fetch_openapi_spec",
+                        return_value=_SAMPLE) as m:
+            build_providers_from_config(cfg)
+        _, kwargs = m.call_args
+        self.assertEqual(kwargs["headers"], {"Authorization": "Bearer T"})
 
 
 if __name__ == "__main__":
