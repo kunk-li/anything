@@ -166,7 +166,8 @@ class TestLocalDocumentParser(unittest.TestCase):
             f.write(b"123")
         with self.assertRaises(Exception) as ctx:
             self.parser.parse_file(invalid_path)
-        self.assertIn("UNSUPPORTED_FILE_TYPE", str(ctx.exception))
+        # RAGException 的 str() 是 message 不含 code; 错误码在 .code 属性上
+        self.assertEqual(ctx.exception.code, "UNSUPPORTED_FILE_TYPE")
 
     def test_parse_folder(self):
         res_list = self.parser.parse_folder(self.tmp_dir)
@@ -180,12 +181,12 @@ class TestLocalDocumentParser(unittest.TestCase):
     def test_parse_non_existent_file(self):
         with self.assertRaises(Exception) as ctx:
             self.parser.parse_file(os.path.join(self.tmp_dir, "nope.txt"))
-        self.assertIn("DOCUMENT_NOT_FOUND", str(ctx.exception))
+        self.assertEqual(ctx.exception.code, "DOCUMENT_NOT_FOUND")
 
     def test_parse_non_existent_folder(self):
         with self.assertRaises(Exception) as ctx:
             self.parser.parse_folder(os.path.join(self.tmp_dir, "nope_folder"))
-        self.assertIn("FOLDER_NOT_FOUND", str(ctx.exception))
+        self.assertEqual(ctx.exception.code, "FOLDER_NOT_FOUND")
 
 
 if __name__ == "__main__":

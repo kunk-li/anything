@@ -48,43 +48,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           # 测试 / 运行时额外依赖(主 requirements 中故意不 pin,以最大兼容性)
-          pip install pydantic faiss-cpu sentence-transformers
-          # 文档解析可选依赖(document_parser_module 已用 try/except 包裹这些
-          # import,即使不装也能跑 ABC 守护;但装上让 smoke test 有完整解析能力)
-          pip install xmltodict PyPDF2 python-docx pandas python-pptx
+          pip install pytest pydantic faiss-cpu sentence-transformers
+          # 文档解析可选依赖(document_parser_module / 其测试用 importorskip 包裹这些,
+          # 不装则相关测试 skip;装上让 smoke test + document_parser 测试完整跑)
+          pip install xmltodict PyPDF2 python-docx pandas python-pptx reportlab
 
       # =====================================================================
       # 阻塞性步骤 (失败则 CI 红): 单测 + ABC 守护
       # 这些不依赖外网 / LLM, 应该稳定通过
       # =====================================================================
 
-      - name: Run unit tests per module (9 modules / 122 tests)
+      # 全量 pytest (优化①修好 collection 后可一键跑): 覆盖所有模块 ~1161 tests, 取代
+      # 原硬编码 9 模块 unittest discover (漏 api_service/orchestrator/long_term_memory 等)。
+      # 可选重型依赖缺失的测试经 importorskip 优雅 skip, 不致 collection error。
+      - name: Run full test suite (pytest)
         run: |
           set -e
-          modules=(
-            "basic_support/schema_module"
-            "basic_support/deps_module"
-            "basic_support/config_module"
-            "data_layer/chunker_module"
-            "data_layer/vector_db_module"
-            "data_layer/document_store_module"
-            "business/rag_module"
-            "business/agent_module"
-            "interface/request_response_module"
-          )
-          failed=()
-          for m in "${modules[@]}"; do
-            echo "=== $m ==="
-            if ! python -m unittest discover -s "$m/tests" -v; then
-              failed+=("$m")
-            fi
-          done
-          if [ ${#failed[@]} -gt 0 ]; then
-            echo "FAILED modules: ${failed[*]}"
-            exit 1
-          fi
+          python -m pytest -q -p no:cacheprovider
 
-      - name: ABC alignment check (10 (Base, Impl) pairs)
+      - name: ABC alignment check (19 (Base, Impl) pairs)
         run: |
           python scripts/check_abc_alignment.py --ci
 
