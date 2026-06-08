@@ -1,7 +1,7 @@
 # 会话交接文档 (Session Handoff)
 
 > 给下一个会话的接力棒。无需读全程 transcript，读这份 + `MEMORY.md`(auto-memory 自动注入) 即可接上。
-> 最后更新: 2026-06-08 · 最新 commit: `3b59802` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
+> 最后更新: 2026-06-08 · 最新 commit: `3502f5c` · 分支: `main`(已同步 origin; 注: 网络间歇不稳, post-commit 自动 push 偶失败, 手动 `git push origin main` / 连通后重试即可)
 
 ---
 
@@ -18,6 +18,15 @@
 | **方向 4** 自主维护 | 自动思考/更新 (终极目标) | 🔧 建议性自主全档 done: 行为自反思/记忆健康/代码文档/定时提议通知/预授权自动(默认空); 终极目标持续演进 |
 
 ## 3. 已完成 (累计, 全在 origin/main)
+0新计划. **同会话再续 (2026-06-08): 用户采纳 8 条建设性意见 → 制定执行计划按序全做 (`b1aa738`..`3502f5c`)** — 全量 **1235 passed**/ABC 全绿/新能力全默认关。
+   ① **主 CI 切全量 pytest** (`b1aa738`): 硬编码 9 模块 → 全量 pytest (~1235); 修 document_parser 3 陈旧测试。"抽样"→"全量门禁"。
+   ② **配置中枢 schema** (`f525bfd`): `agent_module/config/schema.py` — 26+ flag 集中声明 + `dump_agent_config`(喂配置界面) + `validate_agent_config`(启动校验, 接 business_layer)。
+   ③ **模型分级路由 + token 预算** (`333e365`): 按任务复杂度路由便宜/强模型降本; observability `model_routing` ContextVar + LLMService generate/chat_stream 读取; 默认关/保守/fail-safe。`core/model_routing.py`。
+   ④ **execute 前处理抽 pipeline** (`1598fe7`): 77 行 → `components/task_preprocess.py::TaskPreprocessMixin` 可组合步骤; impl.py→1471。
+   ⑤ **VCR 流式回放** (`adfcae2`): `scripts/record_cassette.py` 录真 LLM + `tests/cassettes/*.json` + `test_stream_cassettes.py` CI 每 push 确定性回放 run_stream 抓流式漂移。
+   ⑥ **可见性面板** (`10de3f1`): `/memory/profile` + `/agent/maintenance/proposals|apply` + 前端记忆 tab "Agent 眼中的你"(画像5维)+"待审批维护"(一键批准)。给 ApiService 注入 `agent`。
+   ⑦ **统一配置界面 + 能力档位** (`f3645d3`): `/config/agent` dump/改(live) + presets(保守/均衡/进取) + 前端"配置"tab。`schema.apply_agent_config`/`apply_preset`。
+   ⑧ **自更新影子模式** (`3502f5c`): `core/self_update.py::ShadowSelfUpdate` — 改动提议先在隔离 git worktree 跑全量测试当安全闸, 全绿才提请人审批; **绝不自动应用**+默认关+advisory+fail-safe (`agent.enable_self_update`)。①→终极目标安全闭环。
 0新优. **同会话续 (2026-06-08): 用户问"可优化部分在哪" → 定优先级 ①②③ 全做 (`b7b9ce0`..`3b59802`)** —
    ① **修测试基线** (`b7b9ce0`): 全量 pytest 此前被 2 个 collection error 中断(无一键全绿 gate)。补 `OrchestratorException` 定义(per-domain 漏)+ document_parser 测试改 `pytest.importorskip`(重型可选库缺则 skip); 顺修被遮的 7 个 orchestrator 陈旧测试 + 补 tool_functions 测试。**基线 1159 passed/4 skipped/0 fail (~60s)**, 见 §7。
    ② **低风险小修** (`1256655`): app 退出收尾钩子(停 scheduler + 关 MCP 子进程, 闭环本周 close/stop)+ eval台 `_REFUSE_PAT` 收紧"无法访问"(误判"无法访问数据库")+ start_dev.bat 强制 UTF-8(`PYTHONUTF8`)。
@@ -120,7 +129,12 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 计算机操作 (computer_use 工具, 危险/默认审批) | `business/agent_module/tools/tools_impl/computer_use.py` (pyautogui lazy, backend 可注入) |
 | 只读本机工具 (不审批): 系统状态 / 软件版本用法 | `tools_impl/system_info.py` (CPU/内存/磁盘…) · `tools_impl/software_info.py` (lookup 版本+用法 / list 已装清单; backend 可注入) |
 | Agent 核心(execute 主循环 / `_post_verify` / parse_task / 超时 enforce) | `business/agent_module/core/impl.py` (1505 行; 优化③ 已抽 mixin) |
-| Agent mixin (SimpleAgent 多继承) | `core/components/`: react_engine / tool_executor / streaming / prompt_builder / **self_maintenance**(方向4) / **memory_injection**(记忆画像; `_refine_query`/`_inject_*`/`_extract_and_store_memory`) |
+| Agent mixin (SimpleAgent 多继承) | `core/components/`: react_engine / tool_executor / streaming / prompt_builder / **self_maintenance**(方向4) / **memory_injection**(记忆画像) / **task_preprocess**(execute 前处理流水线④) |
+| Agent 配置中枢 (②⑦) | `core/../config/schema.py`: AGENT_CONFIG_SCHEMA(26+ flag) + dump/validate/apply/presets; 接 `business_layer`(启动校验) + `/config/agent*`(ApiService agent 路由) |
+| 模型分级路由 (③) | `core/model_routing.py` (classify/pick/begin-end) + `observability/tracing.py` model_routing ContextVar + `llm_adapter/core/impl.py` generate/chat_stream 读取 |
+| 自更新影子模式 (⑧, 默认关) | `core/self_update.py::ShadowSelfUpdate` (隔离 worktree 跑全量测试当安全闸, 绝不自动应用) + agent `verify_self_update` |
+| VCR 流式回放 (⑤) | `scripts/record_cassette.py`(录) + `agent_module/tests/cassettes/*.json` + `tests/test_stream_cassettes.py`(CI 回放) |
+| 可见性面板 (⑥) | 后端 `/memory/profile` + `/agent/maintenance/*`; 前端 `modules/memory-panel.js`(画像+维护) · `modules/config-panel.js`(配置 tab⑦) |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
 | git hook 安装 | `scripts/install-git-hooks.sh` |

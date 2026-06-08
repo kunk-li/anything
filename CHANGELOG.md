@@ -5,6 +5,28 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-08 · 建设性意见执行计划 ①–⑧)
+
+> 用户采纳 8 条建设性意见 (+ 统一配置界面增强), 制定执行计划按序全做。commit `b1aa738`..`3502f5c`。
+> 终态: 全量 **1235 passed, 3 skipped, 0 fail** (含 3 VCR subtests); ABC 19 全绿; 默认行为不变 (新能力全默认关)。
+
+- **① 主 CI 切全量 pytest** (`b1aa738`): ci.yml 从硬编码 9 模块 unittest → 全量 pytest (~1175→1235),
+  补 pytest+reportlab; 修 document_parser 3 个陈旧测试。从"抽样"变"全量回归门禁"。
+- **② 配置中枢 schema** (`f525bfd`): `agent_module/config/schema.py` — 26+ flag 集中声明 (元数据/分组)
+  + `dump_agent_config` (喂配置界面) + `validate_agent_config` (启动校验未知 key, 接 business_layer)。
+- **③ 模型分级路由 + token 预算** (`333e365`): 按任务复杂度路由 便宜/强 模型 (qwen-max 贵 60-100x);
+  observability model_routing ContextVar + LLMService.generate/chat_stream 读取; 默认关/保守/fail-safe。
+- **④ execute 前处理抽 pipeline** (`1598fe7`): 77 行内联 → `task_preprocess.py::TaskPreprocessMixin`
+  可组合步骤 (refine→记忆→画像→历史→纠正); impl.py 1505→1471。
+- **⑤ VCR 流式录制回放** (`adfcae2`): `record_cassette.py` 录真 LLM 输出 + `test_stream_cassettes.py`
+  CI 每次 push 确定性回放 run_stream 抓流式漂移 (DummyLLM 抓不到); 3 条真实磁带。
+- **⑥ 可见性面板** (`10de3f1`): /memory/profile + /agent/maintenance/proposals|apply 后端 + 前端记忆
+  tab "Agent 眼中的你"(画像5维) + "待审批维护"(一键批准)。"懂你"从黑盒变可见; 方向4 提议有了消费方。
+- **⑦ 统一配置界面 + 能力档位** (`f3645d3`): /config/agent dump/改(live) + presets(保守/均衡/进取);
+  前端"配置"tab 分组开关 + 档位一键套用。消费②的 schema。
+- **⑧ 自更新影子模式** (`3502f5c`): `self_update.py::ShadowSelfUpdate` — 改动提议先在隔离 git worktree
+  跑全量测试当安全闸, 全绿才提请人审批; **绝不自动应用** + 默认关 + advisory + fail-safe。①→终极目标闭环。
+
 ## Unreleased (2026-06-08)
 
 > 主题: 接 backlog 4 件 (react解析/方向1调度/外部工具/方向4维护) + software_info 工具 +
