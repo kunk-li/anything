@@ -156,6 +156,15 @@ class SimpleAgent(
             "agent.query_refine_max_len", env_var="ANYTHING_AGENT_QUERY_REFINE_MAX_LEN",
             default=200, value_type=int,
         )
+        # UP-4 ask 模式: auto=歧义时静默改写问题(原行为) / ask=歧义大时反问澄清(不改写,
+        # 早退把一个澄清问题返回给用户)。默认 auto — 保持 enable_query_refine 开时的原行为不变;
+        # 单次可 extra_params.query_refine_mode 覆盖。仍受 enable_query_refine 总开关 + 各 gate 约束。
+        self.query_refine_mode = str(self.config.get_effective_value(
+            "agent.query_refine_mode", env_var="ANYTHING_AGENT_QUERY_REFINE_MODE",
+            default="auto", value_type=str,
+        ) or "auto").strip().lower()
+        if self.query_refine_mode not in ("auto", "ask"):
+            self.query_refine_mode = "auto"
 
         # 方向4 (自主维护 / 第一级 建议性自主): 默认关。按需 self_reflect() 检视自身历史执行
         # → LLM 元级反思 → 改进提议 (dry-run); apply 仅在人显式审批后把"教训"落长期记忆。
@@ -338,7 +347,26 @@ class SimpleAgent(
                 and self.long_term_memory is not None
                 and not extra_params.get("_skip_history_prefix")):
             try:
-                _refined, refine_meta = self._refine_query(task, memory_tenant, trace_id)
+                _refine_mode = str(extra_params.get("query_refine_mode")
+                                   or self.query_refine_mode).strip().lower()
+                _refined, refine_meta = self._refine_query(
+                    task, memory_tenant, trace_id, mode=_refine_mode)
+                if refine_meta and refine_meta.get("action") == "clarify":
+                    # UP-4 ask 模式: 歧义大 → 反问澄清, 不执行任务, 早退把澄清问题作为回答返回。
+                    # 用户的后续回答会作为新一轮请求进来 (本轮不落历史, 对齐 maintenance_scan 早退)。
+                    self.logger.info(f"[refine] ask 模式反问澄清 (不执行任务): trace_id={trace_id}")
+                    return {
+                        "code": "SUCCESS", "message": "clarification_needed",
+                        "data": {
+                            "answer": refine_meta["question"],
+                            "clarification_needed": True,
+                            "session_id": session_id, "trace_id": trace_id,
+                            "execution_mode": execution_mode,
+                        },
+                        "trace_id": trace_id, "retryable": False,
+                        "details": {"query_refinement": refine_meta},
+                        "cost_time": round(time.time() - start_time, 3),
+                    }
                 if refine_meta:
                     task = _refined
             except Exception as _rq_err:
@@ -1318,20 +1346,24 @@ class SimpleAgent(
         return "\n".join(lines) + task
 
     def _refine_query(
-        self, task: str, tenant_id: str, trace_id: Optional[str],
+        self, task: str, tenant_id: str, trace_id: Optional[str], mode: str = "auto",
     ) -> tuple:
         """UP-4 (方向1 阶段2): 用户问得含糊时, 基于画像把问题补全/澄清后再规划。
 
         区别于 _inject_user_profile(把画像当上下文附在 task 前): 这里直接改写"问题本身",
         让规划/检索拿到的是"用户本来就想问的更精确版本"。
 
-        返回 (refined_task, meta)。任一前提不满足 (问题已清楚 / 无画像 / 无 LLM / 解析失败
+        mode: "auto"=歧义时静默改写(原行为) / "ask"=歧义大时反问澄清(不改写, 返澄清问题)。
+        返回 (result, meta)。任一前提不满足 (问题已清楚 / 无画像 / 无 LLM / 解析失败
         / 安全阀拦截) 都返回 (task, None) — 主链路用原问题, 零副作用 (fail-open)。
-        meta = {"original", "refined", "reason"}, 由 execute 记到 details 透明可见。
+        auto 命中: result=改写后问题, meta={"action":"rewrite","original","refined","reason"};
+        ask 命中:  result=原 task(不改写), meta={"action":"clarify","original","question","reason"}
+                   → 由 execute 早退, 把 question 作为回答返回, 不执行任务。
+        meta 由 execute 记到 details 透明可见。
 
-        设计原则 (minimal-change + human-in-loop): 仅在确有歧义时改写, 严格保留原意,
-        只补"知道使用者偏好就能确定的缺省"(语言/技术栈/格式/范围/默认值),
-        绝不替用户臆造其没表达的新需求。改写是否发生、补了什么, 全程记 details 可回溯。
+        设计原则 (minimal-change + human-in-loop): 仅在确有歧义时介入, 严格保留原意,
+        auto 只补"知道使用者偏好就能确定的缺省"(语言/技术栈/格式/范围/默认值),
+        绝不替用户臆造其没表达的新需求; ask 则把不确定交还用户决定 (反问而非臆测)。
         """
         # gate 0: 已足够具体的长问题不折腾 (省 LLM, 也避免画蛇添足)
         if len(task) > self.query_refine_max_len:
@@ -1340,7 +1372,7 @@ class SimpleAgent(
         profile = self.long_term_memory.get_user_profile(tenant_id)
         if not profile:
             return task, None
-        # gate 2: 需要 LLM 通道做"判含糊 + 改写"
+        # gate 2: 需要 LLM 通道做"判含糊 + 改写/反问"
         llm = self._resolve_llm_planner(trace_id=trace_id)
         if llm is None:
             return task, None
@@ -1349,19 +1381,35 @@ class SimpleAgent(
                   "domain": "领域", "weakness": "需主动补位"}
         profile_lines = [f"- [{labels.get(dim, dim)}] {it}"
                          for dim, items in profile.items() for it in items]
-        prompt = (
-            "你在帮一个 AI 助手澄清用户的问题。下面给出这个用户的画像, 和用户刚提的问题。\n"
-            "判断该问题是否含糊/缺省到了 '知道用户偏好就能问得更准' 的程度, 并按规则处理:\n"
-            "1. 若问题已清楚完整, 或含糊点只能靠对话上文(而非画像)补 → needs_refine=false。\n"
-            "2. 若含糊且画像能补 → 基于画像补全缺省(语言/技术栈/格式/范围/默认值), "
-            "严格保留用户原意, 不得臆造用户没表达的新需求。\n"
-            "3. refined 应是 '用户本来就想问的更精确版本', 而不是你对问题的回答。\n"
-            f"\n[用户画像]\n" + "\n".join(profile_lines) +
-            f"\n\n[用户的问题]\n{task}\n"
-            '\n只输出 JSON(不要解释): '
-            '{"needs_refine": true/false, "refined": "改写后的问题(needs_refine=false 时留空)", '
-            '"reason": "一句话说明补了什么(中文)"}'
-        )
+        is_ask = str(mode).strip().lower() == "ask"
+        if is_ask:
+            prompt = (
+                "你在帮一个 AI 助手判断是否需要先向用户澄清问题。下面给出用户画像和用户刚提的问题。\n"
+                "判断该问题是否含糊到 '直接执行很可能跑偏、应先反问用户澄清' 的程度:\n"
+                "1. 若问题已足够清楚, 或缺省靠画像就能安全补全 → needs_clarify=false。\n"
+                "2. 若歧义较大 (多种合理理解 / 关键信息缺失, 画像也定不了) → needs_clarify=true, "
+                "并给出一个简短、具体、单一焦点的澄清问题(中文), 帮用户把需求说清。\n"
+                "3. clarify_question 是反问用户的问题, 不是你对问题的回答, 也不要替用户臆测答案。\n"
+                f"\n[用户画像]\n" + "\n".join(profile_lines) +
+                f"\n\n[用户的问题]\n{task}\n"
+                '\n只输出 JSON(不要解释): '
+                '{"needs_clarify": true/false, "clarify_question": "一句话澄清问题(needs_clarify=false 时留空)", '
+                '"reason": "一句话说明为何要澄清(中文)"}'
+            )
+        else:
+            prompt = (
+                "你在帮一个 AI 助手澄清用户的问题。下面给出这个用户的画像, 和用户刚提的问题。\n"
+                "判断该问题是否含糊/缺省到了 '知道用户偏好就能问得更准' 的程度, 并按规则处理:\n"
+                "1. 若问题已清楚完整, 或含糊点只能靠对话上文(而非画像)补 → needs_refine=false。\n"
+                "2. 若含糊且画像能补 → 基于画像补全缺省(语言/技术栈/格式/范围/默认值), "
+                "严格保留用户原意, 不得臆造用户没表达的新需求。\n"
+                "3. refined 应是 '用户本来就想问的更精确版本', 而不是你对问题的回答。\n"
+                f"\n[用户画像]\n" + "\n".join(profile_lines) +
+                f"\n\n[用户的问题]\n{task}\n"
+                '\n只输出 JSON(不要解释): '
+                '{"needs_refine": true/false, "refined": "改写后的问题(needs_refine=false 时留空)", '
+                '"reason": "一句话说明补了什么(中文)"}'
+            )
         try:
             raw = llm(prompt)
         except Exception as e:
@@ -1369,13 +1417,35 @@ class SimpleAgent(
             return task, None
 
         data = self._parse_reflection_json(raw)  # 复用通用 LLM-JSON 解析 (兼容围栏/前后文字)
-        if not isinstance(data, dict) or not data.get("needs_refine"):
+        if not isinstance(data, dict):
+            return task, None
+
+        if is_ask:
+            if not data.get("needs_clarify"):
+                return task, None
+            question = str(data.get("clarify_question") or "").strip()
+            # 安全阀: 澄清问题须非空且像个问题 (太短多半是 LLM 抽风)
+            if len(question) < 4:
+                return task, None
+            meta = {
+                "action": "clarify",
+                "original": task[:300],
+                "question": question[:300],
+                "reason": str(data.get("reason") or "")[:200],
+            }
+            self.logger.info(
+                f"[refine] ask 模式判定需澄清: trace_id={trace_id} reason={meta['reason']!r}"
+            )
+            return task, meta  # task 不改, execute 见 action=clarify 早退反问
+
+        if not data.get("needs_refine"):
             return task, None
         refined = str(data.get("refined") or "").strip()
         # 安全阀: 改写结果须非空, 且不能比原问题短太多 (防 LLM 把问题"截没了"/答非所问)
         if not refined or len(refined) < max(4, len(task) // 4):
             return task, None
         meta = {
+            "action": "rewrite",
             "original": task[:300],
             "refined": refined[:300],
             "reason": str(data.get("reason") or "")[:200],

@@ -137,6 +137,95 @@ class TestRefineQuery(unittest.TestCase):
         self.assertEqual(refined, "写个排序")
         self.assertIsNone(meta)
 
+    def test_auto_mode_meta_has_rewrite_action(self):
+        # auto 命中: meta 带 action=rewrite (与 ask 的 clarify 区分, execute 据此分流)
+        llm = _RecordingLLM(
+            '{"needs_refine": true, "refined": "用 Python 写带类型标注的快排并加 pytest", '
+            '"reason": "补全偏好"}'
+        )
+        agent = self._agent(llm)
+        refined, meta = agent._refine_query("写个排序", "default", "tr1")  # 默认 auto
+        self.assertEqual(meta["action"], "rewrite")
+        self.assertIn("Python", refined)
+
+    # ---- UP-4 ask 模式 (歧义大反问澄清而非静默改写) ----
+    def test_ask_mode_ambiguous_returns_clarify_question(self):
+        llm = _RecordingLLM(
+            '{"needs_clarify": true, '
+            '"clarify_question": "你是想要命令行工具还是带界面的程序?", '
+            '"reason": "用途不明确, 多种合理理解"}'
+        )
+        agent = self._agent(llm)
+        result, meta = agent._refine_query("帮我做个工具", "default", "tr1", mode="ask")
+        self.assertEqual(result, "帮我做个工具")        # ask 不改写原问题
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["action"], "clarify")
+        self.assertIn("命令行", meta["question"])
+        self.assertTrue(meta["reason"])
+        self.assertEqual(len(llm.calls), 1)
+        self.assertIn("needs_clarify", llm.calls[0])    # 走的是 ask 分支提示词
+
+    def test_ask_mode_clear_query_no_clarify(self):
+        llm = _RecordingLLM('{"needs_clarify": false, "clarify_question": "", "reason": ""}')
+        agent = self._agent(llm)
+        task = "用 Python 写快排并加 pytest 测试"
+        result, meta = agent._refine_query(task, "default", "tr1", mode="ask")
+        self.assertEqual(result, task)
+        self.assertIsNone(meta)
+
+    def test_ask_mode_empty_question_fail_open(self):
+        # needs_clarify=true 但澄清问题过短/空 → 安全阀拦截, 不反问 (用原问题继续)
+        llm = _RecordingLLM('{"needs_clarify": true, "clarify_question": "?", "reason": "x"}')
+        agent = self._agent(llm)
+        result, meta = agent._refine_query("帮我做个工具", "default", "tr1", mode="ask")
+        self.assertEqual(result, "帮我做个工具")
+        self.assertIsNone(meta)
+
+    def test_ask_mode_malformed_json_fail_open(self):
+        llm = _RecordingLLM("这不是 JSON")
+        agent = self._agent(llm)
+        result, meta = agent._refine_query("帮我做个工具", "default", "tr1", mode="ask")
+        self.assertEqual(result, "帮我做个工具")
+        self.assertIsNone(meta)
+
+
+class TestAskModeExecute(unittest.TestCase):
+    """UP-4 ask 模式 execute 端到端: 歧义大 → 早退反问澄清, 不执行任务。"""
+
+    def _agent(self, llm):
+        agent = SimpleAgent(
+            tool_registry=_Reg(), llm_planner=llm,
+            long_term_memory=_ltm_with_profile(),
+        )
+        agent.enable_query_refine = True
+        agent.query_refine_mode = "ask"
+        agent.enable_self_verify = False  # 隔离: 早退在校验前, 但显式关防干扰
+        agent.use_llm_planner = False     # 隔离: 不让 parse_task 另调 LLM
+        return agent
+
+    def test_execute_ask_mode_early_returns_clarification(self):
+        llm = _RecordingLLM(
+            '{"needs_clarify": true, "clarify_question": "你指的是哪个项目的文档?", '
+            '"reason": "范围不明"}'
+        )
+        agent = self._agent(llm)
+        resp = agent.execute({"task": "整理文档", "session_id": "s1", "trace_id": "t1"})
+        self.assertEqual(resp["code"], "SUCCESS")
+        self.assertEqual(resp["message"], "clarification_needed")
+        self.assertTrue(resp["data"]["clarification_needed"])
+        self.assertIn("哪个项目", resp["data"]["answer"])
+        self.assertEqual(resp["details"]["query_refinement"]["action"], "clarify")
+        self.assertEqual(len(llm.calls), 1)  # 早退: 只调 refine 一次, 没执行任务
+
+    def test_execute_auto_mode_does_not_early_return(self):
+        # auto 模式即便改写也继续执行 (不早退反问) — 与 ask 区分
+        agent = self._agent(llm=_RecordingLLM(
+            '{"needs_refine": true, "refined": "用 Python 整理项目文档目录", "reason": "补全语言"}'
+        ))
+        agent.query_refine_mode = "auto"
+        resp = agent.execute({"task": "整理文档", "session_id": "s2", "trace_id": "t2"})
+        self.assertNotEqual(resp.get("message"), "clarification_needed")
+
 
 class TestRefineConfig(unittest.TestCase):
     def test_defaults(self):
@@ -146,6 +235,7 @@ class TestRefineConfig(unittest.TestCase):
         )
         self.assertFalse(agent.enable_query_refine)   # 默认关
         self.assertEqual(agent.query_refine_max_len, 200)
+        self.assertEqual(agent.query_refine_mode, "auto")  # UP-4 ask 模式默认 auto
 
 
 if __name__ == "__main__":

@@ -109,6 +109,11 @@ agent:
   enable_self_verify: true
   verify_mode: "auto"
   max_correction: 1
+  # UP-4 (方向1) query refinement: 含糊问题基于画像优化提问。总开关 enable_query_refine
+  # 默认 false(关); query_refine_max_len 默认 200(均走代码默认, 此处不赘列)。
+  # query_refine_mode: auto=歧义时静默改写问题(原行为) / ask=歧义大时反问澄清(不改写,
+  # 早退把一个澄清问题返回给用户)。单次可 extra_params.query_refine_mode 覆盖。
+  query_refine_mode: "auto"
 
 document_store:
   dir: "documents"
