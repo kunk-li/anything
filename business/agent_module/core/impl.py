@@ -222,6 +222,18 @@ class SimpleAgent(
             default=False, value_type=bool,
         )
 
+        # 用户分析流程 (analyze_user): 默认关。开后主动分析使用者交互历史 → 提炼工作流/习惯/薄弱点 →
+        # 洞察(只读) + 画像增强提议(审批反哺)。user_analysis_every_n>0 时每 N 个任务后台自动分析一次。
+        self.enable_user_analysis = self.config.get_effective_value(
+            "agent.enable_user_analysis", env_var="ANYTHING_AGENT_USER_ANALYSIS",
+            default=False, value_type=bool,
+        )
+        self.user_analysis_every_n = self.config.get_effective_value(
+            "agent.user_analysis_every_n", env_var="ANYTHING_AGENT_USER_ANALYSIS_EVERY_N",
+            default=0, value_type=int,
+        )
+        self._user_analysis_counter = 0   # 每 N 轮自动分析的计数 (进程内, 重启重置)
+
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
         default_dangerous = [
@@ -330,6 +342,17 @@ class SimpleAgent(
                                 or ("behavior", "memory", "code_doc")),
                     auto_apply=extra_params.get("auto_apply"),
                 ),
+                "trace_id": trace_id, "retryable": False, "details": None,
+                "cost_time": round(time.time() - start_time, 3),
+            }
+
+        # 用户分析流程: user_analysis 请求 (可由 TaskScheduler 周期触发) → 早退跑 analyze_user,
+        # 不走正常任务执行。默认关 (须 enable_user_analysis)。
+        if extra_params.get("user_analysis") and getattr(self, "enable_user_analysis", False):
+            return {
+                "code": "SUCCESS", "message": "user_analysis",
+                "data": self.analyze_user(
+                    tenant_id=self._memory_tenant(request), trace_id=trace_id),
                 "trace_id": trace_id, "retryable": False, "details": None,
                 "cost_time": round(time.time() - start_time, 3),
             }

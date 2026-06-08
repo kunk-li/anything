@@ -26,6 +26,7 @@ from .self_reflection import (
     aggregate_memory_signals, propose_from_memory_signals,
     scan_code_doc_health, propose_from_code_doc_signals,
 )
+from .user_analysis import aggregate_user_signals, UserAnalysisInspector, PROFILE_DIMS
 
 
 class SelfMaintenanceMixin:
@@ -339,6 +340,121 @@ class SelfMaintenanceMixin:
                 "event": "maintenance_scan",
                 "tenant_id": tenant_id, "trace_id": trace_id,
                 "proposal_count": len(proposals), "by_domain": by_domain,
+            })
+        except Exception:
+            pass
+
+    # ============================================================
+    # 用户分析流程 (analyze_user): 主动分析使用者 — 对称于上面的 self_reflect(分析 agent 自己)
+    # ============================================================
+    def analyze_user(
+        self, tenant_id: str = "default", trace_id: Optional[str] = None,
+        max_facts: int = 200, context: str = "",
+    ) -> Dict[str, Any]:
+        """主动分析使用者: 长期记忆 → LLM 提炼 工作流程/习惯/反复需求/领域/薄弱点 →
+        insights(只读总览) + proposals(画像增强, dry-run, 须 apply_user_insights 人审批反哺)。
+
+        **默认关** (agent.enable_user_analysis); 全程 fail-open (出错返空, 绝不阻断)。
+        区别于 get_user_profile(被动分桶聚合) — 这里是主动提炼"这个人怎么做事"。
+        """
+        if not getattr(self, "enable_user_analysis", False):
+            return {"enabled": False, "insights": [], "proposals": [],
+                    "note": "user_analysis 未启用 (开: agent.enable_user_analysis)"}
+        if self.long_term_memory is None:
+            return {"enabled": True, "insights": [], "proposals": [], "note": "未接长期记忆"}
+        try:
+            facts = self.long_term_memory.list_facts(tenant_id, limit=max_facts)
+            signals = aggregate_user_signals(facts)
+        except Exception as e:
+            self.logger.warning(f"[user_analysis] 聚合失败 (返回空): trace_id={trace_id} err={e}")
+            return {"enabled": True, "insights": [], "proposals": [], "note": f"聚合异常: {e}"}
+        llm = self._resolve_llm_planner(trace_id=trace_id)
+        if llm is None:
+            return {"enabled": True, "insights": [], "proposals": [], "signals": signals,
+                    "note": "无 LLM 通道, 只给聚合信号不分析"}
+        try:
+            result = UserAnalysisInspector(llm_call=llm).analyze(signals, context=context)
+        except Exception as e:
+            self.logger.warning(f"[user_analysis] 分析失败 (返回空): trace_id={trace_id} err={e}")
+            result = {"insights": [], "proposals": []}
+        self.logger.info(
+            f"[user_analysis] tenant={tenant_id} → {len(result.get('insights', []))} 洞察 / "
+            f"{len(result.get('proposals', []))} 画像提议: trace_id={trace_id}"
+        )
+        return {
+            "enabled": True, "tenant_id": tenant_id,
+            "insights": result.get("insights", []),
+            "proposals": [p.to_dict() for p in result.get("proposals", [])],
+            "note": "dry-run: insights 只读; proposals 须 apply_user_insights 审批后反哺画像",
+        }
+
+    def apply_user_insights(
+        self, proposals: List[Dict[str, Any]], approved_ids: List[str],
+        tenant_id: str = "default", trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """把【人审批】的画像增强提议写回长期记忆 (content_type=dim, tags=['user_analysis'])。
+        非审批 / 非法 dim / 无 long_term_memory 一律跳过。human-in-loop; 闭环反哺 always-on 画像。"""
+        approved = set(approved_ids or [])
+        if self.long_term_memory is None:
+            return {"applied": 0, "details": [{"result": "skip_no_memory"}]}
+        applied = 0
+        details: List[Dict[str, Any]] = []
+        for p in (proposals or []):
+            if not isinstance(p, dict) or p.get("id") not in approved:
+                continue
+            dim = str(p.get("dim") or "").strip().lower()
+            content = str(p.get("content") or "").strip()
+            if dim not in PROFILE_DIMS or not content:
+                details.append({"id": p.get("id"), "result": f"skip_invalid:dim={dim}"})
+                continue
+            try:
+                from long_term_memory_module import Fact
+                f = Fact.make(
+                    content=content, tenant_id=tenant_id, mutability="refinable",
+                    content_type=dim, digest=content[:100], tags=["user_analysis"],
+                )
+                self.long_term_memory.add_fact(f)
+                applied += 1
+                details.append({"id": p.get("id"), "dim": dim, "result": "recorded", "fact_id": f.fact_id})
+            except Exception as e:
+                details.append({"id": p.get("id"), "result": f"error: {e}"})
+        self.logger.info(f"[user_analysis] apply: {applied} 条反哺画像: trace_id={trace_id}")
+        return {"applied": applied, "details": details}
+
+    def _maybe_auto_user_analysis(self, tenant_id: str, trace_id: Optional[str] = None) -> None:
+        """每 N 个任务自动跑一次 user_analysis (后台线程, advisory)。默认关 (every_n=0)。
+        结果写审计通知 (人经面板/审计审阅), **不自动反哺画像** (反哺仍须 apply_user_insights 审批)。"""
+        n = getattr(self, "user_analysis_every_n", 0) or 0
+        if not (getattr(self, "enable_user_analysis", False) and n > 0):
+            return
+        self._user_analysis_counter = getattr(self, "_user_analysis_counter", 0) + 1
+        if self._user_analysis_counter < n:
+            return
+        self._user_analysis_counter = 0
+
+        import threading
+
+        def _bg():
+            try:
+                result = self.analyze_user(tenant_id=tenant_id, trace_id=trace_id)
+                self._notify_user_analysis(result, tenant_id, trace_id)
+            except Exception:
+                pass
+        threading.Thread(target=_bg, name="user-analysis", daemon=True).start()
+
+    def _notify_user_analysis(self, result, tenant_id, trace_id) -> None:
+        """通知: 写一条 user_analysis 审计记录 (洞察/提议数)。失败静默。"""
+        try:
+            from datetime import datetime, timezone
+            al = getattr(getattr(self, "deps", None), "audit_logger", None)
+            if al is None:
+                from audit_module import get_audit_logger
+                al = get_audit_logger()
+            al.write({
+                "timestamp_iso": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "event": "user_analysis", "tenant_id": tenant_id, "trace_id": trace_id,
+                "insight_count": len((result or {}).get("insights", [])),
+                "proposal_count": len((result or {}).get("proposals", [])),
             })
         except Exception:
             pass

@@ -72,5 +72,37 @@ class TestConfigAgentRoutes(unittest.TestCase):
         self.assertEqual(client.post("/config/agent", json={}).status_code, 501)
 
 
+class TestUserAnalysisRoutes(unittest.TestCase):
+    def test_get_gated_off_default(self):
+        svc, agent = _svc()
+        r = TestClient(svc.app).get("/agent/user-analysis?tenant_id=t1")
+        self.assertEqual(r.status_code, 200)
+        self.assertIs(r.json()["data"]["enabled"], False)   # 默认关
+
+    def test_get_enabled(self):
+        svc, agent = _svc()
+        agent.enable_user_analysis = True
+        r = TestClient(svc.app).get("/agent/user-analysis?tenant_id=t1")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["data"]["enabled"])         # 开后 enabled (无 LLM → 洞察空)
+
+    def test_apply(self):
+        from long_term_memory_module import LongTermMemoryImpl
+        from state_backend_module import InMemoryBackend
+        agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None,
+                            long_term_memory=LongTermMemoryImpl(backend=InMemoryBackend()))
+        svc = ApiService(handler=_MockHandler(), agent=agent)
+        svc.auth_enabled = False
+        body = {"proposals": [{"id": "ua_0", "dim": "domain", "content": "Python 开发"}],
+                "approved_ids": ["ua_0"]}
+        r = TestClient(svc.app).post("/agent/user-analysis/apply?tenant_id=t1", json=body)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["data"]["applied"], 1)
+
+    def test_no_agent_501(self):
+        svc, _ = _svc(with_agent=False)
+        self.assertEqual(TestClient(svc.app).get("/agent/user-analysis").status_code, 501)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,13 @@ AGENT_CONFIG_SCHEMA: List[ConfigField] = [
     ConfigField("agent.enable_self_update", "enable_self_update", "bool", False,
                 "ANYTHING_AGENT_SELF_UPDATE", "自主维护",
                 "影子模式自更新: 改动提议先在隔离 worktree 跑全量测试当安全闸 (绝不自动应用; 默认关)"),
+    # 用户分析 (analyze_user, 方向1 深化)
+    ConfigField("agent.enable_user_analysis", "enable_user_analysis", "bool", False,
+                "ANYTHING_AGENT_USER_ANALYSIS", "用户分析",
+                "主动分析使用者交互历史 → 工作流/习惯洞察 + 画像增强提议 (审批反哺; 默认关)"),
+    ConfigField("agent.user_analysis_every_n", "user_analysis_every_n", "int", 0,
+                "ANYTHING_AGENT_USER_ANALYSIS_EVERY_N", "用户分析",
+                "每 N 个任务后台自动分析一次 (0=关; 需 enable_user_analysis)"),
     # 技能
     ConfigField("agent.enable_skill_distill", "enable_skill_distill", "bool", False,
                 "ANYTHING_AGENT_SKILL_DISTILL", "技能", "成功复杂任务后台提炼成可复用 skill (默认关)"),

@@ -250,4 +250,9 @@ class MemoryMixin:
                 f"[memory] 落盘 {count} 条 fact: tenant={tenant_id} session={session_id} "
                 f"trace_id={trace_id}"
             )
+        # 用户分析"每 N 轮自动"钩子 (默认关; 后台 advisory, 不阻断主响应)
+        try:
+            self._maybe_auto_user_analysis(tenant_id, trace_id)
+        except Exception:
+            pass
         return count
