@@ -7,8 +7,17 @@
 
 ## Unreleased (2026-06-08)
 
-> 主题: 接 backlog 往下做 (用户定优先级: react解析容错 → 方向1调度 → 外部工具余量 → 方向4定时维护)。
-> 本轮 4 件。commit `4ac29e7`..`af680ec`。agent 全套 413 + 广扫 648 passed; ABC ✓ (19 对)。
+> 主题: 接 backlog 往下做 (用户定优先级: react解析容错 → 方向1调度 → 外部工具余量 → 方向4定时维护)
+> 4 件 + 用户新需求 software_info 工具。commit `4ac29e7`..`95f4fa1`。agent 全套 431 passed; ABC ✓ (19 对)。
+
+### 新工具 (用户需求: "查安装软件的版本信息和使用说明")
+- **software_info** (`95f4fa1`): 只读 agent 工具 (照 system_info 范式, 不进审批)。`action=lookup`
+  给软件名 → 版本+用法 (PATH 命令跑固定 --version/--help, Windows 还试 /?; GUI 软件退到卸载
+  注册表给版本+安装位置); `action=list` 列已装软件清单 (注册表为主, 退化 PATH 命令, 支持 filter/limit)。
+  安全: 只跑 PATH 已存在程序 + 固定参数 + shell=False + 软件名强校验(挡空格/路径分隔/元字符) +
+  超时/截断。Windows 健壮性: 跳过 Microsoft Store 0 字节 App Execution Alias 壳 (python 之类) +
+  读不到版本时退注册表。`business_layer` 接线; eval 台 +"软件版本"任务。test +18; 亲验真机+真 agent:
+  git→2.47.1 / python→Miniconda3 Python 3.13.13。
 
 ### 治延迟 + 健壮性
 - **react 解析器容错抠 final_answer** (`4ac29e7`): qwen 长答案 react JSON 常畸形 (未转义换行 /

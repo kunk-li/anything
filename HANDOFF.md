@@ -23,7 +23,8 @@
    ② **UP-4 ask 模式** (`da666f9`, 方向1): query refinement 加 ask 模式 — 歧义大、画像也定不了时反问澄清而非静默改写; execute 见 `action=clarify` 早退返 `clarification_needed`。`agent.query_refine_mode` 默认 auto (原行为不变)。仅非流式 execute。test +7
    ③ **TaskScheduler 接线 + 自维护定时** (`a7902d2`, 方向1+方向4 共同缺口): scheduler 类/路由/测早齐但从未在 app 实例化 → `_build_scheduler` 按配置组装+启动+注入 ApiService (**默认关**)。配 `agent.maintenance_schedule` 即注册 maintenance_scan 定时任务 (仅 `enable_self_reflection=true` 才注册=防呆; scope=["memory"]=方向1 / 省略=方向4 三域)。补 `build_maintenance_task` + `cancel_task` 别名。亲验经真 handler 跑通。test +7
    ④ **外部工具余量** (`af680ec`): OpenAPI `spec_url` 远程拉取 (`fetch_openapi_spec`, SSRF 安全 + JSON/YAML) + MCP 连接生命周期 `close()` (McpToolProvider 留连接引用释放子进程; business_layer 透出 `external_tool_providers`)。**MCP SSE 长连暂缓** (无消费方; RFC 记触发条件)。test +12
-   全程: agent **413** + 广扫 648 passed; ABC 19 全绿
+   ⑤ **software_info 工具** (`95f4fa1`, 用户新需求"查安装软件版本+使用说明"): 只读 agent 工具 (照 system_info 范式, 不进审批)。`lookup` 给软件名→版本+用法 (PATH 命令跑 `--version`/`--help`; GUI 软件退卸载注册表给版本+位置); `list` 列已装清单。安全: 只跑 PATH 已存在程序+固定参数+shell=False+名强校验。Windows 跳过 Store 0 字节 alias 壳 + 退注册表。test +18; 亲验真 agent: git→2.47.1 / python→Miniconda3 3.13.13
+   全程: agent **431** + 广扫 passed; ABC 19 全绿
 0旧. **会话 (2026-06-05): 研究 Hermes+superpowers→落地技能学习闭环 + 建评测台 + 治延迟 + 修流式健壮性串 (全在 origin/main, `da52410`..`ee44ff9`)** —
    ① **#1 技能自动沉淀** (`d7d1b66`, 借鉴 NousResearch/hermes-agent 学习闭环): 成功且复杂(≥`skill_distill_min_tools`工具)的 agent 任务收尾, 后台线程 LLM 把"任务→工具→做法"提炼成可复用 skill 写库(`skills/_auto_*.md`), 下次同类自动匹配。`SkillRegistry.save_skill`/`find_by_triggers`; **默认关** `agent.enable_skill_distill`; fail-open。test 9 例
    ② **#2 提示词缓存** (`19a0bd9`): react prompt 重排 [稳定前缀(记忆+赋能前言+工具表+格式)]→[任务块]→[易变(历史+迭代)], 命中 qwen prefix cache 降本+缩 TTFT
@@ -112,6 +113,7 @@ PYTHONPATH=... $PY scripts/check_abc_alignment.py
 | 自反思 / 自维护 (方向4) | `business/agent_module/core/components/self_reflection.py` |
 | 外部工具连接 (HTTP 连接器 + MCP stdio/HTTP + OpenAPI 生成) | `business/agent_module/tools/external/` (base/http_provider/mcp_provider/openapi/__init__) + `run/factories/business_layer.py` 接线 |
 | 计算机操作 (computer_use 工具, 危险/默认审批) | `business/agent_module/tools/tools_impl/computer_use.py` (pyautogui lazy, backend 可注入) |
+| 只读本机工具 (不审批): 系统状态 / 软件版本用法 | `tools_impl/system_info.py` (CPU/内存/磁盘…) · `tools_impl/software_info.py` (lookup 版本+用法 / list 已装清单; backend 可注入) |
 | Agent 核心(验证接入 `_post_verify` / 画像注入 `_inject_user_profile` / 超时 enforce) | `business/agent_module/core/impl.py` |
 | 长期记忆(分层/加密/两级检索/画像/整合) | `basic_support/long_term_memory_module/core/impl.py` |
 | ABC 检查脚本 | `scripts/check_abc_alignment.py` |
