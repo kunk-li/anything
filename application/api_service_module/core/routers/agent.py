@@ -187,3 +187,77 @@ class AgentRoutesMixin:
                      "data": None, "trace_id": trace_id, "retryable": False, "details": None},
                     status_code=500,
                 )
+
+        # 执行计划⑦ (统一配置界面 + 能力档位): 读/改 agent 开关 (运行期 live) + 一键档位。
+        # 消费②的配置 schema 当数据源。⚠️ 能改自主能力开关, 生产应在网关加 admin 鉴权 (同 /config/models)。
+        def _agent_or_503(trace_id):
+            agent = getattr(self, "agent", None)
+            if agent is None:
+                return None, JSONResponse(
+                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=501)
+            return agent, None
+
+        @self.app.get("/config/agent")
+        async def config_agent_get(request: Request):
+            trace_id = request.state.trace_id
+            agent, err = _agent_or_503(trace_id)
+            if err:
+                return err
+            from agent_module.config.schema import dump_agent_config
+            return JSONResponse({
+                "code": "SUCCESS", "message": "ok",
+                "data": {"fields": dump_agent_config(self.config, agent)},
+                "trace_id": trace_id, "retryable": False, "details": None,
+            })
+
+        @self.app.post("/config/agent")
+        async def config_agent_set(request: Request):
+            trace_id = request.state.trace_id
+            agent, err = _agent_or_503(trace_id)
+            if err:
+                return err
+            from agent_module.config.schema import apply_agent_config, dump_agent_config
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            updates = body.get("updates") if isinstance(body, dict) else None
+            if not isinstance(updates, dict):
+                updates = body if isinstance(body, dict) else {}
+            result = apply_agent_config(agent, updates)
+            result["fields"] = dump_agent_config(self.config, agent)
+            return JSONResponse({
+                "code": "SUCCESS", "message": "ok", "data": result,
+                "trace_id": trace_id, "retryable": False, "details": None,
+            })
+
+        @self.app.get("/config/agent/presets")
+        async def config_agent_presets(request: Request):
+            trace_id = request.state.trace_id
+            from agent_module.config.schema import AGENT_CONFIG_PRESETS
+            return JSONResponse({
+                "code": "SUCCESS", "message": "ok",
+                "data": {"presets": AGENT_CONFIG_PRESETS},
+                "trace_id": trace_id, "retryable": False, "details": None,
+            })
+
+        @self.app.post("/config/agent/preset")
+        async def config_agent_apply_preset(request: Request):
+            trace_id = request.state.trace_id
+            agent, err = _agent_or_503(trace_id)
+            if err:
+                return err
+            from agent_module.config.schema import apply_preset, dump_agent_config
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            name = (body or {}).get("name") or (body or {}).get("preset")
+            result = apply_preset(agent, name)
+            result["fields"] = dump_agent_config(self.config, agent)
+            return JSONResponse({
+                "code": "SUCCESS", "message": "ok", "data": result,
+                "trace_id": trace_id, "retryable": False, "details": None,
+            })

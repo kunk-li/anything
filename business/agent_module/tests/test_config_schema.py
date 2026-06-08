@@ -6,6 +6,7 @@ from agent_module.core.impl import SimpleAgent
 from agent_module.config.schema import (
     AGENT_CONFIG_SCHEMA, KNOWN_AGENT_KEYS,
     dump_agent_config, validate_agent_config,
+    apply_agent_config, apply_preset, AGENT_CONFIG_PRESETS,
 )
 
 
@@ -89,6 +90,57 @@ class TestValidate(unittest.TestCase):
         # 守护: config.yaml 的 agent.* 顶层 key 必须全在 schema 里 (新增 config 须同步 schema)
         agent = _agent()
         self.assertEqual(validate_agent_config(agent.config), [])
+
+
+class TestApplyConfig(unittest.TestCase):
+    def test_sets_attrs_with_coerce(self):
+        agent = _agent()
+        r = apply_agent_config(agent, {"agent.execution_strategy": "single_shot",
+                                       "agent.max_react_iterations": 7,
+                                       "agent.enable_query_refine": "true"})
+        self.assertEqual(agent.execution_strategy, "single_shot")
+        self.assertEqual(agent.max_react_iterations, 7)
+        self.assertIs(agent.enable_query_refine, True)        # "true" → bool
+        self.assertEqual(len(r["applied"]), 3)
+
+    def test_choices_validation_errors(self):
+        agent = _agent()
+        before = agent.verify_mode
+        r = apply_agent_config(agent, {"agent.verify_mode": "nonsense"})
+        self.assertTrue(r["errors"])
+        self.assertEqual(agent.verify_mode, before)            # 非法值不改
+
+    def test_skips_unknown_and_no_attr(self):
+        agent = _agent()
+        r = apply_agent_config(agent, {"agent.bogus": 1, "agent.maintenance_schedule": "@daily 04:00"})
+        self.assertIn("agent.bogus", r["skipped"])             # 未知
+        self.assertIn("agent.maintenance_schedule", r["skipped"])  # 无 attr (工厂期读)
+
+    def test_list_coerced_to_set_when_current_is_set(self):
+        agent = _agent()
+        apply_agent_config(agent, {"agent.tool_approval_required": ["shell_exec", "py_sandbox"]})
+        self.assertEqual(agent.tool_approval_required, {"shell_exec", "py_sandbox"})
+
+    def test_preset_aggressive(self):
+        agent = _agent()
+        r = apply_preset(agent, "aggressive")
+        self.assertEqual(r["preset"], "aggressive")
+        self.assertTrue(agent.enable_self_reflection)
+        self.assertEqual(agent.query_refine_mode, "ask")
+
+    def test_preset_conservative_turns_off_autonomy(self):
+        agent = _agent()
+        apply_preset(agent, "aggressive")
+        apply_preset(agent, "conservative")
+        self.assertFalse(agent.enable_self_reflection)
+        self.assertFalse(agent.enable_query_refine)
+
+    def test_preset_unknown_errors(self):
+        r = apply_preset(_agent(), "nope")
+        self.assertTrue(r["errors"])
+
+    def test_presets_exist(self):
+        self.assertEqual(set(AGENT_CONFIG_PRESETS), {"conservative", "balanced", "aggressive"})
 
 
 if __name__ == "__main__":

@@ -364,6 +364,13 @@
             window.AnythingApp._adminPanel = adminPanel;
         }
 
+        // 执行计划⑦: 统一配置面板 — 工厂注入 + bindEvents (preset 按钮 / 刷新)
+        if (window.AnythingApp && window.AnythingApp.configPanel) {
+            const cfgPanel = window.AnythingApp.configPanel({ els, t, toast, escapeHtml });
+            window.AnythingApp._configPanel = cfgPanel;
+            cfgPanel.bindEvents();
+        }
+
         // Task SSS (#105) + VVVV (#108): 多会话切换 bindEvents (左侧 sidebar)
         if (els.sessionsRefreshBtn) els.sessionsRefreshBtn.addEventListener('click', refreshSessions);
         if (els.sessionsNewBtn) els.sessionsNewBtn.addEventListener('click', createNewSession);
@@ -1479,6 +1486,10 @@
                 // Task KKK (#97): 切到 memory tab 自动刷新
                 if (tab === 'memory' && window.AnythingApp && window.AnythingApp._memoryPanel) {
                     window.AnythingApp._memoryPanel.refreshMemory();
+                }
+                // 执行计划⑦: 切到 config tab 自动拉取配置
+                if (tab === 'config' && window.AnythingApp && window.AnythingApp._configPanel) {
+                    window.AnythingApp._configPanel.refresh();
                 }
             });
         });

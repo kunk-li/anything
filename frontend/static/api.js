@@ -273,6 +273,24 @@ const ApiClient = (() => {
             { proposals: proposals || [], approved_ids: approvedIds || [] });
     }
 
+    // ============== 执行计划⑦ — 统一配置 APIs ==============
+    /** GET /config/agent — agent 全部开关 (元数据 + 当前值, 分组) */
+    async function getAgentConfig() {
+        return _doFetch('GET', '/config/agent');
+    }
+    /** POST /config/agent — 运行期改开关 {key: value} */
+    async function setAgentConfig(updates) {
+        return _doFetch('POST', '/config/agent', { updates: updates || {} });
+    }
+    /** GET /config/agent/presets — 能力档位列表 */
+    async function getAgentPresets() {
+        return _doFetch('GET', '/config/agent/presets');
+    }
+    /** POST /config/agent/preset — 套用能力档位 */
+    async function applyAgentPreset(name) {
+        return _doFetch('POST', '/config/agent/preset', { name });
+    }
+
     // ============== Task PPP (#102) — Scheduler APIs ==============
     async function listSchedulerTasks() {
         return _doFetch('GET', '/scheduler/list');
@@ -484,6 +502,10 @@ const ApiClient = (() => {
         getProfile,
         getMaintenanceProposals,
         applyMaintenance,
+        getAgentConfig,
+        setAgentConfig,
+        getAgentPresets,
+        applyAgentPreset,
         getMemoryFact,
         deleteMemoryFact,
         pinMemoryFact,

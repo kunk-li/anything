@@ -139,6 +139,75 @@ def dump_agent_config(config: Any, agent: Any = None) -> List[dict]:
     return out
 
 
+# ── 能力档位 preset (执行计划⑦+增强: 一键开一组合理组合) ──────────────────
+# 只列与默认不同的项; 未列项保持当前。model_routing 都不在 preset (需先配 model_simple/complex)。
+AGENT_CONFIG_PRESETS: Dict[str, Dict[str, Any]] = {
+    "conservative": {   # 保守: 仅自我验证, 其余自主能力全关
+        "agent.enable_self_verify": True, "agent.enable_query_refine": False,
+        "agent.enable_skill_distill": False, "agent.enable_self_reflection": False,
+    },
+    "balanced": {       # 均衡: + 含糊问题改写 + 技能沉淀
+        "agent.enable_self_verify": True, "agent.enable_query_refine": True,
+        "agent.query_refine_mode": "auto", "agent.enable_skill_distill": True,
+        "agent.enable_self_reflection": False,
+    },
+    "aggressive": {     # 进取: + 反问澄清 + 建议性自维护 (提议, 仍人审批)
+        "agent.enable_self_verify": True, "agent.enable_query_refine": True,
+        "agent.query_refine_mode": "ask", "agent.enable_skill_distill": True,
+        "agent.enable_self_reflection": True,
+    },
+}
+
+
+def _coerce(field: ConfigField, val: Any, current: Any) -> Any:
+    """把传入值按 field.type 强转 (给运行期 setattr); str 校验 choices; list 跟随 current 是否 set。"""
+    if field.type == "bool":
+        return val if isinstance(val, bool) else str(val).strip().lower() in ("1", "true", "yes", "on")
+    if field.type == "int":
+        return int(val)
+    if field.type == "str":
+        s = str(val)
+        if field.choices and s not in field.choices:
+            raise ValueError(f"{s!r} 不在允许值 {field.choices}")
+        return s
+    if field.type == "list":
+        items = val if isinstance(val, list) else [x.strip() for x in str(val).split(",") if x.strip()]
+        items = [str(x) for x in items]
+        return set(items) if isinstance(current, (set, frozenset)) else items
+    return val
+
+
+def apply_agent_config(agent: Any, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """运行期把 updates 写到 agent 实例属性 (live, 无需重启)。仅 schema 声明且有 attr 的项可改;
+    未知/无 attr(如 maintenance_*, 工厂期读) 跳过。强类型校验 + per-key fail-safe。
+    返回 {applied:[], skipped:[], errors:[]}。"""
+    by_key = {f.key: f for f in AGENT_CONFIG_SCHEMA}
+    applied: List[str] = []
+    skipped: List[str] = []
+    errors: List[Dict[str, str]] = []
+    for key, val in (updates or {}).items():
+        fld = by_key.get(key) or by_key.get(f"agent.{key}")
+        if fld is None or not fld.attr or not hasattr(agent, fld.attr):
+            skipped.append(key)
+            continue
+        try:
+            setattr(agent, fld.attr, _coerce(fld, val, getattr(agent, fld.attr, None)))
+            applied.append(fld.key)
+        except Exception as e:
+            errors.append({"key": key, "error": str(e)})
+    return {"applied": applied, "skipped": skipped, "errors": errors}
+
+
+def apply_preset(agent: Any, name: str) -> Dict[str, Any]:
+    """套用能力档位 preset 到 agent (conservative/balanced/aggressive)。未知档名 → error。"""
+    preset = AGENT_CONFIG_PRESETS.get(str(name or "").strip().lower())
+    if preset is None:
+        return {"applied": [], "skipped": [], "errors": [{"key": "preset", "error": f"未知档位: {name}"}]}
+    result = apply_agent_config(agent, preset)
+    result["preset"] = name
+    return result
+
+
 def validate_agent_config(config: Any, logger: Any = None) -> List[str]:
     """启动期校验: config.yaml 的 agent.* 顶层 key 若不在 schema 中 → 返回并 WARN (防拼写错/废弃漂移)。
     fail-safe: 读不到配置返 []。"""

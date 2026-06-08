@@ -3418,3 +3418,19 @@ body.share-readonly .msg-feedback {
 .memory-vis .vis-dim li, .memory-vis .vis-props li { font-size: 11px; color: var(--text, #ccc); margin: 2px 0; }
 .memory-vis .vis-prop-act { font-weight: 600; color: var(--warn, #c96); }
 .memory-vis .vis-approve { margin-left: 6px; }
+
+/* 执行计划⑦ 统一配置面板 */
+.config-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.config-presets .hint { font-size: 11px; color: var(--text-faint, #888); }
+.cfg-group { margin-bottom: 12px; }
+.cfg-group-title {
+    font-size: 12px; font-weight: 600; color: var(--accent, #6aa);
+    border-bottom: 1px solid var(--border, #2a2a2a); padding-bottom: 3px; margin-bottom: 6px;
+}
+.cfg-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+.cfg-field .cfg-label { font-size: 11px; color: var(--text, #ccc); flex: 1 1 auto; word-break: break-all; }
+.cfg-field input[type="text"], .cfg-field input[type="number"], .cfg-field select {
+    flex: 0 0 auto; max-width: 130px; font-size: 11px; padding: 2px 4px;
+    background: var(--surface-2, #1a1a1a); color: var(--text, #ddd);
+    border: 1px solid var(--border, #333); border-radius: 4px;
+}
