@@ -5,6 +5,19 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-09 · 修 host=undefined LLM 超时 + register 入口加固)
+
+> 用户截图: 列软件报 `RAG_RUN_FAILED: HTTPSConnectionPool(host=undefined, port=443)` timeout=120。
+> 诊断: 运行时 default chat 模型的 api_base 被前端"模型管理"误传的 JS undefined 污染 (该 adapter
+> 在 sanitize 防御生效前构造)。本机当前代码复现证明 `_sanitize_api_base` 已能兜底 (undefined →
+> api.openai.com), 即**重启服务即恢复**。commit `f4e5f78`。
+
+- **register 入口校验 api_base** (`api_service_module/.../routers/config.py`): POST /config/models
+  对 api_base "非空但脏" (undefined/null/none/nan 字面量, 或缺 http(s):// scheme) → 400
+  PARAM_INVALID, 不再静默落库等到调用时 host=undefined 慢慢超时; 留空仍放行 (适配器走默认
+  endpoint)。test +1 (脏值三种→400); 全量 1267 passed。
+- 即时恢复: **重启服务** 清运行时污染 + 加载当前 sanitize/heal 防御链。
+
 ## Unreleased (2026-06-09 · 修"软件清单输出不全" + 通用长回答截断)
 
 > 用户截图: software_info 列清单只显示到第 32 项就中断 (Dropbox 半截)。根因: 前端 type=agent
