@@ -49,6 +49,7 @@
 | **自主维护·定时提议+通知** (方向4) | `impl.py:run_maintenance_scan()` + `execute` 的 `maintenance_scan` 钩子(可 TaskScheduler 触发) + `_notify_maintenance` 审计 | 同上 |
 | **更高自主档·预授权自动** (方向4) | `impl.py:auto_approve_maintenance` + `run_maintenance_scan(auto_apply)` | `agent.auto_approve_maintenance` 名单**默认空**=零自动; 仅 `{run_prune,run_degrade}` 可自动 |
 | **raw 结构化输出→自然语言合成** 工具直出 dict/JSON 时兜底转散文 | `impl.py:_looks_like_raw_json` + `_synthesize_natural_answer` (在 `aggregate_results` 末尾) | always-on; 仅检测命中且有 LLM 通道时触发, 合成失败/无通道保留 raw (fail-open)。详见 §6.8.1 |
+| **authoritative 工具结果直达** 可枚举清单工具确定性渲染完整文本直接作答 | `impl.py:_authoritative_answer` (aggregate / 流式·同步 ReAct 三处收尾消费) + 工具侧 `data.authoritative=True`+`data.answer` (如 `software_info` list) | 工具标记即生效; 跳过 LLM 复述/合成, 防 max_tokens 截断/漏项。详见 §6.8.2 |
 
 补充错误码(正文第 13 章错误码表未列): `TOOL_APPROVAL_REQUIRED`、`PLAN_PENDING`、`STREAM_INTERRUPTED`;
 补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`; 审计事件 `maintenance_scan`。
@@ -555,6 +556,23 @@ class ToolRegistry:
 
 > 回归：单引号 Python repr 漏判曾导致字典串直喷用户，已修（加 `ast.literal_eval` 兜底）并由
 > `tests/test_answer_synthesis.py`（10 例）锁定。
+
+## 6.8.2 authoritative 工具结果直达（可枚举清单不经 LLM 复述）
+
+"列清单"这类**可枚举的结构化结果**（如 `software_info` 的 list：本机已安装软件），若交给 LLM
+逐条复述成最终答案，会同时踩三个坑：被 `max_tokens` 截断（中文约 1300 字即停）、可能漏项/编造、
+多烧一次 token。机制：
+
+- **工具侧**：工具自行**确定性渲染**完整可读文本放进 `data.answer`，并标 `data.authoritative=True`
+  表示"此结果即最终答案，无需 LLM 再加工"。
+- **消费侧**：`_authoritative_answer(tool_results)` 在三条收尾路径统一识别——`aggregate_results`
+  （single_shot）、流式 ReAct（`streaming.py`）、同步 `_react_execute`（`react_engine.py`）——命中则
+  **直接用工具的完整 answer 作答**，跳过 LLM 复述与 §6.8.1 的 raw 合成，绕过 `_summarize_tool_output`
+  的长度上限。多工具时取最后一个 authoritative 结果。
+
+> 背景：曾出现"列已安装软件只显示到第 32 项就中断"——ReAct 流式把 60 项 observation 复述时撞上
+> 默认 `max_tokens`。本机制让清单完整直达；另把 `LLMParam` 默认 `max_tokens` 2000→4096 根治一般
+> 长回答的中途截断。由 `tests/test_software_info.py`、`tests/test_answer_synthesis.py` 锁定。
 
 ## 6.9 状态存储规范
 

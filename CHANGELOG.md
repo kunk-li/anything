@@ -5,6 +5,22 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-09 · 修"软件清单输出不全" + 通用长回答截断)
+
+> 用户截图: software_info 列清单只显示到第 32 项就中断 (Dropbox 半截)。根因: 前端 type=agent
+> 走 ReAct 流式, LLM 把 60 项 observation 逐条复述成最终答案, 受默认 max_tokens=2000
+> (≈中文 1300 字 ≈ 32 项) 截断。commit `6066834`。终态 全量 **1266 passed**, 0 fail。
+
+- **software_info(list) 确定性完整渲染** (`tools_impl/software_info.py`): data 增 `answer`
+  (工具自渲染的完整可读清单) + `authoritative` 标记; 默认 limit 60→200、cap 500→1000。
+  可枚举结构不再靠 LLM 逐条复述 (截断 / 漏项 / 多烧 token)。
+- **authoritative 直达** (`impl.py:_authoritative_answer` + aggregate / 流式 ReAct
+  (`streaming.py`) / 同步 `_react_execute` (`react_engine.py`) 三条收尾路径): 工具标
+  authoritative 时其完整 answer 直接作为最终答案, 跳过 LLM 复述/合成 → 完整不截断。
+- **根治通用长回答截断** (`llm_adapter/model/data_model.py`): LLMParam 默认 max_tokens
+  2000→4096 (旧值下任何超 ~1300 字的回答都会中途截断, 不止软件清单)。上限非固定消耗。
+- 测试 +5 (渲染完整 / authoritative helper+短路 / max_tokens 默认)。详见 Agent 设计说明书 §6.8.2。
+
 ## Unreleased (2026-06-08 · 代码质量收尾 + lint gate)
 
 > 用户"优化全部代码"→ 不盲扫, 只留真改 + 立 lint 配置; 再清 cosmetic; 接 CI lint 闸;
