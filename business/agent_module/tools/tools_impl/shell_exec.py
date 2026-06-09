@@ -29,6 +29,7 @@ backend 可注入 (测试不起子进程)。
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -92,17 +93,45 @@ def classify_command(cmd: str) -> Tuple[str, str]:
     return "safe", "未匹配破坏性/不透明模式 (按只读放行)"
 
 
+# shell 元字符: 有这些才需要真 shell (管道/重定向/逻辑与或/命令替换/通配)。
+_SHELL_META = re.compile(r"[|<>&;`]|\$\(|\*|\?")
+
+
+def _plan_exec(command: str):
+    """决定怎么执行一条命令字符串, 返回 (argv, use_shell)。
+
+    - 含 shell 元字符 → (None, True): 必须经 shell (管道等), 引号交给 shell;
+    - 否则 → (argv, False): shlex 拆成参数数组、shell=False 直接喂程序,
+      **绕开 Windows shell 对嵌套引号的破坏** (cmd/powershell 会把 --eval "…'x'…"
+      里的内层引号吃掉, 导致 mongosh 等收到残缺命令)。shlex 拆不动 (引号不配对) 时回退经 shell。
+    """
+    if _SHELL_META.search(command):
+        return None, True
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return None, True
+    return (argv, False) if argv else (None, True)
+
+
 class _RealShell:
-    """默认后端: 真 subprocess 跑命令 (shell=True 支持管道/重定向)。测试可注入 fake。"""
+    """默认后端: 真 subprocess 跑命令。无 shell 元字符 → argv+shell=False (引号可靠,
+    绕开 Windows shell 嵌套引号坑); 含管道/重定向才 shell=True。测试可注入 fake 顶替。"""
 
     def run(self, command: str, timeout: int) -> Tuple[Optional[int], str]:
         import subprocess
+        argv, use_shell = _plan_exec(command)
+        kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT, timeout=timeout, text=True, errors="replace")
         try:
-            p = subprocess.run(
-                command, shell=True, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                timeout=timeout, text=True, errors="replace",
-            )
+            if use_shell:
+                p = subprocess.run(command, shell=True, **kw)
+            else:
+                try:
+                    p = subprocess.run(argv, shell=False, **kw)
+                except FileNotFoundError:
+                    # argv[0] 不在 PATH (shell 内建 / .cmd 包装等) → 回退经 shell 找
+                    p = subprocess.run(command, shell=True, **kw)
             return p.returncode, (p.stdout or "")
         except subprocess.TimeoutExpired:
             return None, f"(超时 >{timeout}s, 已中止)"

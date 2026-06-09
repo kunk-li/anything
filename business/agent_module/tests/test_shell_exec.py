@@ -8,7 +8,9 @@
 """
 import unittest
 
-from agent_module.tools.tools_impl.shell_exec import classify_command, make_shell_exec_tool
+from agent_module.tools.tools_impl.shell_exec import (
+    classify_command, make_shell_exec_tool, _plan_exec,
+)
 
 
 class TestClassify(unittest.TestCase):
@@ -87,6 +89,34 @@ class TestShellExecApproval(unittest.TestCase):
     def test_empty_command(self):
         r = make_shell_exec_tool()({"command": ""})
         self.assertEqual(r["code"], "PARAM_MISSING")
+
+
+class TestPlanExec(unittest.TestCase):
+    """执行规划: 无 shell 元字符 → argv+shell=False (绕开 Windows 嵌套引号坑); 管道/重定向 → shell。"""
+
+    def test_simple_command_uses_argv(self):
+        argv, use_shell = _plan_exec("mongosh --quiet --eval 'db.foo()'")
+        self.assertFalse(use_shell)
+        self.assertEqual(argv, ["mongosh", "--quiet", "--eval", "db.foo()"])
+
+    def test_nested_quotes_preserved_in_argv(self):
+        # 关键回归: --eval "…'x'…" 内层引号不能丢 (Windows cmd/powershell 会吃掉 → 命令残缺)
+        argv, use_shell = _plan_exec("mongosh --eval \"db.getSiblingDB('inspection_system').getCollectionNames()\"")
+        self.assertFalse(use_shell)
+        self.assertIn("db.getSiblingDB('inspection_system').getCollectionNames()", argv)
+
+    def test_pipe_uses_shell(self):
+        argv, use_shell = _plan_exec("ls | grep foo")
+        self.assertTrue(use_shell)
+        self.assertIsNone(argv)
+
+    def test_redirect_uses_shell(self):
+        _, use_shell = _plan_exec("echo hi > out.txt")
+        self.assertTrue(use_shell)
+
+    def test_unbalanced_quote_falls_back_to_shell(self):
+        _, use_shell = _plan_exec("echo 'unterminated")
+        self.assertTrue(use_shell)
 
 
 if __name__ == "__main__":
