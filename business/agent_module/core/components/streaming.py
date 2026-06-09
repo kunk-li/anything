@@ -496,7 +496,9 @@ class StreamingMixin:
                     session_id=session_id,
                     state={
                         "status": "completed",
-                        "task": task,
+                        # 存原始用户输入: ReAct 路径上面把 task 拼了 _history_prefix 喂 LLM 当上下文,
+                        # 不能把含历史的 task 存进会话 (否则前端把"用户消息"回显成一大段对话历史)。
+                        "task": request.get("task") or task,
                         "answer": "".join(_streamed_text) or final_answer,
                         "execution_mode": "agent",
                         "updated_at": time.time(),
