@@ -98,7 +98,7 @@ AGENT_CONFIG_SCHEMA: List[ConfigField] = [
                 "ANYTHING_AGENT_SKILL_DISTILL_MIN_TOOLS", "技能", "触发沉淀的最少工具调用数"),
     # 安全
     ConfigField("agent.tool_approval_required", "tool_approval_required", "list",
-                ["py_sandbox", "http_request", "file_write", "email_send", "shell_exec", "computer_use"],
+                ["py_sandbox", "http_request", "file_write", "email_send", "computer_use"],
                 "ANYTHING_AGENT_APPROVAL", "安全", "危险工具白名单: 被选中须 extra_params.approve_tools 显式放行"),
     # 成本 (模型分级路由)
     ConfigField("agent.model_routing_enabled", "model_routing_enabled", "bool", False,

@@ -237,8 +237,10 @@ class SimpleAgent(
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
         default_dangerous = [
-            "py_sandbox", "http_request", "file_write", "email_send", "shell_exec",
+            "py_sandbox", "http_request", "file_write", "email_send",
             "computer_use",   # 控制真实桌面 (截屏/鼠标/键盘) — 默认需审批
+            # 注: shell_exec 不在此列 — 它在工具内做*命令级*风险分级 (只读直执行 / 危险逐条拦),
+            # 工具级审批会把每条命令都拦下、架空命令级判断。见 tools_impl/shell_exec.py。
         ]
         env_approval = os.environ.get("ANYTHING_AGENT_APPROVAL", "")
         if env_approval:

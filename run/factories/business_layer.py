@@ -217,6 +217,14 @@ def build_business_layer(
     )
     tool_registry.register("software_info", _make_software_info(), description=_SW_DESC)
 
+    # 通用执行内核 (shell_exec): 真终端 — agent 自己写命令查/做任何事 (DB/系统/文件…),
+    # 不再为每种需求造专用工具。逐条命令风险分级 (只读直执行; 破坏性/不透明需 approve_tools
+    # 放行) + 审计。命令级判断在工具内, 故**不进** tool_approval_required (工具级审批会架空它)。
+    from agent_module.tools.tools_impl.shell_exec import (
+        make_shell_exec_tool as _make_shell_exec, SHELL_EXEC_DESCRIPTION as _SH_DESC,
+    )
+    tool_registry.register("shell_exec", _make_shell_exec(logger=deps.logger), description=_SH_DESC)
+
     # 技能加载 (use_skill, 集成 superpowers 机制): 按名把技能完整指南拉进上下文。只读 → 不进审批白名单。
     from agent_module.tools.tools_impl.use_skill import (
         make_use_skill_tool as _make_use_skill, USE_SKILL_DESCRIPTION as _US_DESC,
