@@ -132,6 +132,9 @@ document_store:
 
 state_store:
   dir: "state_store"
+  # 会话历史保留: mtime 超过 expire_hours 未更新则在启动/读写时清理 (默认 24h 太短会丢历史)。
+  # 2160h = 90 天; 设 0 或负数 = 永不过期。
+  expire_hours: 2160
 
 security:
   auth_enabled: true
