@@ -74,5 +74,42 @@ class TestSynthesizeNaturalAnswer(unittest.TestCase):
         self.assertEqual(out, "")
 
 
+class TestAuthoritativeAnswer(unittest.TestCase):
+    """authoritative 工具结果 (如 software_info list) 直接作为最终答案, 不经 LLM 复述/合成。"""
+
+    def test_helper_matches_only_authoritative_with_answer(self):
+        self.assertIsNone(SimpleAgent._authoritative_answer(None))
+        self.assertIsNone(SimpleAgent._authoritative_answer([]))
+        # 有 answer 但未标 authoritative → 不命中
+        self.assertIsNone(SimpleAgent._authoritative_answer(
+            [{"output": {"data": {"answer": "x"}}}]))
+        # authoritative + answer → 命中
+        self.assertEqual(SimpleAgent._authoritative_answer(
+            [{"output": {"data": {"authoritative": True, "answer": "命中"}}}]), "命中")
+        # 多个命中取最后一个
+        self.assertEqual(SimpleAgent._authoritative_answer([
+            {"output": {"data": {"authoritative": True, "answer": "first"}}},
+            {"output": {"data": {"authoritative": True, "answer": "last"}}},
+        ]), "last")
+
+    def test_aggregate_uses_authoritative_full_text(self):
+        # 关键回归: 长清单(>2000 字)经 authoritative 完整直达, 绕过 _summarize 的 _LIMIT 与 LLM 复述
+        agent = SimpleAgent()  # 无 llm_planner: 若误走 LLM 合成只会拿到空
+        long_answer = "\n".join(f"{i}. 某软件{i:04d} 版本 {i}.0.0" for i in range(200))
+        self.assertGreater(len(long_answer), 2000)
+        tool_results = [{
+            "tool_name": "software_info", "success": True,
+            "output": {"code": "SUCCESS", "data": {
+                "authoritative": True, "answer": long_answer,
+                "software": [{"name": f"某软件{i:04d}"} for i in range(200)],
+            }},
+        }]
+        out = agent.aggregate_results(
+            task="列出已安装软件", session_id="s1", trace_id="t1",
+            tool_results=tool_results, execution_mode="agent",
+        )
+        self.assertEqual(out["answer"], long_answer)   # 完整, 未被截断
+
+
 if __name__ == "__main__":
     unittest.main()

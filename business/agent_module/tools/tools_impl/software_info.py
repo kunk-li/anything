@@ -38,7 +38,7 @@ _HELP_FLAGS = ("--help", "-h", "/?") if _IS_WINDOWS else ("--help", "-h")
 _RUN_TIMEOUT = 5            # 每次子进程墙钟上限 (秒)
 _HELP_CAP = 4000           # 帮助输出截断
 _VERSION_CAP = 400         # 版本输出截断
-_LIST_LIMIT_DEFAULT = 60
+_LIST_LIMIT_DEFAULT = 200      # 列清单默认上限 (确定性完整渲染, 覆盖绝大多数机器)
 
 
 class _RealBackend:
@@ -192,6 +192,35 @@ def _err(code: str, message: str, trace_id, retryable: bool = False) -> Dict[str
             "trace_id": trace_id, "retryable": retryable, "details": None}
 
 
+def _render_software_list(d: Dict[str, Any]) -> str:
+    """把 list 结果确定性渲染成完整可读清单 — 供 agent 直接呈现, 不经 LLM 复述/截断。
+
+    清单是可枚举的结构化结果, 让 LLM 逐条转述既会被 max_tokens 截断, 又可能漏项/编造;
+    工具自己渲染最可靠、最完整。
+    """
+    src_map = {"registry": "已安装软件注册表", "path_commands": "PATH 命令"}
+    src = src_map.get(d.get("source"), str(d.get("source")))
+    head = f"本机共 {d.get('total', 0)} 个软件（来源：{src}）"
+    if d.get("filter"):
+        head += f"，按 “{d['filter']}” 过滤"
+    if d.get("truncated"):
+        head += f"，以下列出前 {d.get('returned', 0)} 个（如需更多请加大 limit 或用 filter 收窄）"
+    head += "："
+    lines = [head, ""]
+    for i, e in enumerate(d.get("software") or [], 1):
+        seg = [f"{i}. {e.get('name')}"]
+        if e.get("version"):
+            seg.append(f"版本 {e['version']}")
+        if e.get("publisher"):
+            seg.append(f"由 {e['publisher']} 发布")
+        if e.get("location"):
+            seg.append(f"位置：{e['location']}")
+        elif e.get("path"):
+            seg.append(f"路径：{e['path']}")
+        lines.append("，".join(seg))
+    return "\n".join(lines)
+
+
 def _first_useful(be, argv_base: List[str], flags) -> Optional[Dict[str, Any]]:
     """依次试 flags, 取第一个 returncode==0 且有输出的; 全不成则取第一个有任意输出的。
     返回 {flag, output, returncode} 或 None (全空)。"""
@@ -286,7 +315,7 @@ def make_software_info_tool(backend: Optional[Any] = None) -> Callable[[Dict[str
 
     def _list(be, payload, trace_id) -> Dict[str, Any]:
         try:
-            limit = max(1, min(int(payload.get("limit", _LIST_LIMIT_DEFAULT)), 500))
+            limit = max(1, min(int(payload.get("limit", _LIST_LIMIT_DEFAULT)), 1000))
         except (TypeError, ValueError):
             limit = _LIST_LIMIT_DEFAULT
         filt = str(payload.get("filter") or "").strip().lower()
@@ -308,11 +337,16 @@ def make_software_info_tool(backend: Optional[Any] = None) -> Callable[[Dict[str
             entries = [e for e in entries if filt in str(e.get("name", "")).lower()]
         total = len(entries)
         entries = sorted(entries, key=lambda e: str(e.get("name", "")).lower())[:limit]
-        return _ok({
+        data = {
             "source": source, "total": total, "returned": len(entries),
             "truncated": total > len(entries), "filter": filt or None,
             "software": entries,
-        }, trace_id)
+        }
+        # 确定性渲染完整清单 + authoritative 标记: 此结果即最终答案, agent 直接呈现,
+        # 不再经 LLM 逐条复述 (避免 max_tokens 截断 / 漏项 / 多烧一次 token)。
+        data["answer"] = _render_software_list(data)
+        data["authoritative"] = True
+        return _ok(data, trace_id)
 
     return software_info
 
@@ -324,6 +358,7 @@ SOFTWARE_INFO_DESCRIPTION = (
     '"name": str(lookup 必填, 软件名如 "git"/"python"/"Chrome"), '
     '"filter": str?(list 按名子串过滤), "limit": int?(list 上限, 默认 60)}。'
     'lookup: PATH 命令跑固定 --version/--help 抓版本与帮助; GUI 软件退到卸载注册表给版本+安装位置。'
-    'list: 列已安装软件清单 (Windows 注册表为主, 退化 PATH 命令)。'
+    'list: 列已安装软件清单 (Windows 注册表为主, 退化 PATH 命令); 返回已含完整渲染的清单文本 '
+    '(data.answer), 直接呈现给用户即可, 无需逐条复述。'
     '只跑 PATH 已存在程序+固定参数, 只读无副作用、无需审批。'
 )

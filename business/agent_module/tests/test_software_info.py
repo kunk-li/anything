@@ -179,6 +179,32 @@ class TestList(unittest.TestCase):
         self.assertEqual(d["source"], "path_commands")
         self.assertEqual(d["software"][0]["name"], "git")
 
+    def test_list_has_authoritative_rendered_answer(self):
+        # 确定性完整渲染: data.answer 自带可读清单 + authoritative 标记 (agent 直接呈现, 不经 LLM)
+        reg = [{"name": "Alpha", "version": "1.0", "publisher": "ACorp", "location": "C:\\A"},
+               {"name": "Beta", "version": "2.0", "publisher": None, "location": None}]
+        be = _FakeBackend(registry=reg)
+        d = make_software_info_tool(be)({"action": "list"})["data"]
+        self.assertTrue(d["authoritative"])
+        ans = d["answer"]
+        self.assertIn("共 2 个软件", ans)
+        self.assertIn("Alpha", ans)
+        self.assertIn("版本 1.0", ans)
+        self.assertIn("由 ACorp 发布", ans)
+        self.assertIn("位置：C:\\A", ans)
+        self.assertIn("Beta", ans)                 # 缺 publisher/location 也照常列出
+
+    def test_list_answer_complete_not_truncated(self):
+        # 复现"输出不全": 80 项默认 limit(200) 全出, 渲染含首尾项 — 确定性渲染不会中途截断
+        reg = [{"name": f"App{i:03d}", "version": f"{i}.0"} for i in range(80)]
+        be = _FakeBackend(registry=reg)
+        d = make_software_info_tool(be)({"action": "list"})["data"]
+        self.assertEqual(d["total"], 80)
+        self.assertEqual(d["returned"], 80)
+        self.assertFalse(d["truncated"])
+        self.assertIn("App000", d["answer"])
+        self.assertIn("App079", d["answer"])       # 最后一项也在 → 不再"输出不全"
+
 
 class TestActionAndArgs(unittest.TestCase):
     def test_bad_action(self):

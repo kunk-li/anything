@@ -1012,9 +1012,14 @@ class SimpleAgent(
         if final_answer and not self._sanitize_final_answer(final_answer):
             final_answer = "任务执行完成, 但未生成可展示内容."
 
+        # 工具权威完整结果 (如 software_info list 的确定性清单) 优先直用: 不经 LLM 复述/合成,
+        # 保证完整不截断。否则才走下面的 raw→自然语言合成。
+        _auth = self._authoritative_answer(tool_results)
+        if _auth:
+            final_answer = _auth
         # Task SSSS: 工具直接输出 raw JSON 时 (例如 datetime / calculator 都返 dict),
         # 用一次 LLM 合成自然语言. 检测条件: final_answer 看起来是 JSON / dict 字面值.
-        if final_answer and self._looks_like_raw_json(final_answer):
+        elif final_answer and self._looks_like_raw_json(final_answer):
             synthesized = self._synthesize_natural_answer(
                 task=task, raw=final_answer, trace_id=trace_id,
             )
@@ -1029,6 +1034,25 @@ class SimpleAgent(
             "citations": final_citations,
             "retrieved_chunks": final_retrieved_chunks,
         }
+
+    @staticmethod
+    def _authoritative_answer(tool_results: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+        """若某工具结果声明 authoritative (结果本身即最终答案, 无需 LLM 再加工), 返回其完整
+        answer 文本; 否则 None。
+
+        用于"列清单"等可枚举的结构化结果 (如 software_info list): 工具确定性渲染完整文本
+        直接作为答案, 跳过 LLM 复述 — 避免 max_tokens 截断 / 漏项 / 多烧一次 token。
+        取最后一个命中 (多工具时以最终那个权威结果为准)。
+        """
+        for tr in reversed(tool_results or []):
+            if not isinstance(tr, dict):
+                continue
+            out = tr.get("output")
+            if isinstance(out, dict):
+                data = out.get("data")
+                if isinstance(data, dict) and data.get("authoritative") and data.get("answer"):
+                    return str(data["answer"])
+        return None
 
     @staticmethod
     def _looks_like_raw_json(s: str) -> bool:

@@ -385,7 +385,11 @@ class ReActEngineMixin:
             }
 
         # 循环结束: 整合最终结果
-        if final_answer is None and last_observation is not None:
+        # 工具权威完整结果 (如 software_info list 确定性清单) 优先, 覆盖 LLM 复述 (防截断/漏项)。
+        _auth = self._authoritative_answer(tool_results)
+        if _auth:
+            final_answer = _auth
+        elif final_answer is None and last_observation is not None:
             output = last_observation.get("output") or {}
             if isinstance(output, dict):
                 data = output.get("data") or {}

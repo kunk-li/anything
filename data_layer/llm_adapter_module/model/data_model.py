@@ -30,7 +30,7 @@ class LLMParam:
     """大模型通用参数子模型"""
     temperature: float = 0.7
     top_k: int = 40
-    max_tokens: int = 2000
+    max_tokens: int = 4096      # 默认输出上限 (旧 2000 ≈ 中文 1300 字, 长回答会中途截断)
     batch_size: int = 32
     normalize: bool = True
     media_process_mode: str = "auto"  # auto/extract/raw

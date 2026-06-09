@@ -451,7 +451,12 @@ class StreamingMixin:
             _fa = str(final_answer or "").strip()
             _is_raw_react_json = _fa.startswith("{") and (
                 '"thought"' in _fa or '"action"' in _fa or '"final_answer"' in _fa)
-            if tool_results or _is_raw_react_json:
+            _auth = self._authoritative_answer(tool_results)
+            if _auth:
+                # 工具权威完整结果 (如 software_info list): 直接用, 不再调 LLM 重生成
+                # (确定性、完整, 避免 max_tokens 截断 / 漏项)。
+                answer_out = _auth
+            elif tool_results or _is_raw_react_json:
                 try:
                     if tool_results:
                         tool_ctx_parts = []

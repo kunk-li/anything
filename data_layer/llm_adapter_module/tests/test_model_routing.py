@@ -50,7 +50,7 @@ class TestGenerateRouting(unittest.TestCase):
         svc = _FakeSvc()
         LLMService.generate(svc, "hi")                      # 无 ctx var
         self.assertEqual(svc.last.model_name, "default")
-        self.assertEqual(svc.last.model_param.max_tokens, 2000)   # LLMParam 默认
+        self.assertEqual(svc.last.model_param.max_tokens, 4096)   # LLMParam 默认
 
 
 if __name__ == "__main__":
