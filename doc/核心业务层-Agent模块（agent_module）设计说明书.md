@@ -50,6 +50,7 @@
 | **更高自主档·预授权自动** (方向4) | `impl.py:auto_approve_maintenance` + `run_maintenance_scan(auto_apply)` | `agent.auto_approve_maintenance` 名单**默认空**=零自动; 仅 `{run_prune,run_degrade}` 可自动 |
 | **raw 结构化输出→自然语言合成** 工具直出 dict/JSON 时兜底转散文 | `impl.py:_looks_like_raw_json` + `_synthesize_natural_answer` (在 `aggregate_results` 末尾) | always-on; 仅检测命中且有 LLM 通道时触发, 合成失败/无通道保留 raw (fail-open)。详见 §6.8.1 |
 | **authoritative 工具结果直达** 可枚举清单工具确定性渲染完整文本直接作答 | `impl.py:_authoritative_answer` (aggregate / 流式·同步 ReAct 三处收尾消费) + 工具侧 `data.authoritative=True`+`data.answer` (如 `software_info` list) | 工具标记即生效; 跳过 LLM 复述/合成, 防 max_tokens 截断/漏项。详见 §6.8.2 |
+| **通用执行内核 shell_exec** 真终端, agent 自写命令查/做任何事 (DB/系统/文件) | `tools_impl/shell_exec.py`: `classify_command`(风险三档) + `_plan_exec`(argv/shell) + `make_shell_exec_tool` | **命令级**风险分级 (safe 直执行 / danger·opaque 需 `approve_tools`), 不进工具级审批名单。详见 §6.8.3 |
 
 补充错误码(正文第 13 章错误码表未列): `TOOL_APPROVAL_REQUIRED`、`PLAN_PENDING`、`STREAM_INTERRUPTED`;
 补充状态事件: `verify_failed` / `self_correct` / `react_*` / `plan_generated`; 审计事件 `maintenance_scan`。
@@ -573,6 +574,34 @@ class ToolRegistry:
 > 背景：曾出现"列已安装软件只显示到第 32 项就中断"——ReAct 流式把 60 项 observation 复述时撞上
 > 默认 `max_tokens`。本机制让清单完整直达；另把 `LLMParam` 默认 `max_tokens` 2000→4096 根治一般
 > 长回答的中途截断。由 `tests/test_software_info.py`、`tests/test_answer_synthesis.py` 锁定。
+
+## 6.8.3 通用执行内核 shell_exec（命令级风险分级 + 执行规划）
+
+设计原则（用户提出）：不该"缺一个能力就造一个专用工具"（software_info / mongo_query …一万个,
+无法维护）, 该给 agent 一个**真终端**, 让它自己写命令查/做任何事（DB / 系统 / 文件 / 进程）, 缺库
+自己装。安全不靠"禁止执行", 而靠**对每条命令逐条风险分级**。(此前 `shell_exec` 只是审批名单/文档里
+的"幽灵" —— 从未实现; 真执行只有受限到啥都干不了的 `python_sandbox`。)
+
+- **风险分级** `classify_command(cmd) → (level, reason)`, 完备三档（每条命令必落一档, 无漏网）：
+  - `safe`：形态明确的只读/查询（`ls`/`cat`/`grep`/`--version`/`mongosh` 查询/`SELECT`/`show`…）→ 直接执行;
+  - `danger`：明确破坏性（`rm -rf`/`drop`/`truncate`/`format`/`mkfs`/`dd`/`shutdown`/覆盖系统目录/mongo `.drop()`…）→ 拦;
+  - `opaque`：会开通用解释器或能藏任意逻辑（`python -c`/`bash -c`/`eval`/`base64 -d | sh`/管道接 sh/反引号/`$()`）→ 看不透, 拦。
+
+  `danger`/`opaque` 默认返回 `TOOL_APPROVAL_REQUIRED`, `extra_params.approve_tools` 含 `shell_exec`/`*`
+  放行该次 + 全程审计（每条命令留痕）。**不进** `tool_approval_required` 工具级名单 —— 命令级判断已在
+  工具内, 工具级审批会把每条都拦下、架空它。
+
+- **执行规划** `_plan_exec(cmd) → (argv, use_shell)`：无 shell 元字符（管道/重定向/通配/命令替换）→
+  `shlex.split` 拆 argv + `shell=False` 直接喂程序, **绕开 Windows cmd/powershell 对嵌套引号的破坏**
+  （`mongosh --eval "…'x'…"` 经 shell 会丢内层引号 → 程序收到残缺命令 → SyntaxError/ReferenceError）;
+  含管道/重定向等才 `shell=True`; `argv[0]` 不在 PATH 时回退经 shell。
+
+- **诚实边界**：单条命令内部图灵完备（`python -c` 能干任何事）, 命令文本判断**不可能 100% 防绕过** ——
+  所以"看不透的"一律归 `opaque` 让人确认（这是判断的*结论*, 不是漏判）。要数学意义的强隔离需 OS 层
+  （只读挂载 / 受限账户 / 容器）, 本地个人用通常不必走到那步。
+
+> 由 `tests/test_shell_exec.py` 锁定：风险分级不误伤 `mongosh` 只读查询 / 正确拦破坏性与内联代码 /
+> 审批短路 / `_plan_exec` 嵌套引号保留 / 管道走 shell / 引号不配对回退。
 
 ## 6.9 状态存储规范
 

@@ -5,6 +5,29 @@
 变更原则: 加性 / 加 deps 字段 / 加抽象 / 加 alias > 删. 即使大重构 (拆 god class)
 也都保留 back-compat shim 让老 import 0 改动. 测试基线零回归.
 
+## Unreleased (2026-06-09 · 通用执行内核 shell_exec + 历史前缀/TTL 修复)
+
+> 用户洞察:"不该缺一个能力就造一个专用工具 (software_info / mongo_query…一万个), 该给 agent 真正的
+> 通用执行能力, 自己写命令查/做任何事。" 落地通用执行内核 + 沿途修了几个前端实战暴露的 bug。
+> commit `cfa3d7a`..`a8ebcf4`。终态全量 **1281 passed**。前端实测: agent 自写 mongosh 命令查到 MongoDB
+> 库列表 + inspection_system 的 collections。
+
+- **通用执行内核 shell_exec** (`60205c1`, 用户审阅风险后授权 A 档): `tools_impl/shell_exec.py` — 真终端,
+  agent 自己写命令查/做任何事 (DB/系统/文件/进程), 不再为每种需求堆专用工具。此前 shell_exec 只是
+  审批名单/文档里的"幽灵"(从未实现), 真执行只有假 python_sandbox (禁 import/属性)。**逐条命令风险分级**
+  `classify_command` 三档: safe(只读/查询→直执行) / danger(破坏性) / opaque(开解释器·能藏任意逻辑) —
+  后两档默认 `TOOL_APPROVAL_REQUIRED`, `approve_tools` 放行 + 全程审计。**从工具级审批名单移除**
+  (impl default_dangerous + schema), 命令级判断接管。`test_shell_exec` +9。
+- **shell_exec 改 argv+shell=False 执行** (`a8ebcf4`): 前端实战暴露 Windows 的 cmd/powershell 都会吃掉
+  嵌套引号 (`mongosh --eval "…'x'…"` → 残缺命令 → SyntaxError/ReferenceError)。`_plan_exec`: 无 shell
+  元字符的命令用 `shlex.split` 拆 argv + `shell=False` 直接喂程序 (引号可靠), 含管道/重定向才 shell=True,
+  argv[0] 不在 PATH 回退 shell。+5 测试。详见 Agent 设计说明书 §6.8.3。
+- **历史前缀污染会话修复** (`198a641`): ReAct 路径把 `_history_prefix+task` 既喂 LLM 又存进会话 →
+  前端把"用户消息"回显成一大段对话历史。改存原始 `request.task` (与 `_run_stream_direct` 一致:
+  LLM 用增强版, 存储/回显用原始)。
+- **会话历史 TTL 24h→90天** (`cfa3d7a`): `state_store.expire_hours` 默认 24h 太短, 隔天对话被
+  `_cleanup_expired_states` 永久删 (用户重启后历史"消失"即此因)。config.yaml 设 90 天 (2160h); 0/负=永不过期。
+
 ## Unreleased (2026-06-09 · 修 host=undefined LLM 超时 + register 入口加固)
 
 > 用户截图: 列软件报 `RAG_RUN_FAILED: HTTPSConnectionPool(host=undefined, port=443)` timeout=120。
