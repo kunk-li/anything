@@ -121,6 +121,25 @@ class ConfigRoutesMixin:
                     },
                     headers={"X-Request-Id": trace_id},
                 )
+            # 防御 (host=undefined 超时根因): 前端误把 JS undefined/null 序列化成字符串串进来,
+            # 或漏填又拼了非法值。非空但是脏字面量 (undefined/null/none) 或缺 http(s):// scheme →
+            # 400 拒绝, 不静默落库等到调用时 host=undefined 慢慢超时 (留空则放行, 适配器走默认 endpoint)。
+            if api_base and (
+                api_base.lower() in ("undefined", "null", "none", "nan")
+                or not api_base.lower().startswith(("http://", "https://"))
+            ):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "PARAM_INVALID",
+                        "message": f"api_base 非法: {api_base!r}; 请填完整 http(s):// 地址, 或留空用该适配器默认 endpoint。",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
             try:
                 entry = self.llm_service.register_or_update_model(
                     name=name,

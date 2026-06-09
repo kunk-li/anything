@@ -823,6 +823,25 @@ class TestModelConfigEndpoints(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.json()["code"], "PARAM_MISSING")
 
+    def test_register_model_dirty_api_base(self):
+        """POST /config/models 传脏 api_base (JS undefined/null 字符串 / 缺 scheme) -> 400,
+        不静默落库 (历史 host=undefined 超时根因: 前端误传 undefined 污染默认模型)。"""
+        class _LLM:
+            def list_models(self, *, mask_keys=True): return []
+            def register_or_update_model(self, **kw):
+                raise AssertionError("脏 api_base 不应到达 register")
+
+        svc = ApiService(handler=self.handler, llm_service=_LLM())
+        svc.auth_enabled = False
+        client = TestClient(svc.app)
+        for bad in ("undefined", "null", "api.openai.com/v1"):
+            r = client.post("/config/models", json={
+                "name": "m", "request_type": "CHAT",
+                "adapter_class": "OpenAIChatAdapter", "api_base": bad,
+            })
+            self.assertEqual(r.status_code, 400, f"{bad!r} 应被拒")
+            self.assertEqual(r.json()["code"], "PARAM_INVALID")
+
     def test_register_model_invalid_param(self):
         """impl raise ValueError -> 400 PARAM_INVALID"""
         class _LLM:
