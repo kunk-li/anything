@@ -1471,6 +1471,23 @@ class SimpleAgent(
         if isinstance(output, dict):
             if "data" in output and isinstance(output["data"], dict):
                 data = output["data"]
+                # shell_exec 形态 (data 同含 returncode+output): 把"命令输出"本身作为观察,
+                # 并把"结果已完整 / 不必重复执行"的结论放在**最前** —— history 回放每条
+                # observation 只截前部 (见 _build_react_prompt), 抬头标记必须靠前才看得见。
+                # 否则走下面的 json.dumps(data) 会把 output 埋在 command/risk 等元数据之后,
+                # 一截断就成半截 JSON (…{ name: 'admin', s), 模型误判"没查全"→ 重复执行同一
+                # 只读命令 → 死循环 (查 mongosh listDatabases 时复现)。
+                if "returncode" in data and "output" in data:
+                    rc = data.get("returncode")
+                    out = str(data.get("output") or "")
+                    body_cap = _LIMIT - 90  # 留位置给抬头标记
+                    if len(out) > body_cap or data.get("output_truncated"):
+                        return (
+                            f"[命令执行完毕 returncode={rc}; 输出较长, 下面只是前一部分 —— "
+                            f"但这已是该命令的真实结果, 同一命令重复执行结果完全相同、不要再重复执行, "
+                            f"如需更少数据请改查询条件]\n{out[:body_cap]}"
+                        )
+                    return f"[命令执行完毕 returncode={rc}; 以下为完整输出]\n{out}"
                 if "description" in data:
                     return str(data["description"])[:_LIMIT]
                 if "answer" in data:

@@ -54,6 +54,7 @@ class PromptBuilderMixin:
             tool_lines.append(f"- {n}: {desc}")
 
         history_lines = []
+        _n_hist = len(history)
         for i, h in enumerate(history, start=1):
             history_lines.append(f"Iteration {i}:")
             if h.get("thought"):
@@ -62,7 +63,12 @@ class PromptBuilderMixin:
                 a = h["action"]
                 history_lines.append(f"  Action: {a.get('tool')}({a.get('input')})")
             if h.get("observation"):
-                history_lines.append(f"  Observation: {h['observation'][:300]}")
+                # 最近一轮 observation 给足额度 (≤2000, 与 _summarize_tool_output 上限一致),
+                # 让模型据"当前完整结果"作答; 更早的压到 300 防 context 膨胀。
+                # 早期若一律压 300, 会把"列清单/查库"类长输出切成半截 JSON, 诱导模型以为
+                # 没查全而重复执行同一只读命令 → 死循环, 故最近一条不截短。
+                _obs_cap = 2000 if i == _n_hist else 300
+                history_lines.append(f"  Observation: {h['observation'][:_obs_cap]}")
 
         history_text = "\n".join(history_lines) if history_lines else "(尚无历史)"
 
@@ -128,9 +134,12 @@ class PromptBuilderMixin:
             f"③本机相关 (这台电脑/系统使用情况) 必须调 system_info 读真实数据再答, 绝不可说'我无法访问你的电脑'(你能, 就靠工具);\n"
             f"④绝不要回答'我做不到'/'我只是语言模型'/'请你自己去弄' —— 能直接答就答, 该用工具就用;\n"
             f"⑤工具失败或无结果 (如无网、知识库为空) 时, 改用你自己的知识把问题尽力答完, 不要卡住、也不要反复重试同一个失败的工具。\n"
-            f"⑥涉及[数据/状态查询](数据库/文件/接口/本机状态等)时, **绝不要复用对话历史里出现过的旧查询结论**"
-            f"(数据会变、旧结论可能过时或本就查错), 必须本轮**重新执行**对应命令/工具、拿到当前真实结果再答; "
-            f"历史里说'空/没有/0 条/失败'时尤其要亲自重查一遍, 别直接复述历史 —— 也别只凭历史就下结论。\n"
+            f"⑥涉及[数据/状态查询](数据库/文件/接口/本机状态等)时, **绝不要复用更早对话/会话里出现过的旧查询结论**"
+            f"(数据会变、旧结论可能过时或本就查错), 必须在本次任务里**重新执行**对应命令/工具、拿到当前真实结果再答; "
+            f"更早历史里说'空/没有/0 条/失败'时尤其要亲自重查一遍 —— 注意这指的是**更早的**旧结论。\n"
+            f"⑦但**一旦你在本次任务的前几轮已经执行过某命令并拿到结果**(见下方历史的 Observation), 那就是当前真实结果, **直接据此作答**; "
+            f"尤其**不要因为输出看起来被截断/不完整就重复执行同一条只读命令** —— 同一命令重复执行结果完全相同, "
+            f"截断只是显示长度限制, 重跑拿不到更多, 只会空转死循环。\n"
             f"\n可用工具:\n" + "\n".join(tool_lines) + "\n"
             f"{catalog_block}"
             f"\n请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
