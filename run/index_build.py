@@ -83,6 +83,9 @@ def create_and_save_document(store: Any, item: Dict[str, Any]) -> Dict[str, Any]
         document["meta"].setdefault("source", source)
         for k, v in meta.items():
             document["meta"].setdefault(k, v)
+        # 顶层 stored_path 字段随 info.json 持久化 (write_info_file 可选字段)
+        if meta.get("stored_path"):
+            document["stored_path"] = meta["stored_path"]
 
     store.save_document(document)
 
@@ -163,6 +166,16 @@ def build_index(
         raise RuntimeError("vector_db 未构建成功，请检查 faiss 依赖或 bootstrap 配置")
 
     parsed_items = parse_sources(parser=parser, source_type=source_type, source_path=source_path)
+
+    # 单文件模式把原始文件路径写进 meta -> info.json 的 stored_path,
+    # DELETE /documents 据此回收 uploads/ 原件 (P5)
+    if source_type == "file":
+        for item in parsed_items:
+            if not isinstance(item, dict):
+                continue
+            if not isinstance(item.get("meta"), dict):
+                item["meta"] = {}
+            item["meta"]["stored_path"] = str(Path(source_path).resolve())
 
     total_docs = 0
     total_chunks = 0
@@ -259,6 +272,88 @@ def build_index(
             "total_chunks": total_chunks,
             "total_vectors": total_vectors,
             "documents": docs_summary,
+        },
+    }
+
+
+def rebuild_index(
+    data_layer: "Optional[Dict[str, Any]]" = None,
+    bm25_retriever: Any = None,
+    bm25_index_path: Optional[str] = None,
+    chunk_size_tokens: int = 400,
+    chunk_overlap_tokens: int = 80,
+    progress_cb: Any = None,
+) -> Dict[str, Any]:
+    """全量重建 (P14): 清空向量库 + BM25, 以 document_store 已存解析文档为源重灌。
+
+    用途: 清理已删文档残留 (compaction) / chunk 参数变更后重建 / 修复索引损坏。
+    POST /index/build 走这里 (后台线程), progress_cb(done, total) 回报进度。
+    """
+    if data_layer is None:
+        data_layer = build_data_layer()
+    store = data_layer.get("document_store")
+    embedding = data_layer.get("embedding")
+    vector_db = data_layer.get("vector_db")
+    if store is None or embedding is None or vector_db is None:
+        raise RuntimeError("document_store/embedding/vector_db 未构建成功")
+
+    docs = store.list_documents() or []
+    total = len(docs)
+
+    if hasattr(vector_db, "clear"):
+        vector_db.clear()
+    if bm25_retriever is not None:
+        bm25_retriever.clear()
+
+    rebuilt_docs = 0
+    total_chunks = 0
+    skipped: List[Dict[str, Any]] = []
+    for i, item in enumerate(docs):
+        doc_id = (item or {}).get("doc_id")
+        document = store.get_document(doc_id) if doc_id else None
+        content = (document or {}).get("content") or ""
+        file_name = (document or {}).get("file_name") or "unknown.txt"
+        if not str(content).strip():
+            skipped.append({"doc_id": doc_id, "reason": "empty content"})
+        else:
+            chunks = chunk_document(
+                doc_id=doc_id,
+                content=content,
+                file_name=file_name,
+                source="rebuild",
+                chunk_size_tokens=chunk_size_tokens,
+                chunk_overlap_tokens=chunk_overlap_tokens,
+            )
+            if not chunks:
+                skipped.append({"doc_id": doc_id, "reason": "no chunks generated"})
+            else:
+                vectors = embed_chunk_texts(embedding, [c["content"] for c in chunks])
+                upsert_vectors(vector_db, build_upsert_items(chunks, vectors))
+                if bm25_retriever is not None:
+                    try:
+                        bm25_retriever.add_chunks(chunks)
+                    except Exception as e:
+                        print(f"[bm25] rebuild add_chunks 失败 (忽略): {e}")
+                rebuilt_docs += 1
+                total_chunks += len(chunks)
+        if progress_cb is not None:
+            try:
+                progress_cb(i + 1, total)
+            except Exception:
+                pass
+
+    if bm25_retriever is not None and bm25_index_path:
+        ok = bm25_retriever.save(bm25_index_path)
+        print(f"[bm25] rebuild save {'OK' if ok else 'FAIL'}: size={bm25_retriever.size}")
+
+    return {
+        "code": "SUCCESS",
+        "message": "index rebuild finished",
+        "data": {
+            "total_docs": total,
+            "rebuilt_docs": rebuilt_docs,
+            "total_chunks": total_chunks,
+            "skipped": skipped,
         },
     }
 

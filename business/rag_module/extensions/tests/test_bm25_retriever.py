@@ -204,6 +204,61 @@ class TestBM25Retriever(unittest.TestCase):
 # rrf_merge
 # ===========================================================================
 
+class TestBM25RemoveDoc(unittest.TestCase):
+    """P4: 按 doc_id 在线摘除 — DELETE /documents 不再留 BM25 残留"""
+
+    def _mk(self):
+        r = BM25Retriever()
+        r.add_chunks([
+            {"chunk_id": "d1#c1", "doc_id": "d1", "content": "python web framework"},
+            {"chunk_id": "d1#c2", "doc_id": "d1", "content": "python async server"},
+            {"chunk_id": "d2#c1", "doc_id": "d2", "content": "rust memory safety"},
+        ])
+        return r
+
+    def test_remove_doc_removes_all_chunks(self):
+        r = self._mk()
+        self.assertEqual(r.remove_doc("d1"), 2)
+        self.assertEqual(r.size, 1)
+        # d1 内容查不到了, d2 不受影响
+        self.assertEqual(r.query("python", top_k=10), [])
+        res = r.query("rust", top_k=10)
+        self.assertEqual([x["chunk_id"] for x in res], ["d2#c1"])
+
+    def test_remove_doc_idempotent_and_missing(self):
+        r = self._mk()
+        self.assertEqual(r.remove_doc("d1"), 2)
+        self.assertEqual(r.remove_doc("d1"), 0)
+        self.assertEqual(r.remove_doc("nonexistent"), 0)
+        self.assertEqual(r.remove_doc(""), 0)
+
+    def test_remove_doc_cleans_empty_terms(self):
+        """词项的 posting 摘空后整个词条回收, 词表不只增不减"""
+        r = self._mk()
+        self.assertIn("rust", r._inverted)
+        r.remove_doc("d2")
+        self.assertNotIn("rust", r._inverted)
+
+    def test_remove_doc_persists_via_save_load(self):
+        r = self._mk()
+        r.remove_doc("d1")
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bm25.json")
+        self.assertTrue(r.save(path))
+        r2 = BM25Retriever()
+        self.assertTrue(r2.load(path))
+        self.assertEqual(r2.size, 1)
+        self.assertEqual(r2.query("python", top_k=10), [])
+
+    def test_atomic_save_no_tmp_leftover(self):
+        r = self._mk()
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "bm25.json")
+        self.assertTrue(r.save(path))
+        self.assertTrue(os.path.exists(path))
+        self.assertFalse(os.path.exists(path + ".tmp"))
+
+
 class TestRRFMerge(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(rrf_merge([]), [])

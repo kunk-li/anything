@@ -82,6 +82,9 @@ class ApiService(
         state_store=None,          # Task SSS (#105): /sessions/* 路由用
         tool_registry=None,        # Task FFFF (#123): /agent/tools 路由用
         agent=None,                # 执行计划⑥/⑦: /agent/maintenance/* + /config/agent/* 路由用
+        bm25_retriever=None,       # P4: DELETE /documents 在线摘除 BM25 条目
+        bm25_index_path=None,      # P4: 摘除后持久化路径
+        rebuild_runner=None,       # P14: POST /index/build 全量重建入口 (factory 闭包)
     ):
         """
         Args:
@@ -114,6 +117,10 @@ class ApiService(
         # 执行计划⑥/⑦: 注入 agent 实例供 /agent/maintenance/* (维护提议/审批) 与
         # /config/agent/* (配置 dump/set) 路由用. None 时这些路由返 SERVICE_UNAVAILABLE.
         self.agent = agent
+        # P4/P14: 删除链路在线摘 BM25 + 索引全量重建
+        self.bm25_retriever = bm25_retriever
+        self.bm25_index_path = bm25_index_path
+        self.rebuild_runner = rebuild_runner
         # 基础依赖优先走 DI 注入
         deps = deps or build_basic_deps()
         self.utils = deps.utils

@@ -130,6 +130,7 @@ def build_application_layer(
         bm25_for_index = business_layer.get("bm25_retriever") if business_layer else None
         bm25_index_path_for_index = business_layer.get("bm25_index_path") if business_layer else None
         index_runner = None
+        rebuild_runner = None
         if data_layer is not None and data_layer.get("embedding") and data_layer.get("vector_db"):
             def _index_runner(file_path: str):
                 from index_build import build_index as _build_index
@@ -141,6 +142,18 @@ def build_application_layer(
                     bm25_index_path=bm25_index_path_for_index,
                 )
             index_runner = _index_runner
+
+            # P14: 全量重建 (POST /index/build 后台线程跑) — 清向量库+BM25 后
+            # 以 document_store 已存文档为源重灌, 清理删除残留/参数变更重建
+            def _rebuild_runner(progress_cb=None):
+                from index_build import rebuild_index as _rebuild_index
+                return _rebuild_index(
+                    data_layer=data_layer,
+                    bm25_retriever=bm25_for_index,
+                    bm25_index_path=bm25_index_path_for_index,
+                    progress_cb=progress_cb,
+                )
+            rebuild_runner = _rebuild_runner
 
         # Task S: 透传 rag + vector_db 让 /admin/status 能拿到运行期状态
         rag_for_admin = business_layer.get("rag") if business_layer else None
@@ -171,6 +184,9 @@ def build_application_layer(
             tool_registry=tool_registry,
             scheduler=scheduler,
             agent=agent_for_routes,
+            bm25_retriever=bm25_for_index,
+            bm25_index_path=bm25_index_path_for_index,
+            rebuild_runner=rebuild_runner,
         )
 
         # 优化②: app 退出统一收尾 — 停调度线程 + 关外部工具连接 (MCP 子进程)。daemon 线程/子进程

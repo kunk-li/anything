@@ -98,10 +98,79 @@ class TestFaissVectorDB(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["vector_id"], "v1")
 
-    def test_delete_not_supported(self):
-        with self.assertRaises(VectorDBException) as ctx:
-            self.db.delete(vector_ids=["v1"])
-        self.assertEqual(ctx.exception.code, "VECTOR_DELETE_NOT_SUPPORTED")
+    def test_delete_by_vector_ids(self):
+        """真删除: 按 vector_id 删, 索引/映射同步收缩, 删后查不到"""
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+            {"vector_id": "v2", "embedding": [0.2] * 64, "metadata": {"doc_id": "d2", "chunk_id": "c2"}},
+        ])
+        self.assertTrue(self.db.delete(vector_ids=["v1"]))
+        self.assertEqual(self.db.index.ntotal, 1)
+        res = self.db.query([0.1] * 64, top_k=10)
+        self.assertTrue(all(r["vector_id"] != "v1" for r in res))
+        # 幂等: 再删同 id 返回 False 不抛错
+        self.assertFalse(self.db.delete(vector_ids=["v1"]))
+
+    def test_delete_by_doc_id_filter(self):
+        """按 filters={doc_id} 删除整篇文档的向量 (DELETE /documents 路径)"""
+        self.db.upsert_vectors([
+            {"vector_id": "d1#c1", "embedding": [0.1] * 64, "metadata": {"doc_id": "d1", "chunk_id": "d1#c1"}},
+            {"vector_id": "d1#c2", "embedding": [0.2] * 64, "metadata": {"doc_id": "d1", "chunk_id": "d1#c2"}},
+            {"vector_id": "d2#c1", "embedding": [0.3] * 64, "metadata": {"doc_id": "d2", "chunk_id": "d2#c1"}},
+        ])
+        self.assertTrue(self.db.delete(filters={"doc_id": "d1"}))
+        self.assertEqual(self.db.index.ntotal, 1)
+        res = self.db.query([0.3] * 64, top_k=10)
+        self.assertEqual([r["vector_id"] for r in res], ["d2#c1"])
+
+    def test_delete_persists_across_reload(self):
+        """删除后重载新实例, 删掉的向量不复活"""
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+            {"vector_id": "v2", "embedding": [0.2] * 64, "metadata": {"doc_id": "d2", "chunk_id": "c2"}},
+        ])
+        self.db.delete(vector_ids=["v1"])
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db2 = FaissVectorDB(cfg=cfg)
+        self.assertEqual(db2.index.ntotal, 1)
+        res = db2.query([0.2] * 64, top_k=10)
+        self.assertEqual([r["vector_id"] for r in res], ["v2"])
+
+    def test_legacy_format_migration(self):
+        """旧格式 (meta.json 无 int_of) 自动迁移为 IDMap2, 数据不丢"""
+        import json as _json
+        import numpy as _np
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.5] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+        ])
+        # 手工改写 meta.json 成旧格式 (去掉 int_of/next_int), 并写旧式 IndexFlatIP 索引文件
+        with open(self.db.meta_path, "r", encoding="utf-8") as f:
+            meta = _json.load(f)
+        meta.pop("int_of", None)
+        meta.pop("next_int", None)
+        with open(self.db.meta_path, "w", encoding="utf-8") as f:
+            _json.dump(meta, f, ensure_ascii=False)
+        import faiss as _faiss
+        legacy = _faiss.IndexFlatIP(64)
+        legacy.add(_np.load(self.db.emb_path).astype("float32"))
+        _faiss.write_index(legacy, self.db.index_path)
+
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db2 = FaissVectorDB(cfg=cfg)
+        self.assertEqual(db2.index.ntotal, 1)
+        res = db2.query([0.5] * 64, top_k=1)
+        self.assertEqual(res[0]["vector_id"], "v1")
+        # 迁移后支持删除
+        self.assertTrue(db2.delete(vector_ids=["v1"]))
+        self.assertEqual(db2.index.ntotal, 0)
+
+    def test_clear(self):
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+        ])
+        self.assertTrue(self.db.clear())
+        self.assertEqual(self.db.index.ntotal, 0)
+        self.assertEqual(self.db.query([0.1] * 64, top_k=5), [])
 
     def test_embedding_dimension_mismatch(self):
         bad = [{"vector_id": "v1", "embedding": [0.1] * 32, "metadata": {"doc_id": "d1", "chunk_id": "c1"}}]

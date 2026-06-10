@@ -112,8 +112,43 @@ class BM25Retriever:
                 added += 1
         return added
 
+    def remove_doc(self, doc_id: str) -> int:
+        """按 doc_id 移除该文档的全部 chunk (倒排 posting + meta + doc_lens 三处同步).
+
+        chunk 归属判定: _chunk_meta[cid]["doc_id"] == doc_id, 兜底用
+        chunk_id 前缀 "{doc_id}#" (chunk_id 约定格式 doc_id#cNNNNNN)。
+        返回移除的 chunk 数; doc 不存在返回 0。
+        """
+        if not doc_id:
+            return 0
+        prefix = f"{doc_id}#"
+        with self._lock:
+            cids = [
+                cid for cid, m in self._chunk_meta.items()
+                if (m or {}).get("doc_id") == doc_id or cid.startswith(prefix)
+            ]
+            # _chunk_meta 可能缺失 (load 自旧文件), 再从 doc_lens 兜底扫一遍前缀
+            cids_set = set(cids)
+            for cid in self._doc_lens:
+                if cid.startswith(prefix):
+                    cids_set.add(cid)
+            if not cids_set:
+                return 0
+            for term in list(self._inverted.keys()):
+                postings = self._inverted[term]
+                for cid in cids_set:
+                    postings.pop(cid, None)
+                if not postings:
+                    del self._inverted[term]  # 词项已无 posting, 顺手回收防词表只增不减
+            for cid in cids_set:
+                self._chunk_meta.pop(cid, None)
+                tok = self._doc_lens.pop(cid, None)
+                if tok:
+                    self._total_tokens -= tok
+            return len(cids_set)
+
     def clear(self) -> None:
-        """清空全部索引 (主要给 tests 用)."""
+        """清空全部索引 (rebuild 入口 + tests 用)."""
         with self._lock:
             self._inverted.clear()
             self._chunk_meta.clear()
@@ -177,19 +212,26 @@ class BM25Retriever:
     # ============ 持久化 ============
 
     def save(self, path: str) -> bool:
-        """把索引序列化到磁盘 (JSON). 失败返回 False."""
+        """把索引序列化到磁盘 (JSON). 失败返回 False.
+
+        原子写: 先写 .tmp 再 os.replace, 进程中途崩溃不会留下半截文件
+        (半截 JSON 会让下次 load 静默失败、整库'丢失')。
+        """
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            payload = {
-                "k1": self.k1,
-                "b": self.b,
-                "inverted": self._inverted,
-                "chunk_meta": self._chunk_meta,
-                "doc_lens": self._doc_lens,
-                "total_tokens": self._total_tokens,
-            }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
+            with self._lock:
+                payload = {
+                    "k1": self.k1,
+                    "b": self.b,
+                    "inverted": self._inverted,
+                    "chunk_meta": self._chunk_meta,
+                    "doc_lens": self._doc_lens,
+                    "total_tokens": self._total_tokens,
+                }
+                tmp_path = path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                os.replace(tmp_path, path)
             return True
         except Exception:
             return False

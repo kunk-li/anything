@@ -191,10 +191,13 @@ class DocumentsRoutesMixin:
 
         @self.app.delete("/documents/{doc_id}")
         async def delete_document(doc_id: str, request: Request):
-            """删除文档 — 同时从 document_store + vector_db (按 doc_id filter) + BM25 摘.
+            """删除文档 — 五处一次清干净, 各处结果如实回报:
 
-            注: BM25 没暴露 remove API, 只能等下次重启加载时按需重新构建.
-            BM25 文件 stale 也不影响检索质量, 因为查时按 chunk_id 取 content 兜底.
+            1. document_store 解析文档 (正文 + info.json + hash map)
+            2. vector_db 向量 (IndexIDMap2 真删除, 按 doc_id filter)
+            3. BM25 倒排条目 (remove_doc + 持久化)
+            4. uploads/ 原始上传文件 (按 info.stored_path 回收, 限 upload_dir 内)
+            5. kb.sqlite3 的 kb_doc 关联行 (防悬挂引用)
             """
             trace_id = request.state.trace_id
             if self.document_store_factory is None:
@@ -212,9 +215,19 @@ class DocumentsRoutesMixin:
 
             deleted_doc = False
             deleted_vectors = False
+            bm25_removed = 0
+            deleted_upload_file = False
+            kb_links_removed = 0
             warnings: List[str] = []
+            stored_path = None
             try:
                 store = self.document_store_factory(tid)
+                # 删之前先读 info 拿原始上传文件路径 (删完就读不到了)
+                try:
+                    info = store.read_info_file(doc_id) or {}
+                    stored_path = info.get("stored_path")
+                except Exception:
+                    stored_path = None
                 try:
                     deleted_doc = bool(store.delete_document(doc_id))
                 except Exception as e:
@@ -224,10 +237,46 @@ class DocumentsRoutesMixin:
 
             if self.vector_db is not None:
                 try:
-                    if hasattr(self.vector_db, "delete"):
-                        deleted_vectors = bool(self.vector_db.delete(filters={"doc_id": doc_id}))
+                    deleted_vectors = bool(self.vector_db.delete(filters={"doc_id": doc_id}))
                 except Exception as e:
                     warnings.append(f"vector_db: {e}")
+
+            if self.bm25_retriever is not None:
+                try:
+                    bm25_removed = int(self.bm25_retriever.remove_doc(doc_id))
+                    if bm25_removed and self.bm25_index_path:
+                        self.bm25_retriever.save(self.bm25_index_path)
+                except Exception as e:
+                    warnings.append(f"bm25: {e}")
+
+            # uploads/ 原件回收 — 只删 upload_dir 直系子文件, 路径在外一律不动
+            if stored_path:
+                try:
+                    upload_root = Path(
+                        self.config.get_config("api_service.upload_dir", "./uploads")
+                    ).resolve()
+                    p = Path(stored_path).resolve()
+                    if p.parent == upload_root and p.is_file():
+                        p.unlink()
+                        deleted_upload_file = True
+                except Exception as e:
+                    warnings.append(f"upload_file: {e}")
+
+            # kb_doc 关联清理 — kb 库不存在时跳过 (不无故建库文件)
+            try:
+                from .kb import _get_db_path
+                import sqlite3 as _sqlite3
+                kb_db = _get_db_path()
+                if kb_db.exists():
+                    conn = _sqlite3.connect(str(kb_db), timeout=5.0)
+                    try:
+                        cur = conn.execute("DELETE FROM kb_doc WHERE doc_id = ?", (doc_id,))
+                        kb_links_removed = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+                        conn.commit()
+                    finally:
+                        conn.close()
+            except Exception as e:
+                warnings.append(f"kb: {e}")
 
             return JSONResponse(
                 status_code=200,
@@ -239,8 +288,10 @@ class DocumentsRoutesMixin:
                         "tenant_id": tid,
                         "deleted_from_document_store": deleted_doc,
                         "deleted_from_vector_db": deleted_vectors,
+                        "bm25_chunks_removed": bm25_removed,
+                        "deleted_upload_file": deleted_upload_file,
+                        "kb_links_removed": kb_links_removed,
                         "warnings": warnings,
-                        "note": "BM25 索引中的 chunks 暂不在线移除, 下次 index_build 时清理",
                     },
                     "trace_id": trace_id, "retryable": False, "details": None,
                 },
