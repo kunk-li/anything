@@ -222,4 +222,9 @@ SHELL_EXEC_DESCRIPTION = (
     "(带 extra_params.approve_tools=['shell_exec'] 放行)。"
     '例: 列 MongoDB 数据库 → command=`mongosh --quiet --eval "db.adminCommand({listDatabases:1})"`; '
     '看已装软件 → command=`wmic product get name,version` (Windows) 或 `dpkg -l` (Linux)。'
+    ' ⚠️ 查某个库的集合/数据时**必须指定目标库**: mongosh 不指定库默认连 test, 会查到空! '
+    '用连接串 `mongosh "mongodb://localhost:27017/<库名>" --quiet --eval "..."` 或在 eval 里 '
+    '`db.getSiblingDB("<库名>").<集合>.find().toArray()`。'
+    '例: 查 inspection_system 的 template_infos → '
+    'command=`mongosh "mongodb://localhost:27017/inspection_system" --quiet --eval "db.template_infos.find().toArray()"`。'
 )
