@@ -275,6 +275,18 @@ class SimpleAgent(
             "agent.tool_cache_max_size", env_var="ANYTHING_AGENT_TOOL_CACHE_SIZE",
             default=256, value_type=int,
         )
+        # 工具执行统一超时: agent.timeout 是 wall-clock、只在 ReAct 轮间检查,
+        # 工具内部卡死原本无人中止 — 这里兜底。<=0 = 关闭; 合法长任务工具走豁免名单。
+        self.tool_timeout_seconds = self.config.get_effective_value(
+            "agent.tool_timeout_seconds", env_var="ANYTHING_AGENT_TOOL_TIMEOUT",
+            default=120, value_type=int,
+        )
+        default_timeout_exempt = ["spawn_subagent"]  # 子代理整段执行, 时长合法超限
+        cfg_exempt = self.config.get_config("agent.tool_timeout_exempt", default_timeout_exempt)
+        if isinstance(cfg_exempt, list):
+            self.tool_timeout_exempt = set(str(t) for t in cfg_exempt if t)
+        else:
+            self.tool_timeout_exempt = set(default_timeout_exempt)
         self._tool_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._tool_cache_lock = threading.Lock()
         self._tool_cache_stats = {"hits": 0, "misses": 0}

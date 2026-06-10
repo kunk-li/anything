@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, Optional
+
+
+class ToolTimeoutError(Exception):
+    """工具执行超过 agent.tool_timeout_seconds 仍未返回."""
 
 
 class ToolExecutorMixin:
@@ -139,7 +145,7 @@ class ToolExecutorMixin:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                output = tool(payload)
+                output = self._invoke_tool_with_timeout(tool, tool_name, payload)
 
                 is_success = True
                 if isinstance(output, dict):
@@ -162,6 +168,21 @@ class ToolExecutorMixin:
                 if cache_key and is_success:
                     self._tool_cache_put(cache_key, result)
                 return result
+            except ToolTimeoutError as e:
+                # 超时不重试 (重试只会把卡死时间翻倍), 直接返回失败
+                self.logger.warning(
+                    f"工具调用超时：tool={tool_name}, attempt={attempt + 1}, "
+                    f"trace_id={trace_id}, {e}"
+                )
+                return {
+                    "step_id": step_id,
+                    "tool_name": tool_name,
+                    "success": False,
+                    "output": None,
+                    "error": str(e),
+                    "code": "TOOL_TIMEOUT",
+                    "attempt": attempt + 1,
+                }
             except Exception as e:
                 last_error = str(e)
                 self.logger.warning(
@@ -178,6 +199,32 @@ class ToolExecutorMixin:
             "code": "TOOL_CALL_FAILED",
             "attempt": max_retries + 1,
         }
+
+    def _invoke_tool_with_timeout(self, tool, tool_name: Optional[str], payload: Dict[str, Any]):
+        """单次工具调用 + 统一超时兜底。
+
+        agent.timeout 是 wall-clock、只在 ReAct 轮间检查; 工具内部卡死(http 无超时、
+        死循环等)原本无人中止 — 这里用 future.result(timeout) 兜底。
+        超时后工作线程无法强杀, 只能放弃等待 (shutdown(wait=False)), 线程泄漏到
+        工具自然结束为止; 换来 agent 主循环按时拿回控制权。
+        timeout<=0 或工具在豁免名单 (spawn_subagent 这类合法长任务) -> 直接同步调用。
+        """
+        timeout = float(getattr(self, "tool_timeout_seconds", 0) or 0)
+        if timeout <= 0 or tool_name in getattr(self, "tool_timeout_exempt", set()):
+            return tool(payload)
+        ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"tool-{tool_name}")
+        try:
+            fut = ex.submit(tool, payload)
+            try:
+                return fut.result(timeout=timeout)
+            except FuturesTimeoutError:
+                fut.cancel()
+                raise ToolTimeoutError(
+                    f"工具 {tool_name} 执行超过 {timeout:.0f}s 未返回 "
+                    f"(agent.tool_timeout_seconds)"
+                ) from None
+        finally:
+            ex.shutdown(wait=False)
 
     def _get_tool(self, name: str):
         """从注册表获取工具，兼容 dict 和 ToolRegistry 两种风格."""
