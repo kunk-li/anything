@@ -182,7 +182,12 @@ def build_upsert_items(
     """把 chunks + vectors 组合成符合 BaseVectorDB.upsert_vectors 契约的 items。
 
     每个 item 的 metadata 强制包含 doc_id/chunk_id/file_name/chunk_index(见文档 11.4),
-    并额外包含 start_char/end_char/source/content 以支持引用回溯与去重。
+    并额外包含 start_char/end_char/source 以支持引用回溯与去重。
+
+    P8: 不再把全文塞进 metadata (此前 meta 体积是向量本体的 2.5 倍, 同一内容
+    多落盘一份)。检索命中后由 RAG 按 doc_id + start/end_char 从 document_store
+    抠原文 (_try_resolve_content_from_doc_store), 旧索引 meta 仍带 content 时
+    优先直用、互相兼容。
     """
     items = []
     for chunk, vec in zip(chunks, vectors):
@@ -198,7 +203,6 @@ def build_upsert_items(
                     "start_char": chunk["meta"]["start_char"],
                     "end_char": chunk["meta"]["end_char"],
                     "source": chunk["meta"]["source"],
-                    "content": chunk["content"],
                 },
             }
         )

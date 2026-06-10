@@ -192,13 +192,21 @@ class LocalDocumentStore(BaseDocumentStore):
 
     def _write_document_file(self, doc_path: str, content: str) -> None:
         os.makedirs(os.path.dirname(doc_path), exist_ok=True)
-        with open(doc_path, "w", encoding="utf-8") as f:
+        # newline="\n" 禁用 OS 换行转换: Windows text 模式会把 \n 写成 \r\n
+        # (内容含 \r\n 时甚至写出 \r\r\n), 读回字符数对不上 chunk 偏移
+        with open(doc_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(content)
 
     def create_document(self, content: str, file_name: str, file_type: str, content_hash: str) -> Dict[str, str]:
         if content is None or content == "":
             self.logger.warning(f"create_document failed: empty content, file_name={file_name}")
             raise ValueError("content不能为空，无法创建文档")
+
+        # 入库即归一化换行 (\r\n|\r -> \n): chunk 偏移基于这份串计算, 落盘读回
+        # 必须逐字符一致 — 否则 P8 按 start/end_char 取文会系统性错位
+        # (实测 \r\n 内容经 text 模式写/universal 读往返后长度漂移上千字符)。
+        # content_hash 语义不变: 仍是调用方对原始内容算的 hash (查重在调用侧一致即可)。
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
 
         ft = normalize_file_type(file_type)
         if ft != "unknown" and not self._is_supported_type(ft):
@@ -348,7 +356,11 @@ class LocalDocumentStore(BaseDocumentStore):
 
         info_path = get_info_file_path(self.storage_dir, doc_id)
         try:
-            payload = {k: document.get(k) for k in required}
+            # P8: info 不再冗余整份 content — 正文唯一权威在 <doc_id>.<ext> 文件,
+            # 此前 info.json 重复存全文导致同一内容落盘双份。留 content_length
+            # 给 list_documents / 辅助查重。旧 info 文件随下次读写自然瘦身。
+            payload = {k: document.get(k) for k in required if k != "content"}
+            payload["content_length"] = len(document.get("content") or "")
             # 可选: 原始上传文件路径 — DELETE /documents 时据此回收 uploads/ 原件
             if document.get("stored_path"):
                 payload["stored_path"] = str(document["stored_path"])
@@ -431,6 +443,8 @@ class LocalDocumentStore(BaseDocumentStore):
             raise ValueError("doc_id格式非法，需为UUID4")
         if new_content is None or new_content == "":
             raise ValueError("new_content不能为空")
+        # 与 create_document 同一换行归一化约定 (chunk 偏移一致性)
+        new_content = new_content.replace("\r\n", "\n").replace("\r", "\n")
 
         info = self.read_info_file(doc_id)
         if not info:

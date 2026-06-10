@@ -38,6 +38,20 @@ class TestLocalDocumentStore(unittest.TestCase):
         self.store.delete_document(doc["doc_id"])
         self.assertIsNone(self.store.find_doc_id_by_hash(h))
 
+    def test_crlf_content_roundtrip_char_exact(self):
+        """P8 偏移一致性: \\r\\n 内容入库归一化, 落盘读回与 create 返回的串逐字符一致
+        — chunk 偏移基于 create 返回串计算, 读回串必须相同否则按偏移取文错位"""
+        raw = "line1\r\nline2\r\nline3\rtail\n中文行\r\n"
+        doc = self.store.create_document(raw, "c.md", "md", calculate_content_hash(raw))
+        normalized = doc["content"]
+        self.assertNotIn("\r", normalized)
+        self.assertTrue(self.store.save_document(doc))
+        got = self.store.get_document(doc["doc_id"])
+        self.assertEqual(got["content"], normalized)  # 逐字符一致
+        # 切片语义可用 (模拟按偏移取文)
+        idx = normalized.find("line2")
+        self.assertEqual(got["content"][idx:idx + 5], "line2")
+
     def test_env_override_isolates_storage_dir(self):
         """setUp 设的 env 隔离必须真生效 — 历史上 get_config 不读 env, 测试
         一直写到 CWD/documents 污染仓库 (P13 修复的回归防护)"""

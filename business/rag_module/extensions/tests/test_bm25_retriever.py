@@ -103,9 +103,25 @@ class TestBM25Retriever(unittest.TestCase):
         results = bm25.query("RAG", top_k=3)
         self.assertTrue(results)
         r = results[0]
-        # 必备字段: chunk_id / doc_id / file_name / chunk_index / content / score
-        for f in ("chunk_id", "doc_id", "file_name", "chunk_index", "content", "score"):
+        # 必备字段 (P8 后不再含 content — 由 RAG 按 start/end_char 从 doc_store 取文)
+        for f in ("chunk_id", "doc_id", "file_name", "chunk_index", "score"):
             self.assertIn(f, r, f"missing field: {f}")
+        self.assertNotIn("content", r)
+
+    def test_query_allowed_doc_ids_pushdown(self):
+        """P15: allowed_doc_ids 在评分阶段过滤, 只返回 KB 内文档的 chunk"""
+        bm25 = BM25Retriever()
+        bm25.add_chunks([
+            {"chunk_id": "d1#c1", "doc_id": "d1", "content": "python rag retrieval"},
+            {"chunk_id": "d2#c1", "doc_id": "d2", "content": "python rag pipeline"},
+            {"chunk_id": "d3#c1", "doc_id": "d3", "content": "python rag system"},
+        ])
+        res = bm25.query("rag", top_k=10, allowed_doc_ids={"d2"})
+        self.assertEqual([r["chunk_id"] for r in res], ["d2#c1"])
+        # None = 不过滤 (向后兼容)
+        self.assertEqual(len(bm25.query("rag", top_k=10)), 3)
+        # 空集合 = 全过滤
+        self.assertEqual(bm25.query("rag", top_k=10, allowed_doc_ids=set()), [])
 
     def test_idf_penalizes_common_terms(self):
         """IDF 应该惩罚高 df 的常见词, 让稀有词加权更高."""

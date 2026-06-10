@@ -104,8 +104,8 @@ class TestMultiTenancyEnd2End(unittest.TestCase):
                 "metadata": {"doc_id": "da", "chunk_id": "ca2", "text": "tenant-a public"},
             },
         ])
-        # 物理目录确认隔离
-        self.assertTrue(os.path.exists(os.path.join(self.vector_dir, self.tid_a, "faiss.index")))
+        # 物理目录确认隔离 (P7 后持久化为单一 sqlite)
+        self.assertTrue(os.path.exists(os.path.join(self.vector_dir, self.tid_a, "vectors.sqlite3")))
 
         # tenant B 来读 — 同方向 query 应该 0 命中
         db_b = FaissVectorDB(cfg=cfg, tenant_id=self.tid_b)

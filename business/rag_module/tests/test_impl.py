@@ -41,6 +41,59 @@ class TestSimpleRAG(unittest.TestCase):
         self.assertIsInstance(chunks, list)
         self.assertEqual(chunks, [])
 
+    def test_normalize_resolves_content_from_doc_store(self):
+        """P8: meta 无 content 时按 doc_id + start/end_char 从 doc_store 抠原文"""
+
+        class _DocStore:
+            def __init__(self):
+                self.calls = 0
+
+            def get_document(self, doc_id):
+                self.calls += 1
+                return {"doc_id": doc_id, "content": "0123456789ABCDEF"}
+
+        store = _DocStore()
+        rag = SimpleRAG(llm_client=self.llm, doc_store=store)
+        item = {
+            "vector_id": "d1#c1", "score": 0.9,
+            "metadata": {"chunk_id": "d1#c1", "doc_id": "d1", "file_name": "a.txt",
+                         "chunk_index": 0, "start_char": 4, "end_char": 10},
+        }
+        chunk = rag._normalize_retrieved_item(item)
+        self.assertEqual(chunk["content"], "456789")
+        # 同 doc 第二个 chunk 命中缓存, 不再读盘
+        item2 = dict(item, metadata=dict(item["metadata"], chunk_id="d1#c2",
+                                         start_char=10, end_char=16))
+        chunk2 = rag._normalize_retrieved_item(item2)
+        self.assertEqual(chunk2["content"], "ABCDEF")
+        self.assertEqual(store.calls, 1)
+        # 旧索引 meta 自带 content 时直用, 不读盘
+        item3 = {
+            "vector_id": "d2#c1", "score": 0.5,
+            "metadata": {"chunk_id": "d2#c1", "doc_id": "d2", "file_name": "b.txt",
+                         "chunk_index": 0, "content": "inline-content"},
+        }
+        chunk3 = rag._normalize_retrieved_item(item3)
+        self.assertEqual(chunk3["content"], "inline-content")
+        self.assertEqual(store.calls, 1)
+
+    def test_normalize_offsets_invalid_falls_back_to_head(self):
+        """P8: 偏移缺失/越界 (文档被更新过) 时取头部, 不崩不空"""
+
+        class _DocStore:
+            def get_document(self, doc_id):
+                return {"doc_id": doc_id, "content": "X" * 5000}
+
+        rag = SimpleRAG(llm_client=self.llm, doc_store=_DocStore())
+        item = {
+            "vector_id": "d1#c1", "score": 0.9,
+            "metadata": {"chunk_id": "d1#c1", "doc_id": "d1", "file_name": "a.txt",
+                         "chunk_index": 0, "start_char": 99999, "end_char": 100100},
+        }
+        chunk = rag._normalize_retrieved_item(item)
+        self.assertTrue(chunk["content"])
+        self.assertLessEqual(len(chunk["content"]), rag.max_chunk_in_prompt_tokens * 4)
+
     def test_run_returns_unified_envelope(self):
         """run 应返回统一响应信封 (code/message/data/trace_id/...)。"""
         result = self.rag.run({

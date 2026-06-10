@@ -48,6 +48,12 @@ class SimpleRAG(BaseRAG):
         self.bm25_retriever = bm25_retriever
         self.long_term_memory = long_term_memory
 
+        # P8 取文缓存: {doc_id: (content, expires_at)} — meta 不再存全文后,
+        # 命中 chunk 按偏移从 doc_store 抠原文; 一次查询多个 chunk 常落同一 doc。
+        self._doc_content_cache: Dict[str, Any] = {}
+        # P15 KB doc_ids 短缓存: {kb_id: (set, expires_at)} — 原先每次查询现开 sqlite
+        self._kb_cache: Dict[str, Any] = {}
+
         # 关键配置项走 get_effective_value, 允许环境变量覆盖
         # (运维不改代码即可调参; 详见 docs/configuration-priority.md)
         self.top_k_retrieve = self.config.get_effective_value(
@@ -261,6 +267,14 @@ class SimpleRAG(BaseRAG):
         # 3. 向量化 effective_query
         query_embedding = self._embed_query(effective_query, trace_id=trace_id)
 
+        # 3b. P15: KB 过滤下推 — kb_id 的 doc_id 集合在检索阶段就生效 (向量层
+        # filters 集合成员判定 + 命中不足自动放大候选; BM25 评分阶段跳过 KB 外
+        # chunk)。原先融合后过滤: 大库+小 KB 时全局 top-50 可能全被滤掉 → 0 结果。
+        kb_id = extra_params.get("kb_id")
+        kb_allowed = self._kb_allowed_doc_ids(kb_id) if kb_id else set()
+        if kb_allowed and "doc_id" not in filters:  # 调用方显式 doc_id filter 优先
+            filters["doc_id"] = sorted(kb_allowed)
+
         # 4. 检索向量库
         raw_items: List[Dict[str, Any]] = []
         if self.vector_db is not None and query_embedding is not None:
@@ -285,6 +299,7 @@ class SimpleRAG(BaseRAG):
         if hybrid_active:
             bm25_chunks = self._query_bm25(
                 query_text=effective_query, top_k=retrieve_k, trace_id=trace_id,
+                allowed_doc_ids=kb_allowed or None,
             )
 
         # 5c. 融合 (RRF) - 仅在混合模式且 BM25 有结果时
@@ -295,16 +310,14 @@ class SimpleRAG(BaseRAG):
         else:
             chunks = vec_chunks
 
-        # 5d. ZZ-3: 知识库 (KB) 过滤 — extra_params.kb_id 时只保留该 KB 内文档的 chunk.
-        # 让"建知识库 → 选知识库 → 只在这组文档里问"真正生效 (PM-5 之前只存元数据).
-        kb_id = extra_params.get("kb_id")
-        if kb_id:
-            allowed = self._kb_allowed_doc_ids(kb_id)
-            if allowed:  # KB 为空 / 读失败时不过滤, 避免全空
-                before = len(chunks)
-                chunks = [c for c in chunks if str(c.get("doc_id")) in allowed]
+        # 5d. ZZ-3 KB 过滤安全网 — 正常已在 3b 下推到检索阶段, 这里兜底
+        # (防调用方显式 doc_id filter 与 KB 并存等边角漏过)
+        if kb_allowed:
+            before = len(chunks)
+            chunks = [c for c in chunks if str(c.get("doc_id")) in kb_allowed]
+            if len(chunks) != before:
                 self.logger.info(
-                    f"RAG KB 过滤: kb_id={kb_id}, {before}→{len(chunks)} chunks (仅该知识库)"
+                    f"RAG KB 过滤(安全网): kb_id={kb_id}, {before}→{len(chunks)} chunks"
                 )
 
         # 6. 可选 rerank (用 effective_query 而非 original)
@@ -325,7 +338,19 @@ class SimpleRAG(BaseRAG):
         MVP 实现: 直接读 run/kb.sqlite3 (application 层 kb router 管理的库).
         理想架构应由 application 层把 kb_id 解析成 doc_ids 注入 extra_params,
         RAG 不直接依赖 kb 库 — 留作后续重构. 读失败 / KB 空时返回空集 (不过滤).
+        P15: 加 5s TTL 缓存 — 原先每次查询现开一个 sqlite 连接。
         """
+        ent = self._kb_cache.get(str(kb_id))
+        now = time.time()
+        if ent is not None and ent[1] > now:
+            return ent[0]
+        allowed = self._kb_allowed_doc_ids_uncached(kb_id)
+        if len(self._kb_cache) >= 32:
+            self._kb_cache.clear()
+        self._kb_cache[str(kb_id)] = (allowed, now + 5.0)
+        return allowed
+
+    def _kb_allowed_doc_ids_uncached(self, kb_id):
         try:
             import sqlite3
             import os
@@ -769,15 +794,28 @@ class SimpleRAG(BaseRAG):
         query_text: str,
         top_k: int,
         trace_id: Optional[str],
+        allowed_doc_ids=None,
     ) -> List[Dict[str, Any]]:
-        """调 bm25_retriever.query() 返回 chunk 列表; 失败仅 WARN 不抛."""
+        """调 bm25_retriever.query() 返回 chunk 列表; 失败仅 WARN 不抛.
+
+        P15: allowed_doc_ids 下推到评分阶段过滤。
+        P8: 结果统一过 _normalize_retrieved_item — BM25 meta 不再带 content,
+        normalize 会按偏移从 doc_store 取文 (旧索引带 content 时直用)。
+        """
         if self.bm25_retriever is None or not query_text:
             return []
         try:
-            return self.bm25_retriever.query(query_text=query_text, top_k=top_k)
+            hits = self.bm25_retriever.query(
+                query_text=query_text, top_k=top_k, allowed_doc_ids=allowed_doc_ids,
+            )
+        except TypeError:
+            # 老签名 retriever (无 allowed_doc_ids) 兼容
+            hits = self.bm25_retriever.query(query_text=query_text, top_k=top_k)
         except Exception as e:
             self.logger.warning(f"BM25 检索失败 (忽略): trace_id={trace_id}, err={e}")
             return []
+        normalized = [self._normalize_retrieved_item(h) for h in (hits or [])]
+        return [c for c in normalized if c is not None]
 
     def _hybrid_merge(
         self,
@@ -834,14 +872,47 @@ class SimpleRAG(BaseRAG):
         }
 
     def _try_resolve_content_from_doc_store(self, metadata: Dict[str, Any]) -> str:
-        """兼容性兜底：若向量库未带 content，尝试从文档存储解析。
-        注意：这里只做兼容，不作为整篇文档主路径。
+        """P8 取文主路径: meta 不再存全文, 命中后按 doc_id + start/end_char 从
+        document_store 抠原文 (正文唯一权威在 doc 文件)。
+
+        - 旧索引 meta 仍带 content 时不会走到这里 (normalize 优先用 meta.content)
+        - 带 60s TTL 的小缓存: 一次查询的多个 chunk 通常落在同一批 doc 上
+        - 任何失败返回 "" (上游已有空 content 容忍逻辑)
         """
         if self.doc_store is None:
             return ""
+        doc_id = metadata.get("doc_id")
+        if not doc_id:
+            return ""
+        content = self._get_doc_content_cached(str(doc_id))
+        if not content:
+            return ""
+        try:
+            start = int(metadata.get("start_char"))
+            end = int(metadata.get("end_char"))
+        except (TypeError, ValueError):
+            start, end = -1, -1
+        if 0 <= start < end <= len(content):
+            return content[start:end]
+        # 偏移缺失/越界 (文档被 update 过等): 退化取头部, 长度对齐单 chunk 上限
+        return content[: self.max_chunk_in_prompt_tokens * 4]
 
-        # 当前阶段不建议整篇回填；这里只返回空，避免走错路径。
-        return ""
+    def _get_doc_content_cached(self, doc_id: str) -> str:
+        ent = self._doc_content_cache.get(doc_id)
+        now = time.time()
+        if ent is not None and ent[1] > now:
+            return ent[0]
+        content = ""
+        try:
+            doc = self.doc_store.get_document(doc_id)
+            if isinstance(doc, dict):
+                content = doc.get("content") or ""
+        except Exception as e:
+            self.logger.warning(f"RAG 取文失败 (chunk 将无正文): doc_id={doc_id}, err={e}")
+        if len(self._doc_content_cache) >= 64:
+            self._doc_content_cache.clear()  # 简单上界, 防长期驻留膨胀
+        self._doc_content_cache[doc_id] = (content, now + 60.0)
+        return content
 
     def _apply_rerank(
         self,

@@ -142,9 +142,11 @@ class TestBuildUpsertItems(unittest.TestCase):
         # 文档 11.4 节强制 metadata 字段
         for key in ("doc_id", "chunk_id", "file_name", "chunk_index"):
             self.assertIn(key, meta)
-        # 额外字段(本实现增强)
-        self.assertEqual(meta["content"], "hello")
+        # P8: 全文不再进 metadata (单源在 document_store, 检索后按偏移取文);
+        # 引用回溯靠 start/end_char
+        self.assertNotIn("content", meta)
         self.assertEqual(meta["start_char"], 0)
+        self.assertIn("end_char", meta)
 
 
 class TestChunkSchemaCompliance(unittest.TestCase):

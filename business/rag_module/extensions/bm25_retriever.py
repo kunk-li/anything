@@ -99,13 +99,15 @@ class BM25Retriever:
                     self._inverted.setdefault(term, {})[cid] = count
                 self._doc_lens[cid] = len(tokens)
                 self._total_tokens += len(tokens)
-                # 复制 meta (避免外部修改污染索引)
+                # 复制 meta (避免外部修改污染索引)。
+                # P8: 不再存 content 全文 (倒排已含全部检索信息; 命中后由 RAG 按
+                # doc_id+start/end_char 从 document_store 抠原文)。旧持久化文件里
+                # 带 content 的 meta load 后原样可用, 互相兼容。
                 self._chunk_meta[cid] = {
                     "chunk_id": cid,
                     "doc_id": c.get("doc_id"),
                     "file_name": c.get("file_name"),
                     "chunk_index": c.get("chunk_index"),
-                    "content": content,
                     "start_char": c.get("start_char"),
                     "end_char": c.get("end_char"),
                 }
@@ -147,6 +149,15 @@ class BM25Retriever:
                     self._total_tokens -= tok
             return len(cids_set)
 
+    def _cid_in_docs(self, cid: str, allowed: set) -> bool:
+        """chunk 是否属于 allowed doc 集合: 优先 meta.doc_id, 兜底 chunk_id 前缀
+        (约定格式 doc_id#cNNNNNN)。"""
+        meta = self._chunk_meta.get(cid)
+        doc = (meta or {}).get("doc_id")
+        if doc is not None:
+            return str(doc) in allowed
+        return cid.split("#", 1)[0] in allowed
+
     def clear(self) -> None:
         """清空全部索引 (rebuild 入口 + tests 用)."""
         with self._lock:
@@ -166,16 +177,20 @@ class BM25Retriever:
 
     # ============ 检索 ============
 
-    def query(self, query_text: str, top_k: int = 10) -> List[Dict]:
+    def query(self, query_text: str, top_k: int = 10, allowed_doc_ids=None) -> List[Dict]:
         """BM25 检索, 返回 top_k 个 chunk (已含 score), 按分数降序.
 
         返回 chunk 结构跟 SimpleRAG.retrieve() 一致, 直接可塞进 chunks 流水线.
+        allowed_doc_ids (P15): 非 None 时在评分阶段就按 doc_id 过滤 —
+        KB 过滤下推, 避免"全局 top 候选全在 KB 外 → 0 结果"的召回饥饿。
         """
         if not query_text or not self._doc_lens:
             return []
         q_tokens = list(set(tokenize(query_text)))  # 去重 (BM25 对重复 query term 不再加权)
         if not q_tokens:
             return []
+
+        allowed = set(str(d) for d in allowed_doc_ids) if allowed_doc_ids is not None else None
 
         n = len(self._doc_lens)
         avgdl = self.avg_doc_len or 1.0
@@ -189,6 +204,8 @@ class BM25Retriever:
             df = len(postings)
             idf = math.log(((n - df + 0.5) / (df + 0.5)) + 1.0)
             for cid, tf in postings.items():
+                if allowed is not None and not self._cid_in_docs(cid, allowed):
+                    continue
                 dl = self._doc_lens.get(cid, 0) or 1
                 denom = tf + self.k1 * (1.0 - self.b + self.b * dl / avgdl)
                 contrib = idf * (tf * (self.k1 + 1.0)) / denom

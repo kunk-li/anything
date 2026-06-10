@@ -66,12 +66,17 @@ def normalize_embeddings(mat: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 
 def match_metadata_filter(metadata: Dict[str, Any], filter: Optional[Dict[str, Any]]) -> bool:
-    """简单过滤匹配：filter 中每个 key 的值必须等于 metadata 对应值。"""
+    """过滤匹配：filter 值为标量时等值比较; 为 list/set/tuple 时做集合成员判定
+    (P15: KB 的 doc_id 集合下推到检索阶段过滤用)。"""
     if not filter:
         return True
     if not isinstance(filter, dict):
         raise TypeError("filter must be a dict")
     for k, v in filter.items():
-        if metadata.get(k) != v:
+        actual = metadata.get(k)
+        if isinstance(v, (list, set, tuple, frozenset)):
+            if actual not in v and str(actual) not in v:
+                return False
+        elif actual != v:
             return False
     return True

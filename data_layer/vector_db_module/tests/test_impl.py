@@ -137,32 +137,74 @@ class TestFaissVectorDB(unittest.TestCase):
         self.assertEqual([r["vector_id"] for r in res], ["v2"])
 
     def test_legacy_format_migration(self):
-        """旧格式 (meta.json 无 int_of) 自动迁移为 IDMap2, 数据不丢"""
+        """旧三件套 (gen1: meta.json 无 int_of) 自动迁移进 vectors.sqlite3, 数据不丢"""
         import json as _json
+        import os as _os
         import numpy as _np
-        self.db.upsert_vectors([
-            {"vector_id": "v1", "embedding": [0.5] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
-        ])
-        # 手工改写 meta.json 成旧格式 (去掉 int_of/next_int), 并写旧式 IndexFlatIP 索引文件
-        with open(self.db.meta_path, "r", encoding="utf-8") as f:
-            meta = _json.load(f)
-        meta.pop("int_of", None)
-        meta.pop("next_int", None)
-        with open(self.db.meta_path, "w", encoding="utf-8") as f:
-            _json.dump(meta, f, ensure_ascii=False)
-        import faiss as _faiss
-        legacy = _faiss.IndexFlatIP(64)
-        legacy.add(_np.load(self.db.emb_path).astype("float32"))
-        _faiss.write_index(legacy, self.db.index_path)
+        import tempfile as _tempfile
+        # 全新目录手写旧格式文件 (无 sqlite), 模拟老部署升级
+        legacy_dir = _tempfile.mkdtemp()
+        tenant_dir = _os.path.join(legacy_dir, "default")
+        _os.makedirs(tenant_dir)
+        emb = _np.asarray([[0.5] * 64], dtype="float32")
+        _np.save(_os.path.join(tenant_dir, "embeddings.npy"), emb)
+        with open(_os.path.join(tenant_dir, "meta.json"), "w", encoding="utf-8") as f:
+            _json.dump({
+                "id_map": ["v1"],
+                "meta_map": {"v1": {"doc_id": "d1", "chunk_id": "c1"}},
+            }, f, ensure_ascii=False)
 
-        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        cfg = _TestVectorDBConfig(dim=64, store_dir=legacy_dir)
         db2 = FaissVectorDB(cfg=cfg)
         self.assertEqual(db2.index.ntotal, 1)
         res = db2.query([0.5] * 64, top_k=1)
         self.assertEqual(res[0]["vector_id"], "v1")
-        # 迁移后支持删除
+        # 迁移落到 sqlite, 旧文件保留原地作回滚备份
+        self.assertTrue(_os.path.exists(db2.db_path))
+        self.assertTrue(_os.path.exists(_os.path.join(tenant_dir, "meta.json")))
+        # 迁移后支持删除, 且重载读 sqlite (不再回读旧文件)
         self.assertTrue(db2.delete(vector_ids=["v1"]))
         self.assertEqual(db2.index.ntotal, 0)
+        db3 = FaissVectorDB(cfg=cfg)
+        self.assertEqual(db3.index.ntotal, 0)
+
+    def test_incremental_upsert_no_full_rewrite(self):
+        """P7: 二次 upsert 只动新行 — 已有向量行内容不被改写 (增量语义)"""
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+        ])
+        row1 = self.db._conn.execute(
+            "SELECT int_id FROM vectors WHERE chunk_id='v1'").fetchone()
+        self.db.upsert_vectors([
+            {"vector_id": "v2", "embedding": [0.2] * 64, "metadata": {"doc_id": "d2", "chunk_id": "c2"}},
+        ])
+        row1_after = self.db._conn.execute(
+            "SELECT int_id FROM vectors WHERE chunk_id='v1'").fetchone()
+        self.assertEqual(row1, row1_after)  # v1 的 int_id 终身不变
+        self.assertEqual(self.db.index.ntotal, 2)
+        # 同 id 覆盖更新不膨胀
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.3] * 64, "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+        ])
+        self.assertEqual(self.db.index.ntotal, 2)
+        n_rows = self.db._conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+        self.assertEqual(n_rows, 2)
+
+    def test_filter_membership_and_widening(self):
+        """P15: filters 值为集合时做成员判定; 小子集命中不足自动放大候选不饿死"""
+        items = []
+        for i in range(50):
+            items.append({
+                "vector_id": f"d{i}#c1",
+                "embedding": [0.01 * (i + 1)] * 64,
+                "metadata": {"doc_id": f"d{i}", "chunk_id": f"d{i}#c1"},
+            })
+        self.db.upsert_vectors(items)
+        # 只允许 2 个冷门 doc — 旧实现 oversample=top_k*10 可能全程不命中
+        allowed = ["d3", "d27"]
+        res = self.db.query([0.5] * 64, top_k=2, filters={"doc_id": allowed})
+        self.assertEqual(len(res), 2)
+        self.assertEqual({r["metadata"]["doc_id"] for r in res}, set(allowed))
 
     def test_clear(self):
         self.db.upsert_vectors([
@@ -205,8 +247,8 @@ class TestFaissVectorDB(unittest.TestCase):
             "vector_id": "v1", "embedding": [1.0] + [0.0] * 63,
             "metadata": {"doc_id": "d1", "chunk_id": "c1"},
         }])
-        # 验证物理目录隔离
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "tenant-a", "faiss.index")))
+        # 验证物理目录隔离 (P7 后持久化为单一 sqlite)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "tenant-a", "vectors.sqlite3")))
 
         db_b = FaissVectorDB(cfg=cfg, tenant_id="tenant-b")
         res = db_b.query([1.0] + [0.0] * 63, top_k=5)
