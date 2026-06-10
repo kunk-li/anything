@@ -143,13 +143,18 @@ security:
     - "${API_KEY_1}"
   jwt_secret: "${JWT_SECRET}"
   sensitive_config_secret: "${SENSITIVE_CONFIG_SECRET}"
-  # 内部白名单 (前缀匹配): 这些 IP 即使没认证也允许 body tenant_id 透传。
+  # 内部白名单: 这些来源即使没认证也允许 body tenant_id 透传。
+  # 条目支持 IP / CIDR 网段 ("10.0.0.0/8") / 主机名精确匹配 / 旧式 "10.0.0." 点边界前缀。
   # 默认包含 localhost / 127.0.0.1, 方便本地 Web UI 直接选 tenant.
   # 生产部署面向公网时建议清空或调整为内网网段。
   internal_whitelist:
     - "127.0.0.1"
     - "localhost"
     - "::1"
+  # admin keys: 配置后 /config/models 等管理写端点仅持这些 key 可调 (403 拦截)。
+  # 留空/不配 = 不额外设防 (此时生产应在网关层屏蔽 /config/*)。
+  # admin_api_keys:
+  #   - "${ADMIN_API_KEY}"
 
 remote_config:
   enabled: false

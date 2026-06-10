@@ -251,12 +251,9 @@ class InvokeRoutesMixin:
                 body_tid = body.get("tenant_id")
                 if auth_tid:
                     body["tenant_id"] = auth_tid
-                # internal IP check: ws.client.host
+                # internal IP check: ws.client.host (与 HTTP 路径共用同一匹配实现)
                 client_host = ws.client.host if ws.client else ""
-                is_internal = any(
-                    str(e).split("/")[0] and client_host.startswith(str(e).split("/")[0].rstrip("."))
-                    for e in self.internal_whitelist
-                )
+                is_internal = self._is_internal_host(client_host)
                 if not auth_tid and body_tid and not is_internal:
                     body.pop("tenant_id", None)
 

@@ -4,6 +4,10 @@ API 服务模块具体实现类
 负责 HTTP 协议层处理、鉴权、中间件、trace_id 透传与统一错误映射
 """
 
+import base64
+import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import threading
@@ -126,6 +130,10 @@ class ApiService(
 
         self.auth_enabled = bool(self.config.get_config("security.auth_enabled", False))
         self.auth_type = self.config.get_config("security.auth_type", "none")
+        # JWT (auth_type=jwt 用): secret 未配置/未解析占位符 -> 视为未配置,
+        # _check_auth 走 fail-closed (全部 401), dev 模式下面会自动关 auth。
+        _jwt_secret = str(self.config.get_config("security.jwt_secret", "") or "")
+        self.jwt_secret = "" if _jwt_secret.startswith("${") else _jwt_secret
         # api_keys 支持两种格式 (Task #33 PR2, 详见 docs/multi-tenancy-design.md §5.2-5.3):
         #   - list (老格式): ["k1", "k2"] -> 全部映射到 tenant="default" + WARN
         #   - dict (新格式): {"tenant-a": ["k1"], "default": ["k2"]} -> 反向映射 + 唯一性校验
@@ -167,10 +175,28 @@ class ApiService(
                 f"生产部署请: (1) export 真实 API_KEY_1 环境变量 (2) 不要设 ANYTHING_DEV_MODE。"
             )
             self.auth_enabled = False
+        # jwt 同理: dev 模式 secret 未配置自动关; 生产不关 (fail-closed, 全部 401) 但留 WARN
+        if self.auth_enabled and self.auth_type == "jwt" and not self.jwt_secret:
+            if dev_mode:
+                self.logger.warning(
+                    "[security] DEV_MODE 检测到 jwt_secret 未配置, 自动关闭 auth。"
+                    "生产部署请 export JWT_SECRET, 不要设 ANYTHING_DEV_MODE。"
+                )
+                self.auth_enabled = False
+            else:
+                self.logger.warning(
+                    "[security] auth_type=jwt 但 jwt_secret 未配置: "
+                    "所有请求将被 401 (fail-closed)。请 export JWT_SECRET。"
+                )
         # 内部白名单 (本期占位, 真实使用在 §4.3 冲突处理): 配置 internal_whitelist 后, 这些 IP 可仅靠 body tenant_id
         self.internal_whitelist: List[str] = list(
             self.config.get_config("security.internal_whitelist", []) or []
         )
+        # admin keys: 配置后 /config/models 等管理写端点仅持这些 key 可调 (403 拦截);
+        # 不配置则维持旧约定 — 生产在网关层屏蔽 /config/*。
+        self.admin_api_keys: set = {
+            str(k) for k in (self.config.get_config("security.admin_api_keys", []) or []) if k
+        }
         self.max_body_size = int(self.config.get_config("api_service.max_body_size", 1048576))
         self.enable_health_details = bool(
             self.config.get_config("api_service.enable_health_details", True)
@@ -611,7 +637,7 @@ class ApiService(
         """从认证产物提取 tenant_id。
 
         - apikey: 查 _key_to_tenant 反向映射
-        - jwt: 解析 tenant_id claim (本期 TODO, 留作 stub)
+        - jwt: HS256 验签后取 payload.tenant_id claim
         - none: 返回 None
         """
         if not self.auth_enabled or self.auth_type == "none":
@@ -620,23 +646,90 @@ class ApiService(
             api_key = request.headers.get("X-API-Key")
             if api_key:
                 return self._key_to_tenant.get(api_key)
-        # 其他认证方式占位
+        if self.auth_type == "jwt":
+            payload = self._decode_jwt(self._extract_bearer_token(request))
+            if payload:
+                tid = payload.get("tenant_id")
+                return str(tid) if tid else None
         return None
 
-    def _is_internal_ip(self, request: Request) -> bool:
-        """判断请求源 IP 是否在 internal_whitelist 中 (§4.3 冲突处理用)。
+    @staticmethod
+    def _extract_bearer_token(request: Request) -> str:
+        auth = request.headers.get("Authorization") or ""
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        return ""
 
-        本期实现为字符串前缀匹配 (简单, 够用); 后续可换 ipaddress.IPv4Network。
+    def _decode_jwt(self, token: str) -> Optional[Dict[str, Any]]:
+        """HS256 JWT 验签 + exp 检查 (纯标准库, 不引第三方依赖)。
+
+        成功返回 payload dict; 格式/算法/签名/过期任一不过 -> None。
+        只接受 alg=HS256 — 防 alg=none / 算法混淆降级攻击。
         """
-        if not self.internal_whitelist:
-            return False
+        if not token or not self.jwt_secret:
+            return None
+        try:
+            header_b64, payload_b64, sig_b64 = token.split(".")
+
+            def _b64d(s: str) -> bytes:
+                return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+            header = json.loads(_b64d(header_b64))
+            if not isinstance(header, dict) or header.get("alg") != "HS256":
+                return None
+            expected = hmac.new(
+                self.jwt_secret.encode("utf-8"),
+                f"{header_b64}.{payload_b64}".encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            if not hmac.compare_digest(expected, _b64d(sig_b64)):
+                return None
+            payload = json.loads(_b64d(payload_b64))
+            if not isinstance(payload, dict):
+                return None
+            exp = payload.get("exp")
+            if exp is not None and time.time() >= float(exp):
+                return None
+            return payload
+        except Exception:
+            return None  # 畸形 token 一律视为未认证, 不抛协议层 500
+
+    def _is_internal_ip(self, request: Request) -> bool:
+        """判断请求源 IP 是否在 internal_whitelist 中 (§4.3 冲突处理用)。"""
         client = request.client.host if request.client else ""
-        if not client:
+        return self._is_internal_host(client)
+
+    def _is_internal_host(self, client: str) -> bool:
+        """internal_whitelist 匹配核心 (HTTP / WS 共用)。
+
+        entry 支持三种形态:
+          - IP / CIDR ("127.0.0.1", "10.0.0.0/8") -> ipaddress 网段判定
+          - 主机名 ("testclient") -> 精确匹配
+          - 旧式前缀 ("10.0.0.") -> 按 "." 边界前缀匹配
+            (修复: 原 startswith 裸前缀会让 "10.0" 误命中 "10.01.2.3")
+        """
+        if not self.internal_whitelist or not client:
             return False
+        try:
+            client_ip = ipaddress.ip_address(client)
+        except ValueError:
+            client_ip = None  # TestClient 等场景 host 是主机名字符串
         for entry in self.internal_whitelist:
-            # 支持 "127.0.0.1" 或 "10.0.0.0/8" -> 简单前缀匹配
-            base = str(entry).split("/")[0]
-            if base and client.startswith(base.rstrip(".")):
+            entry_s = str(entry).strip()
+            if not entry_s:
+                continue
+            if client_ip is not None:
+                try:
+                    net = ipaddress.ip_network(entry_s, strict=False)
+                except ValueError:
+                    net = None
+                if net is not None:
+                    if client_ip.version == net.version and client_ip in net:
+                        return True
+                    continue  # entry 是合法网段但不含该 IP, 不再退回字符串匹配
+            if client == entry_s:
+                return True
+            if client.startswith(entry_s if entry_s.endswith(".") else entry_s + "."):
                 return True
         return False
 
@@ -665,8 +758,47 @@ class ApiService(
                     headers={"X-Request-Id": trace_id},
                 )
 
-        # 其他认证方式先保留占位
+        if self.auth_type == "jwt":
+            # secret 未配置时 _decode_jwt 恒 None -> 全部 401 (fail-closed)
+            if self._decode_jwt(self._extract_bearer_token(request)) is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "code": "AUTH_REQUIRED",
+                        "message": "未认证或 JWT 无效/已过期 (Authorization: Bearer <token>)",
+                        "data": None,
+                        "trace_id": trace_id,
+                        "retryable": False,
+                        "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+
         return None
+
+    def _check_admin(self, request: Request, trace_id: str) -> Optional[JSONResponse]:
+        """管理写端点二级校验 (/config/models 等)。
+
+        配置 security.admin_api_keys 后仅持 admin key 可调, 否则 403;
+        未配置时不额外设防, 维持旧约定 (生产在网关层屏蔽 /config/*)。
+        """
+        if not self.admin_api_keys:
+            return None
+        api_key = request.headers.get("X-API-Key") or ""
+        if api_key in self.admin_api_keys:
+            return None
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "AUTH_FORBIDDEN",
+                "message": "该操作需要 admin API key (security.admin_api_keys)",
+                "data": None,
+                "trace_id": trace_id,
+                "retryable": False,
+                "details": None,
+            },
+            headers={"X-Request-Id": trace_id},
+        )
 
     @staticmethod
     def _is_public_path(path: str) -> bool:

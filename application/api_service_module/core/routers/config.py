@@ -6,7 +6,8 @@ POST   /config/models                       注册/更新模型
 DELETE /config/models/{name}                注销模型
 POST   /config/models/{name}/set-default    设为对应 request_type 的默认
 
-⚠️ 生产部署在网关层屏蔽 /config/* (除非已加 admin RBAC).
+写端点 (POST/DELETE) 支持 admin 校验: 配置 security.admin_api_keys 后仅持
+admin key 可调, 否则 403。未配置时维持旧约定 — 生产部署在网关层屏蔽 /config/*.
 """
 
 from __future__ import annotations
@@ -81,6 +82,9 @@ class ConfigRoutesMixin:
             if err is not None:
                 return err
             trace_id = request.state.trace_id
+            denied = self._check_admin(request, trace_id)
+            if denied is not None:
+                return denied
             try:
                 body = await request.json()
             except Exception:
@@ -195,6 +199,9 @@ class ConfigRoutesMixin:
             if err is not None:
                 return err
             trace_id = request.state.trace_id
+            denied = self._check_admin(request, trace_id)
+            if denied is not None:
+                return denied
             existed = self.llm_service.unregister_model(name)
             return JSONResponse(
                 status_code=200 if existed else 404,
@@ -215,6 +222,9 @@ class ConfigRoutesMixin:
             if err is not None:
                 return err
             trace_id = request.state.trace_id
+            denied = self._check_admin(request, trace_id)
+            if denied is not None:
+                return denied
             try:
                 body = await request.json()
             except Exception:
