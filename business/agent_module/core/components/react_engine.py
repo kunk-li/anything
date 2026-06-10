@@ -364,6 +364,20 @@ class ReActEngineMixin:
                 payload={"iteration": iteration, "tool_name": tool_name, "success": tool_result.get("success"), "obs": observation[:200]},
             )
 
+            # 空转硬兜底: 同一 (工具+入参) 产出相同观察, 本任务内累计 ≥3 次 → 判 ReAct 空转,
+            # 跳出走整合 (prompt 已劝阻重复, 这里是代码级保险防模型头铁; mongosh listDatabases
+            # 死循环即此形态: 截断的只读输出每轮都一样, 模型却一直重跑)。
+            if self._is_spinning(history, tool_name, tool_input, observation):
+                self._append_state_event(
+                    session_id=session_id, event_type="react_loop_break", trace_id=trace_id,
+                    payload={"iteration": iteration, "tool_name": tool_name},
+                )
+                self.logger.warning(
+                    f"[react] 检测到空转 (同命令重复且结果一致 ≥3 次), 提前结束循环: "
+                    f"tool={tool_name} iter={iteration} trace_id={trace_id}"
+                )
+                break
+
         # AUDIT-2a: 超时中止 → 返回 AGENT_TIMEOUT (带已完成的部分轨迹), 不伪装成 SUCCESS
         if timed_out and not final_answer:
             return {

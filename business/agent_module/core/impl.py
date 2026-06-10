@@ -1057,6 +1057,52 @@ class SimpleAgent(
         return None
 
     @staticmethod
+    def _action_signature(tool_name: Optional[str], tool_input: Optional[Dict[str, Any]]) -> str:
+        """给 (工具, 入参) 算稳定签名, 用于检测 ReAct 空转 (反复发同一动作)。
+        排除注入的非语义字段 (trace_id/session_id/extra_params) —— 它们不影响执行结果,
+        含进来会让"其实相同的动作"签名不同而漏判。"""
+        import json as _json
+        payload = {k: v for k, v in (tool_input or {}).items()
+                   if k not in ("trace_id", "session_id", "extra_params")}
+        try:
+            body = _json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            body = str(sorted(payload.items(), key=lambda kv: str(kv[0])))
+        return f"{tool_name}::{body}"
+
+    def _is_spinning(
+            self,
+            history: List[Dict[str, Any]],
+            tool_name: Optional[str],
+            tool_input: Optional[Dict[str, Any]],
+            observation: Optional[str],
+            threshold: int = 3,
+    ) -> bool:
+        """ReAct 空转检测: 同一 (工具+入参) 产出**完全相同的观察**, 在本任务 history 里
+        累计出现 >= threshold 次 → True (判定空转, 调用方应跳出循环走整合)。
+
+        语义要点:
+        - 只有"输出一字不差相同"才算空转 (幂等只读命令反复跑)。命令输出在变 (含时间戳/
+          实时数据) 时观察不同, 不会误判, 仍允许继续 —— 正是想要的边界。
+        - 基于 history 计数 (非连续状态机), 能同时抓连续重复 (A,A,A) 与交替循环 (A,B,A,B)。
+        - threshold=3: 容忍 1~2 次合理重试, 第 3 次完全相同才止损, 不误杀正常重试。
+        - 调用时机是"当前这一轮已 append 进 history 之后", 故 count 含当前轮。
+        """
+        sig = self._action_signature(tool_name, tool_input)
+        obs = observation or ""
+        count = 0
+        for h in history or []:
+            a = h.get("action") or {}
+            if not a:
+                continue
+            if (self._action_signature(a.get("tool"), a.get("input")) == sig
+                    and (h.get("observation") or "") == obs):
+                count += 1
+                if count >= threshold:
+                    return True
+        return False
+
+    @staticmethod
     def _looks_like_raw_json(s: str) -> bool:
         """检测字符串是不是 raw JSON / dict 字面值 (开头 { 或 [, 能被 JSON 或 Python 字面量解析).
 

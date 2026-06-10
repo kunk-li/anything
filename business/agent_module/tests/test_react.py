@@ -123,6 +123,42 @@ class TestReActExecute(unittest.TestCase):
         # 答案应来自最后一次工具调用的结果
         self.assertIn("stub", result["data"]["answer"].lower())
 
+    # ---------------- 空转防护 (loop guard) ----------------
+
+    def test_react_spinning_repeat_breaks_early(self):
+        """同一动作(工具+入参)反复产出相同观察 → 循环防护提前止损, 不打满迭代。
+
+        防 mongosh listDatabases 那类死循环 (模型每轮重跑同一只读命令、截断输出每轮都一样)。
+        LLM 每轮重复同一 action; stub 工具每次返回相同输出 → observation 恒定 → 触发空转兜底。
+        """
+        responses = [
+            '{"thought":"再查一遍","action":{"tool":"rag_search","input":{"query":"db"}}}',
+        ] * 10  # 每轮都重复同一动作, 从不 final
+        agent, llm = self._make_agent(responses)
+        agent.max_react_iterations = 8  # 设大; 若防护失效会一路打满到 8
+        result = agent.execute({"task": "查询有哪些库", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "SUCCESS")
+        used = result["data"]["iterations_used"]
+        # 阈值 3: 第 3 次完全重复时止损 → 用 ~3 轮收尾, 远没打满 8
+        self.assertLess(used, 8, "循环防护应提前止损, 而非打满 max_react_iterations")
+        self.assertGreaterEqual(used, 3, "应至少跑到触发阈值 (3)")
+        self.assertLess(llm.call_count, 8)
+
+    def test_react_distinct_actions_do_not_trip_guard(self):
+        """动作各不相同时不应误触发空转防护 (只有"同动作+同观察"反复才算空转)。"""
+        responses = [
+            '{"thought":"1","action":{"tool":"rag_search","input":{"query":"a"}}}',
+            '{"thought":"2","action":{"tool":"rag_search","input":{"query":"b"}}}',
+            '{"thought":"3","action":{"tool":"rag_search","input":{"query":"c"}}}',
+            '{"thought":"done","final_answer":"汇总答案"}',
+        ]
+        agent, _ = self._make_agent(responses)
+        agent.max_react_iterations = 8
+        result = agent.execute({"task": "x", "trace_id": "t1", "session_id": "s1"})
+        self.assertEqual(result["code"], "SUCCESS")
+        self.assertEqual(result["data"]["answer"], "汇总答案")
+        self.assertEqual(result["data"]["iterations_used"], 4)  # 3 次不同查询 + final, 未被截断
+
     # ---------------- Fallback ----------------
 
     def test_react_invalid_json_falls_back_to_single_shot(self):

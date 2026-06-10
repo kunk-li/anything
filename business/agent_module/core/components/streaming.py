@@ -399,6 +399,18 @@ class StreamingMixin:
                     "output_summary": observation,
                 }
 
+                # 空转硬兜底 (与非流式 _react_execute 对齐): 同一 (工具+入参) 产出相同观察
+                # 累计 ≥3 次 → 判 ReAct 空转, 提前收尾; 下面"循环结束"会用 LLM 把已查到的
+                # 结果整合成自然语言答案 (而不是继续空转把迭代打满)。
+                if self._is_spinning(history, tool_name, tool_input, observation):
+                    self.logger.warning(
+                        f"[react-stream] 检测到空转 (同命令重复且结果一致 ≥3 次), 提前结束: "
+                        f"tool={tool_name} iter={iteration}"
+                    )
+                    yield {"type": "loop_break", "iteration": iteration, "tool_name": tool_name,
+                           "message": "检测到重复执行同一命令且结果一致, 已停止重试, 基于已有结果作答。"}
+                    break
+
             # ============ 循环结束: 取 final_answer ============
             if final_answer is None and last_observation is not None:
                 output = last_observation.get("output") or {}
