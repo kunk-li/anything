@@ -279,6 +279,7 @@ def build_basic_deps() -> BasicDeps:
     # Task PP (#76): 7 cross-cutting registries 通过 get_X() 拿到进程单例引用,
     # 塞进 deps 让上层走 DI. 各 import 用 try/except — 子模块缺失也不阻塞
     # 启动 (deps.<field> 设 None, 上层应做 None 检查 fallback 到 get_X()).
+    # 失败先收集, SystemLogger 构造完再统一 WARN (此处 logger 尚不存在), 吞而留痕。
     hook_registry = None
     skill_registry = None
     quota_guard = None
@@ -286,46 +287,54 @@ def build_basic_deps() -> BasicDeps:
     project_memory = None
     usage_tracker = None
     health_tracker = None
+    _inject_failures: list = []
 
     try:
         from hooks_module import get_hook_registry
         hook_registry = get_hook_registry()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("hook_registry", e))
     try:
         from skills_module import get_skill_registry
         skill_registry = get_skill_registry()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("skill_registry", e))
     try:
         from quota_module import get_quota_guard
         quota_guard = get_quota_guard()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("quota_guard", e))
     try:
         from audit_module import get_audit_logger
         audit_logger = get_audit_logger()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("audit_logger", e))
     try:
         from project_memory_module import get_project_memory
         project_memory = get_project_memory()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("project_memory", e))
     try:
         from observability_module import get_usage_tracker
         usage_tracker = get_usage_tracker()
-    except Exception:
-        pass
+    except Exception as e:
+        _inject_failures.append(("usage_tracker", e))
     # health_tracker 属 data_layer (llm_adapter_module)；basic_support 不反向 import
     # 上层模块以保持分层纯净 (AUDIT-2b)。真实消费方 (llm_adapter core/impl 内部、
     # admin 路由) 都直接 get_health_tracker() 拿同一进程单例，不经 deps；过去这里的
     # 反向 import 无任何消费方读取，纯冗余。如需经 deps 共享，由 run 层 (可合法依赖
     # data_layer) 装配后注入 deps.health_tracker。
 
+    logger = SystemLogger()
+    for _name, _err in _inject_failures:
+        logger.warning(
+            f"[deps] 横切组件 {_name} 注入失败, deps.{_name}=None, "
+            f"上层将 fallback get_{_name}(): {_err!r}"
+        )
+
     return BasicDeps(
         config=config,
-        logger=SystemLogger(),
+        logger=logger,
         utils=CommonUtils(),
         exception_handler=ExceptionHandler(),
         hook_registry=hook_registry,

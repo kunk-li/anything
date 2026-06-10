@@ -333,8 +333,13 @@ class ReActEngineMixin:
                     "details": be.details,
                     "cost_time": round(time.time() - start_time, 3),
                 }
-            except Exception:
-                pass  # post hook 其他异常吞掉, 继续
+            except Exception as e:
+                # post hook 其他异常吞掉继续, 但留 WARN — hook 可能改写 tool_result,
+                # 静默失败会导致结果不一致无感知
+                self.logger.warning(
+                    f"[react] post_tool_call hook 异常(已忽略): tool={tool_name}, "
+                    f"trace_id={trace_id}, err={e!r}"
+                )
 
             tool_results.append(tool_result)
             observation = self._summarize_tool_output(tool_result.get("output"))
@@ -491,8 +496,11 @@ class ReActEngineMixin:
                 nr = self._hook_registry().fire("post_tool_call", tn, local_input, tr, hook_ctx)
                 if isinstance(nr, dict):
                     tr = nr
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(
+                    f"[react] post_tool_call hook 异常(已忽略): tool={tn}, "
+                    f"trace_id={trace_id}, err={e!r}"
+                )
             return tr
 
         if not prepared:
