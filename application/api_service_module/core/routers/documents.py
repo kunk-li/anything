@@ -91,11 +91,27 @@ class DocumentsRoutesMixin:
                     idx_result = await loop.run_in_executor(
                         None, lambda: self.index_runner(str(file_path))
                     )
-                    response_data["indexed"] = True
+                    docs_list = idx_result.get("data", {}).get("documents", []) or []
+                    dups = [
+                        d for d in docs_list
+                        if d.get("skipped") and str(d.get("reason", "")).startswith("duplicate")
+                    ]
+                    if docs_list and len(dups) == len(docs_list):
+                        # P2: 整个文件都是重复内容 — 删刚落盘的副本, 指回已有 doc_id
+                        # (不删的话 uploads/ 会被同一文件的 -N 副本越堆越多)
+                        try:
+                            file_path.unlink()
+                        except OSError:
+                            pass
+                        response_data["duplicate_of"] = dups[0].get("doc_id")
+                        response_data["stored_path"] = None
+                        response_data["indexed"] = False
+                    else:
+                        response_data["indexed"] = True
                     response_data["index_summary"] = {
                         "total_chunks": idx_result.get("data", {}).get("total_chunks", 0),
                         "total_vectors": idx_result.get("data", {}).get("total_vectors", 0),
-                        "documents": idx_result.get("data", {}).get("documents", []),
+                        "documents": docs_list,
                     }
                     self.logger.info(
                         f"[upload+index] file={file.filename} "
@@ -114,7 +130,11 @@ class DocumentsRoutesMixin:
                 status_code=200,
                 content={
                     "code": "SUCCESS",
-                    "message": "uploaded" + (" + indexed" if response_data["indexed"] else ""),
+                    "message": (
+                        "duplicate, 复用已有文档"
+                        if response_data.get("duplicate_of")
+                        else "uploaded" + (" + indexed" if response_data["indexed"] else "")
+                    ),
                     "data": response_data,
                     "trace_id": trace_id,
                     "retryable": False,

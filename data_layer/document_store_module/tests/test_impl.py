@@ -24,6 +24,25 @@ class TestLocalDocumentStore(unittest.TestCase):
         os.environ.pop("DOCUMENT_STORE_DOCUMENT_STORE_STORAGE_DIR", None)
         os.environ.pop("DOCUMENT_STORE_DOCUMENT_STORE_BACKUP_DIR", None)
 
+    def test_find_doc_id_by_hash(self):
+        """P2 查重: 只认 content_hash, 命中返已有 doc_id"""
+        content = "dedup me"
+        h = calculate_content_hash(content, "md5")
+        doc = self.store.create_document(content, "a.txt", "txt", h)
+        self.store.save_document(doc)
+        self.assertEqual(self.store.find_doc_id_by_hash(h), doc["doc_id"])
+        self.assertEqual(self.store.find_doc_id_by_hash(h.upper()), doc["doc_id"])  # 大小写不敏感
+        self.assertIsNone(self.store.find_doc_id_by_hash("0" * 32))
+        self.assertIsNone(self.store.find_doc_id_by_hash(""))
+        # 删除后 hash 映射同步清掉, 不再命中
+        self.store.delete_document(doc["doc_id"])
+        self.assertIsNone(self.store.find_doc_id_by_hash(h))
+
+    def test_env_override_isolates_storage_dir(self):
+        """setUp 设的 env 隔离必须真生效 — 历史上 get_config 不读 env, 测试
+        一直写到 CWD/documents 污染仓库 (P13 修复的回归防护)"""
+        self.assertTrue(self.store.base_storage_dir.startswith(self.tmpdir))
+
     def test_create_and_save_and_get(self):
         content = "hello world"
         file_name = "a.md"

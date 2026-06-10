@@ -73,9 +73,12 @@ class LocalDocumentStore(BaseDocumentStore):
 
         # base = yaml 配置; storage_dir = base/<tenant_id>/ (实际工作目录)
         # 键名以 yaml/factory 文档的 document_store.dir 为准; 老键 storage_dir 兼容读
-        # (历史上代码读 storage_dir 而 yaml 写 dir, 导致 yaml 配置静默无效)
-        self.base_storage_dir = self.config_manager.get_config(
+        # (历史上代码读 storage_dir 而 yaml 写 dir, 导致 yaml 配置静默无效)。
+        # env 覆盖走 get_effective_value — 单测一直在 setUp 设这个 env var 隔离目录,
+        # 但 get_config 从不读 env, 隔离从未生效, 测试一直写到 CWD/documents 污染仓库。
+        self.base_storage_dir = self.config_manager.get_effective_value(
             "document_store.dir",
+            env_var="DOCUMENT_STORE_DOCUMENT_STORE_STORAGE_DIR",
             default=self.config_manager.get_config(
                 "document_store.storage_dir", default=defaults.storage_dir
             ),
@@ -100,7 +103,11 @@ class LocalDocumentStore(BaseDocumentStore):
         if isinstance(self.core_doc_prefix, str):
             self.core_doc_prefix = [x.strip() for x in self.core_doc_prefix.split(",") if x.strip()]
 
-        self.base_backup_dir = self.config_manager.get_config("document_store.backup_dir", default=defaults.backup_dir)
+        self.base_backup_dir = self.config_manager.get_effective_value(
+            "document_store.backup_dir",
+            env_var="DOCUMENT_STORE_DOCUMENT_STORE_BACKUP_DIR",
+            default=defaults.backup_dir,
+        )
         self.backup_dir = os.path.join(self.base_backup_dir, self.tenant_id)
         self.hash_map_filename = self.config_manager.get_config("document_store.hash_map_filename", default=defaults.hash_map_filename)
 
@@ -380,6 +387,8 @@ class LocalDocumentStore(BaseDocumentStore):
                     "created_time": info.get("created_time") or info.get("upload_time"),
                     "last_access_time": info.get("last_access_time"),
                     "source": (info.get("meta") or {}).get("source") if isinstance(info.get("meta"), dict) else None,
+                    # 原始上传文件路径 (uploads 清理器判定"已索引原件"用)
+                    "stored_path": info.get("stored_path"),
                 })
         except OSError:
             return []
@@ -537,6 +546,16 @@ class LocalDocumentStore(BaseDocumentStore):
             except Exception:
                 continue
         return docs
+
+    def find_doc_id_by_hash(self, content_hash: str) -> Optional[str]:
+        """按 content_hash 精确查已有文档 (P2 上传查重用)。
+
+        与 check_duplicate_file 的区别: 不走 name+type+length 辅助判定 —
+        那个会把"同名同长度但内容已改"误判为重复, 索引查重必须只认内容 hash。
+        """
+        if not content_hash:
+            return None
+        return self.hash_doc_map.get(str(content_hash).lower())
 
     def check_duplicate_file(
         self,

@@ -194,7 +194,9 @@ def build_application_layer(
         _ext_providers = (business_layer or {}).get("external_tool_providers") or []
         _fastapi_app = getattr(result["api_service"], "app", None)
         if _fastapi_app is not None and (scheduler is not None or _ext_providers):
-            _fastapi_app.add_event_handler(
+            # FastAPI 0.136/Starlette 1.0 移除了 app.add_event_handler — 这里原先用它,
+            # 配了 scheduler/外部工具的部署在新版下启动即 AttributeError; 改走 router
+            _fastapi_app.router.add_event_handler(
                 "shutdown", _make_graceful_shutdown(scheduler, _ext_providers))
 
     if build_console:

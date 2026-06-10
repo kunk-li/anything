@@ -201,6 +201,29 @@ def build_index(
             )
             continue
 
+        # P2: content-hash 查重 — 同内容重复上传复用已有 doc_id, 不再生成新 doc_id
+        # 重新 embed (重复上传向量库必膨胀的根因)。只认内容 hash, 不做名字/长度辅助
+        # 判定 (那会把"同名同长但内容已改"误杀)。
+        if hasattr(store, "find_doc_id_by_hash"):
+            _hash = hashlib.md5(str(raw_content).encode("utf-8")).hexdigest()
+            try:
+                existing_id = store.find_doc_id_by_hash(_hash)
+            except Exception:
+                existing_id = None
+            if existing_id:
+                docs_summary.append(
+                    {
+                        "doc_id": existing_id,
+                        "file_name": raw_file_name,
+                        "chunk_count": 0,
+                        "vector_count": 0,
+                        "upsert_result": None,
+                        "skipped": True,
+                        "reason": f"duplicate content (existing doc_id={existing_id})",
+                    }
+                )
+                continue
+
         document = create_and_save_document(store, item)
         doc_id = document.get("doc_id")
         file_name = document.get("file_name")
