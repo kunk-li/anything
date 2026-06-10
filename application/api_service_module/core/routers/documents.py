@@ -31,8 +31,14 @@ class DocumentsRoutesMixin:
             Path(upload_dir).mkdir(parents=True, exist_ok=True)
 
             file_path = Path(upload_dir) / file.filename
-            content = await file.read()
-            file_path.write_bytes(content)
+            # 分块落盘 (1MB/块): 大文件不整体读进内存 (原 await file.read() 上传
+            # 100MB 知识库就吃 100MB RAM, 多租户并发上传会 OOM)
+            with file_path.open("wb") as out:
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
 
             response_data = {
                 "file_name": file.filename,

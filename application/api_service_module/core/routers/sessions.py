@@ -37,11 +37,22 @@ class SessionsRoutesMixin:
                 limit = int(request.query_params.get("limit", "50"))
             except ValueError:
                 limit = 50
+            cursor = request.query_params.get("cursor") or None
             try:
-                sessions = self.state_store.list_sessions(limit=limit)
+                # cursor 仅在显式传入时透传 — 兼容不带该参的旧 state_store 实现/测试桩
+                if cursor:
+                    sessions = self.state_store.list_sessions(limit=limit, cursor=cursor)
+                else:
+                    sessions = self.state_store.list_sessions(limit=limit)
+                # 满页才给 next_cursor (不满页说明已到尾, 返 null 让前端停)
+                next_cursor = None
+                if sessions and len(sessions) >= limit:
+                    last = sessions[-1]
+                    next_cursor = f"{last['last_modified']}:{last['session_id']}"
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(sessions), "sessions": sessions},
+                    "data": {"count": len(sessions), "sessions": sessions,
+                             "next_cursor": next_cursor},
                     "trace_id": trace_id, "retryable": False, "details": None,
                 })
             except Exception as e:

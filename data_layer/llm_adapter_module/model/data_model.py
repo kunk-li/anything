@@ -73,4 +73,7 @@ class LLMResponse:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    # ⚠️ None 语义承载逻辑, 勿改默认 0.0: None = "adapter 未抠到成本" -> llm_adapter
+    # core/impl 与 UsageTracker 据此触发 estimate_cost 回填; 0.0 = "已知零成本"
+    # 会跳过估算、计费静默归零。消费方做算术前必须判 None。
     cost_usd: Optional[float] = None

@@ -239,12 +239,24 @@ class LocalStateStore(BaseStateStore):
             self.logger.error(f"状态清理失败：{session_id} - {e}", logger_name="state_store_module")
             raise StateStoreException("STATE_STORE_CLEAR_FAILED", f"状态清理失败：{e}") from e
 
-    def list_sessions(self, limit: int = 100) -> list:
+    def list_sessions(self, limit: int = 100, cursor: Optional[str] = None) -> list:
         """Task SSS (#105): 扫 store_dir 列已知 session.
 
         返回 [{session_id, last_modified, size_bytes, has_history}, ...],
-        按 last_modified 倒序. has_history 看 state.get("history") 是否非空.
+        按 (last_modified, session_id) 双键倒序 (双键保证 mtime 相同时顺序稳定).
+        has_history 看 state.get("history") 是否非空.
+
+        cursor 分页: cursor = 上一页最后一条的 "last_modified:session_id",
+        传入后只返回排序上严格在其后的条目 — 频繁创删 session 时不会像
+        offset 分页那样重复/漏条。非法 cursor 忽略 (等价首页)。
         """
+        cur_key = None
+        if cursor:
+            try:
+                mt_s, sid_s = str(cursor).split(":", 1)
+                cur_key = (float(mt_s), sid_s)
+            except (ValueError, TypeError):
+                cur_key = None
         out = []
         try:
             if not os.path.isdir(self.store_dir):
@@ -260,7 +272,9 @@ class LocalStateStore(BaseStateStore):
                     continue
                 session_id = name[:-5]  # strip .json
                 entries.append((st.st_mtime, st.st_size, session_id, p))
-            entries.sort(key=lambda x: x[0], reverse=True)
+            entries.sort(key=lambda x: (x[0], x[2]), reverse=True)
+            if cur_key is not None:
+                entries = [e for e in entries if (e[0], e[2]) < cur_key]
             for mtime, size, sid, p in entries[:limit]:
                 has_history = False
                 title = None  # Task YYYY-E (#116): 从首条 user msg 提取
