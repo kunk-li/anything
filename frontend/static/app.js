@@ -1460,6 +1460,7 @@
         $$('.mode-tab').forEach(btn => {
             btn.addEventListener('click', () => {
                 state.mode = btn.dataset.mode;
+                try { localStorage.setItem('anything_mode', state.mode); } catch (_) {}  // 持久化模式选择
                 $$('.mode-tab').forEach(b => {
                     b.classList.toggle('active', b === btn);
                     b.setAttribute('aria-selected', b === btn);
@@ -1467,6 +1468,17 @@
                 updateComposerPlaceholder();
                 _applyModeAwareComposer();  // WWWW-C: 控制 plan/reflect 显隐
             });
+        });
+        // 恢复上次选择的模式 (刷新后保持; 没存过则用 state 默认 agent), 并把 UI 高亮同步到
+        // state.mode —— HTML 默认高亮的是 RAG tab, 不纠正的话刷新就总显示成 RAG。
+        try {
+            const savedMode = localStorage.getItem('anything_mode');
+            if (savedMode && ['rag', 'agent', 'hybrid'].includes(savedMode)) state.mode = savedMode;
+        } catch (_) {}
+        $$('.mode-tab').forEach(b => {
+            const on = b.dataset.mode === state.mode;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on);
         });
         updateComposerPlaceholder();
         _applyModeAwareComposer();  // WWWW-C: 启动时也跑一次
