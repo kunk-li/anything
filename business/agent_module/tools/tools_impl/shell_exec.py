@@ -93,25 +93,34 @@ def classify_command(cmd: str) -> Tuple[str, str]:
     return "safe", "未匹配破坏性/不透明模式 (按只读放行)"
 
 
-# shell 元字符: 有这些才需要真 shell (管道/重定向/逻辑与或/命令替换/通配)。
-_SHELL_META = re.compile(r"[|<>&;`]|\$\(|\*|\?")
+# 真正需要 shell 的"独立操作符 token" (shlex 拆分后作为单独元素出现才算;
+# 引号内的 > < | 会被 shlex 保留在某个 token 内部, 不会单独成 token, 故不误判)。
+_SHELL_OP_TOKENS = {"|", "||", "&", "&&", ";", ">", ">>", "<", "<<", "2>", "2>>", "&>", "|&"}
 
 
 def _plan_exec(command: str):
     """决定怎么执行一条命令字符串, 返回 (argv, use_shell)。
 
-    - 含 shell 元字符 → (None, True): 必须经 shell (管道等), 引号交给 shell;
-    - 否则 → (argv, False): shlex 拆成参数数组、shell=False 直接喂程序,
-      **绕开 Windows shell 对嵌套引号的破坏** (cmd/powershell 会把 --eval "…'x'…"
-      里的内层引号吃掉, 导致 mongosh 等收到残缺命令)。shlex 拆不动 (引号不配对) 时回退经 shell。
+    先 shlex 拆分 (正确处理引号), 再判断是否真需要 shell:
+    - argv 里出现*独立的* shell 操作符 token, 或有 `…`/$(…) 命令替换 → (None, True) 经 shell;
+    - 否则 → (argv, False): shell=False 直接喂程序。
+
+    关键: mongosh --eval "…d => printjson(d)…" 里的 => / > / < / | 都在引号内, shlex 会把整段
+    保留在单个 token 内, 不会单独成为操作符 token → 走 argv, 不经 shell。
+    (旧版在原始串上正则匹配 '>', 会把箭头函数 => 误判成重定向 → 既跑坏命令、又在 cwd 创建垃圾文件。)
+    shlex 拆不动 (引号不配对) → 回退经 shell。
     """
-    if _SHELL_META.search(command):
-        return None, True
     try:
         argv = shlex.split(command, posix=True)
     except ValueError:
         return None, True
-    return (argv, False) if argv else (None, True)
+    if not argv:
+        return None, True
+    if any(tok in _SHELL_OP_TOKENS for tok in argv):
+        return None, True
+    if "`" in command or "$(" in command:
+        return None, True
+    return argv, False
 
 
 class _RealShell:

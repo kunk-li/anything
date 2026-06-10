@@ -118,6 +118,17 @@ class TestPlanExec(unittest.TestCase):
         _, use_shell = _plan_exec("echo 'unterminated")
         self.assertTrue(use_shell)
 
+    def test_arrow_function_not_misjudged_as_redirect(self):
+        # 关键回归: mongosh --eval 里的箭头函数 => / 比较符 > 在引号内, 不能被当 shell 重定向
+        # (旧版在原始串正则匹配 '>' → 误判走 shell → 创建垃圾文件 printjson(doc))' + 命令截断)
+        argv, use_shell = _plan_exec(
+            'mongosh --quiet --eval "db.t.find().forEach(d => printjson(d))"')
+        self.assertFalse(use_shell)
+        self.assertIn("db.t.find().forEach(d => printjson(d))", argv)
+        # 引号内的比较符 > 也不误判
+        _, us2 = _plan_exec('mongosh --eval "db.t.find({n:{$gt:5}})"')
+        self.assertFalse(us2)
+
 
 if __name__ == "__main__":
     unittest.main()

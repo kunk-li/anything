@@ -28,7 +28,7 @@ __pycache__/
 /run/bm25_index.json
 /run/*.sqlite3
 /run/_*.py
-/run/_*.log
+/run/*.log
 # 审计日志 JSONL + 滚动备份 (相对 cwd, 可能落在仓库根或 run/, 故不加前导斜杠匹配任意目录)
 audit.log.jsonl
 audit.log.jsonl.*
