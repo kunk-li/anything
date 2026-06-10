@@ -47,6 +47,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # 默认监听 0.0.0.0:8000 (compose 端口映射 8000:8000), DEV_MODE 默认 1 让 secrets 缺失不挂
 ENV ANYTHING_DEV_MODE=1
+# kb/feedback sqlite 数据根: 默认相对路径 "run" 只在 CWD=项目根时正确,
+# WORKDIR=/app/run 下不设会写出 /app/run/run/ 分裂库
+ENV ANYTHING_DATA_ROOT=/app/run
 
 EXPOSE 8000
 

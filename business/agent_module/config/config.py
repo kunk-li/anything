@@ -29,13 +29,6 @@ class AgentConfig:
             "agent_session"
         )
 
-    def get_state_expire_hours(self) -> int:
-        """获取会话状态过期时间（小时）"""
-        return int(self.config_manager.get_config(
-            "agent.state_expire_hours",
-            24
-        ))
-
     def is_state_persist_enabled(self) -> bool:
         """是否启用状态持久化"""
         return self.config_manager.get_config(

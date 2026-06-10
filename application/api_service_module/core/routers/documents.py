@@ -30,7 +30,43 @@ class DocumentsRoutesMixin:
             upload_dir = self.config.get_config("api_service.upload_dir", "./uploads")
             Path(upload_dir).mkdir(parents=True, exist_ok=True)
 
-            file_path = Path(upload_dir) / file.filename
+            # 客户端 filename 不可信: 剥目录部分 (防 ../ 穿越写到 upload_dir 外),
+            # 统一两种分隔符 (curl 可伪造 "..\\evil" 而 POSIX Path.name 不认反斜杠)
+            raw_name = (file.filename or "").replace("\\", "/")
+            safe_name = Path(raw_name).name.strip()
+            if not safe_name or safe_name in (".", ".."):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "PARAM_INVALID",
+                        "message": f"非法文件名: {file.filename!r}",
+                        "data": None,
+                        "trace_id": trace_id, "retryable": False, "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            upload_root = Path(upload_dir).resolve()
+            file_path = upload_root / safe_name
+            if file_path.resolve().parent != upload_root:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "code": "PARAM_INVALID",
+                        "message": "文件名解析后越出上传目录, 已拒绝",
+                        "data": None,
+                        "trace_id": trace_id, "retryable": False, "details": None,
+                    },
+                    headers={"X-Request-Id": trace_id},
+                )
+            # 同名不再静默覆盖: 加 -N 后缀 (重复内容会在索引层被 content-hash 查重跳过)
+            if file_path.exists():
+                stem, suffix = file_path.stem, file_path.suffix
+                for i in range(1, 10000):
+                    cand = upload_root / f"{stem}-{i}{suffix}"
+                    if not cand.exists():
+                        file_path = cand
+                        break
+
             # 分块落盘 (1MB/块): 大文件不整体读进内存 (原 await file.read() 上传
             # 100MB 知识库就吃 100MB RAM, 多租户并发上传会 OOM)
             with file_path.open("wb") as out:
@@ -41,7 +77,7 @@ class DocumentsRoutesMixin:
                     out.write(chunk)
 
             response_data = {
-                "file_name": file.filename,
+                "file_name": file_path.name,
                 "stored_path": str(file_path),
                 "indexed": False,
             }

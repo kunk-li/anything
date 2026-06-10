@@ -72,8 +72,13 @@ class LocalDocumentStore(BaseDocumentStore):
         defaults = DocumentStoreConfig()
 
         # base = yaml 配置; storage_dir = base/<tenant_id>/ (实际工作目录)
+        # 键名以 yaml/factory 文档的 document_store.dir 为准; 老键 storage_dir 兼容读
+        # (历史上代码读 storage_dir 而 yaml 写 dir, 导致 yaml 配置静默无效)
         self.base_storage_dir = self.config_manager.get_config(
-            "document_store.storage_dir", default=defaults.storage_dir
+            "document_store.dir",
+            default=self.config_manager.get_config(
+                "document_store.storage_dir", default=defaults.storage_dir
+            ),
         )
         self.storage_dir = os.path.join(self.base_storage_dir, self.tenant_id)
 
@@ -336,7 +341,11 @@ class LocalDocumentStore(BaseDocumentStore):
 
         info_path = get_info_file_path(self.storage_dir, doc_id)
         try:
-            json_dump({k: document.get(k) for k in required}, info_path)
+            payload = {k: document.get(k) for k in required}
+            # 可选: 原始上传文件路径 — DELETE /documents 时据此回收 uploads/ 原件
+            if document.get("stored_path"):
+                payload["stored_path"] = str(document["stored_path"])
+            json_dump(payload, info_path)
             return True
         except Exception as e:
             self.logger.error(f"write_info_file failed: {e}", exc_info=True)

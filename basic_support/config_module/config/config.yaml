@@ -4,9 +4,6 @@ global:
   log_level: "INFO"
   hot_reload: true
   hot_reload_interval: 5
-  backup_enabled: true
-  backup_interval: 24
-  backup_retention: 7
 
 # 配置校验规则
 validate_rules:
@@ -129,6 +126,18 @@ scheduler:
 
 document_store:
   dir: "documents"
+
+# 服务层文件治理
+api_service:
+  # 上传原件保留天数: >0 时后台每日清理 — 已索引的非图片原件 + uploads/screenshots/
+  # 超期截图。0 = 不清理。图片原件永远保留 (image_describe 会话中按路径回读)。
+  upload_retention_days: 30
+
+# per-tenant 资源配额 (不配 = 不限制; 配 0 = 冻结新增)
+quotas:
+  default:
+    max_documents: 1000          # 文档数上限 (按唯一 content_hash 计)
+    max_vector_store_mb: 51200   # 向量库字节配额 50GB (N*dim*4B 预估)
 
 state_store:
   dir: "state_store"
