@@ -313,9 +313,11 @@ class LocalDocumentStore(BaseDocumentStore):
                     pass
                 return False
 
-            # update hash map
-            self.hash_doc_map[str(document["content_hash"]).lower()] = doc_id
-            self._save_hash_map()
+            # update hash map — scope=chat (会话附件) 不注册全局查重表:
+            # 注册了会让后续 KB 上传同内容被 dedup 跳过, 永远进不了向量库
+            if str(document.get("scope") or "") != "chat":
+                self.hash_doc_map[str(document["content_hash"]).lower()] = doc_id
+                self._save_hash_map()
             return True
         except Exception as e:
             self.logger.error(f"save_document failed: {e}", exc_info=True)
@@ -356,6 +358,12 @@ class LocalDocumentStore(BaseDocumentStore):
             # 可选: 原始上传文件路径 — DELETE /documents 时据此回收 uploads/ 原件
             if document.get("stored_path"):
                 payload["stored_path"] = str(document["stored_path"])
+            # 可选: 会话附件标记 — scope=chat 的文档与 session 绑定,
+            # 不进检索索引, 会话删除时联动清理
+            if document.get("scope"):
+                payload["scope"] = str(document["scope"])
+            if document.get("session_id"):
+                payload["session_id"] = str(document["session_id"])
             json_dump(payload, info_path)
             return True
         except Exception as e:
@@ -393,6 +401,9 @@ class LocalDocumentStore(BaseDocumentStore):
                     "source": (info.get("meta") or {}).get("source") if isinstance(info.get("meta"), dict) else None,
                     # 原始上传文件路径 (uploads 清理器判定"已索引原件"用)
                     "stored_path": info.get("stored_path"),
+                    # 会话附件标记 (scope=chat 不进检索索引, 列表/删除按此过滤)
+                    "scope": info.get("scope"),
+                    "session_id": info.get("session_id"),
                 })
         except OSError:
             return []

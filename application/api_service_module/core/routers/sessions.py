@@ -22,6 +22,49 @@ from fastapi.responses import JSONResponse
 class SessionsRoutesMixin:
     """会话管理路由 mixin."""
 
+    def _delete_chat_docs_for_session(self, session_id: str) -> tuple:
+        """删除绑定到该会话的聊天附件 (scope=chat): document_store 正文 + uploads/ 原件。
+
+        上传链路 (index_runner) 写的是 default tenant 的 document_store, 这里对应清理。
+        清理失败不阻塞会话删除 — 只 WARNING (残留可被 upload-janitor 按保留期兜底)。
+        返回 (docs_removed, files_removed)。
+        """
+        docs_removed = 0
+        files_removed = 0
+        sid = str(session_id or "").strip()
+        if not sid or not getattr(self, "document_store_factory", None):
+            return docs_removed, files_removed
+        from pathlib import Path
+        try:
+            store = self.document_store_factory("default")
+            upload_root = Path(
+                self.config.get_config("api_service.upload_dir", "./uploads")
+            ).resolve()
+            for d in (store.list_documents() or []):
+                if d.get("scope") != "chat" or d.get("session_id") != sid:
+                    continue
+                stored_path = d.get("stored_path")
+                try:
+                    if store.delete_document(d.get("doc_id")):
+                        docs_removed += 1
+                except Exception as e:
+                    self.logger.warning(
+                        f"[sessions.delete] chat doc 清理失败 doc_id={d.get('doc_id')}: {e}")
+                    continue
+                # 原件回收 — 只删 upload_dir 直系子文件 (同 DELETE /documents 约束)
+                if stored_path:
+                    try:
+                        p = Path(stored_path).resolve()
+                        if p.parent == upload_root and p.is_file():
+                            p.unlink()
+                            files_removed += 1
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[sessions.delete] chat 原件清理失败 {stored_path}: {e}")
+        except Exception as e:
+            self.logger.warning(f"[sessions.delete] chat 附件联动清理失败 sid={sid}: {e}")
+        return docs_removed, files_removed
+
     def _register_sessions_routes(self) -> None:
         @self.app.get("/sessions/list")
         async def sessions_list(request: Request):
@@ -108,9 +151,14 @@ class SessionsRoutesMixin:
                 )
             try:
                 ok = self.state_store.clear_state(session_id)
+                # 会话附件联动清理: scope=chat 的文档与 session 绑定 (不在向量库/
+                # BM25/kb_doc 里, 只需清 document_store 正文 + uploads/ 原件)
+                docs_removed, files_removed = self._delete_chat_docs_for_session(session_id)
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
-                    "data": {"deleted": True, "session_id": session_id, "result": ok},
+                    "data": {"deleted": True, "session_id": session_id, "result": ok,
+                             "chat_docs_removed": docs_removed,
+                             "chat_files_removed": files_removed},
                     "trace_id": trace_id, "retryable": False, "details": None,
                 })
             except Exception as e:

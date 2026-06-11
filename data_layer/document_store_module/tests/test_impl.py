@@ -38,6 +38,38 @@ class TestLocalDocumentStore(unittest.TestCase):
         self.store.delete_document(doc["doc_id"])
         self.assertIsNone(self.store.find_doc_id_by_hash(h))
 
+    def test_chat_scope_skips_hash_registration(self):
+        """会话附件 (scope=chat): 不注册全局 hash 查重表 — 否则后续 KB 上传
+        同内容被 dedup 跳过, 永远进不了向量库"""
+        content = "chat attachment content"
+        h = calculate_content_hash(content, "md5")
+        doc = self.store.create_document(content, "att.txt", "txt", h)
+        doc["scope"] = "chat"
+        doc["session_id"] = "sess_abc123"
+        self.assertTrue(self.store.save_document(doc))
+        # hash 未注册 → KB 查重查不到
+        self.assertIsNone(self.store.find_doc_id_by_hash(h))
+        # 正文照常可读 (Agent document_read 依赖)
+        got = self.store.get_document(doc["doc_id"])
+        self.assertEqual(got["content"], content)
+        # info.json 持久化 scope/session_id, list_documents 透出
+        info = self.store.read_info_file(doc["doc_id"])
+        self.assertEqual(info.get("scope"), "chat")
+        self.assertEqual(info.get("session_id"), "sess_abc123")
+        listed = [d for d in self.store.list_documents() if d["doc_id"] == doc["doc_id"]]
+        self.assertEqual(listed[0].get("scope"), "chat")
+        self.assertEqual(listed[0].get("session_id"), "sess_abc123")
+
+    def test_kb_scope_still_registers_hash(self):
+        """无 scope (默认 KB): hash 注册行为不变"""
+        content = "kb doc content"
+        h = calculate_content_hash(content, "md5")
+        doc = self.store.create_document(content, "kb.txt", "txt", h)
+        self.assertTrue(self.store.save_document(doc))
+        self.assertEqual(self.store.find_doc_id_by_hash(h), doc["doc_id"])
+        listed = [d for d in self.store.list_documents() if d["doc_id"] == doc["doc_id"]]
+        self.assertIsNone(listed[0].get("scope"))
+
     def test_crlf_content_roundtrip_char_exact(self):
         """P8 偏移一致性: \\r\\n 内容入库归一化, 落盘读回与 create 返回的串逐字符一致
         — chunk 偏移基于 create 返回串计算, 读回串必须相同否则按偏移取文错位"""

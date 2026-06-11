@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 from typing import List
 
-from fastapi import Request, UploadFile, File
+from fastapi import Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
 
@@ -23,8 +23,18 @@ class DocumentsRoutesMixin:
 
     def _register_documents_routes(self) -> None:
         @self.app.post("/documents/upload")
-        async def upload_document(request: Request, file: UploadFile = File(...)):
+        async def upload_document(
+            request: Request,
+            file: UploadFile = File(...),
+            scope: str = Form("kb"),
+            session_id: str = Form(""),
+        ):
+            """scope=kb (默认): 全索引进知识库 (向量+BM25), RAG 可检索。
+            scope=chat: 会话附件 — 只 parse 入 document_store (Agent document_read
+            可读), 不进检索索引; 与 session_id 绑定, 会话删除时联动清理。"""
             trace_id = request.state.trace_id
+            scope = "chat" if str(scope or "").strip().lower() == "chat" else "kb"
+            session_id = str(session_id or "").strip()
 
             # 协议层: 落盘到 upload_dir
             upload_dir = self.config.get_config("api_service.upload_dir", "./uploads")
@@ -80,17 +90,28 @@ class DocumentsRoutesMixin:
                 "file_name": file_path.name,
                 "stored_path": str(file_path),
                 "indexed": False,
+                "scope": scope,
             }
 
             # 如果注入了 index_runner, 上传后立刻索引到默认 tenant 的 vector_store。
             # 这是单 worker 同步操作 (parse + chunk + embed + upsert), 一般 1-3 秒。
+            # scope=chat 只走 parse+入库 (store_only), 跳过 embed — 毫秒级。
             if self.index_runner is not None:
                 import asyncio as _asyncio
                 try:
                     loop = _asyncio.get_event_loop()
-                    idx_result = await loop.run_in_executor(
-                        None, lambda: self.index_runner(str(file_path))
-                    )
+                    if scope == "chat":
+                        # kwargs 仅 chat 路径传 (kb 路径保持单参调用, 兼容旧 runner 桩)
+                        idx_result = await loop.run_in_executor(
+                            None, lambda: self.index_runner(
+                                str(file_path), store_only=True,
+                                extra_meta={"scope": "chat", "session_id": session_id},
+                            )
+                        )
+                    else:
+                        idx_result = await loop.run_in_executor(
+                            None, lambda: self.index_runner(str(file_path))
+                        )
                     docs_list = idx_result.get("data", {}).get("documents", []) or []
                     dups = [
                         d for d in docs_list
@@ -107,7 +128,8 @@ class DocumentsRoutesMixin:
                         response_data["stored_path"] = None
                         response_data["indexed"] = False
                     else:
-                        response_data["indexed"] = True
+                        # chat 附件没进检索索引, indexed 语义是"RAG 可检索"
+                        response_data["indexed"] = (scope != "chat")
                     response_data["index_summary"] = {
                         "total_chunks": idx_result.get("data", {}).get("total_chunks", 0),
                         "total_vectors": idx_result.get("data", {}).get("total_vectors", 0),
@@ -133,7 +155,11 @@ class DocumentsRoutesMixin:
                     "message": (
                         "duplicate, 复用已有文档"
                         if response_data.get("duplicate_of")
-                        else "uploaded" + (" + indexed" if response_data["indexed"] else "")
+                        else "uploaded" + (
+                            " + indexed" if response_data["indexed"]
+                            else (" + stored (chat)" if scope == "chat"
+                                  and response_data.get("index_summary") else "")
+                        )
                     ),
                     "data": response_data,
                     "trace_id": trace_id,
@@ -146,7 +172,10 @@ class DocumentsRoutesMixin:
         # Task JJ (#70): 文档管理 — list / delete
         @self.app.get("/documents")
         async def list_documents(request: Request):
-            """列出当前 tenant 已索引文档. 跟 /admin/status 同等权限 (生产网关加 RBAC)."""
+            """列出当前 tenant 已索引文档. 跟 /admin/status 同等权限 (生产网关加 RBAC).
+
+            ?scope=kb (默认) 只列知识库文档 — 聊天会话附件 (scope=chat) 不混进
+            文档面板; ?scope=chat / ?scope=all 留给调试与会话清理用。"""
             trace_id = request.state.trace_id
             if self.document_store_factory is None:
                 return JSONResponse(
@@ -178,6 +207,10 @@ class DocumentsRoutesMixin:
                         headers={"X-Request-Id": trace_id},
                     )
                 docs = store.list_documents()
+                scope_q = str(request.query_params.get("scope") or "kb").strip().lower()
+                if scope_q != "all":
+                    # 老文档没有 scope 字段 → 视为 kb
+                    docs = [d for d in docs if (d.get("scope") or "kb") == scope_q]
             except Exception as e:
                 self.logger.error(f"[documents.list] tenant={tid} err={e}")
                 return JSONResponse(

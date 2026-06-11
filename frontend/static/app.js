@@ -2064,7 +2064,12 @@
             att.status = 'uploading';
             renderAttachments();
             try {
-                const { payload, status } = await ApiClient.uploadDocument(att.file);
+                // 聊天附件 scope=chat: 只入 document_store 供 Agent 读取,
+                // 不进向量库/BM25 (不污染 RAG 检索), 随会话删除联动清理
+                const { payload, status } = await ApiClient.uploadDocument(att.file, {
+                    scope: 'chat',
+                    sessionId: state.settings.sessionId,
+                });
                 if (status === 200 && payload?.code === 'SUCCESS') {
                     const d = payload.data || {};
                     att.storedPath = d.stored_path || '';

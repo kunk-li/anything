@@ -85,10 +85,14 @@ const ApiClient = (() => {
 
     /**
      * 文件上传: POST /documents/upload (multipart/form-data)
+     * opts.scope: 'kb' (默认, 进知识库可检索) | 'chat' (会话附件, 不进检索索引)
+     * opts.sessionId: scope=chat 时绑定的会话 id (会话删除联动清理)
      */
-    async function uploadDocument(file) {
+    async function uploadDocument(file, opts) {
         const formData = new FormData();
         formData.append('file', file);
+        if (opts && opts.scope) formData.append('scope', opts.scope);
+        if (opts && opts.sessionId) formData.append('session_id', opts.sessionId);
         return _doFetch('POST', '/documents/upload', {
             body: formData,
             isJson: false,

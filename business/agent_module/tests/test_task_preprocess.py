@@ -84,7 +84,7 @@ class TestAttachmentsStep(unittest.TestCase):
         s = self.agent._attachments_task_suffix(ep)
         self.assertIn("[用户附件]", s)
         self.assertIn('1. photo.png (image/png) — 文件路径: "uploads/photo.png"', s)
-        self.assertIn("doc_id: abc-123 (已索引入知识库)", s)
+        self.assertIn("doc_id: abc-123 (已入库)", s)
         self.assertIn("image_describe", s)   # 类型→工具映射提示在块尾
 
     def test_step_appends_to_task(self):

@@ -162,7 +162,7 @@ class TaskPreprocessMixin:
             if a.get("path"):
                 entry += f' — 文件路径: "{a["path"]}"'
             if a.get("doc_id"):
-                entry += f" — doc_id: {a['doc_id']} (已索引入知识库)"
+                entry += f" — doc_id: {a['doc_id']} (已入库)"
             lines.append(entry)
         lines.append(
             "请先用合适的工具读取附件内容再回答用户问题, 不要凭空猜测: "

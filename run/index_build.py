@@ -83,9 +83,14 @@ def create_and_save_document(store: Any, item: Dict[str, Any]) -> Dict[str, Any]
         document["meta"].setdefault("source", source)
         for k, v in meta.items():
             document["meta"].setdefault(k, v)
-        # 顶层 stored_path 字段随 info.json 持久化 (write_info_file 可选字段)
+        # 顶层 stored_path/scope/session_id 字段随 info.json 持久化
+        # (write_info_file 可选字段; scope 同时决定 save_document 是否注册 hash 查重)
         if meta.get("stored_path"):
             document["stored_path"] = meta["stored_path"]
+        if meta.get("scope"):
+            document["scope"] = meta["scope"]
+        if meta.get("session_id"):
+            document["session_id"] = meta["session_id"]
 
     store.save_document(document)
 
@@ -141,11 +146,16 @@ def build_index(
     data_layer: "Optional[Dict[str, Any]]" = None,
     bm25_retriever: Any = None,         # Task #49: 同步喂 BM25 索引
     bm25_index_path: Optional[str] = None,
+    store_only: bool = False,           # 会话附件: 只 parse+入 document_store, 不进向量库/BM25
+    extra_meta: Optional[Dict[str, Any]] = None,  # 附加 meta (scope/session_id), 随 info.json 持久化
 ) -> Dict[str, Any]:
     """构建索引. data_layer 不传时现 new (CLI 模式), 传入时复用 (ApiService 模式).
 
     Task #49: 若传入 bm25_retriever, 则在 upsert 向量后同步 add_chunks 到 BM25,
     并 (可选) 持久化到 bm25_index_path 让进程重启后可恢复。
+
+    store_only=True (聊天附件会话绑定): Agent 的 document_read 只依赖 document_store
+    正文, 跳过 chunk/embed/upsert — 附件不污染全局检索, 也不要求 embedding/vector_db。
     """
     if data_layer is None:
         data_layer = build_data_layer()
@@ -160,10 +170,11 @@ def build_index(
         raise RuntimeError("document_parser 未构建成功")
     if store is None:
         raise RuntimeError("document_store 未构建成功")
-    if embedding is None:
-        raise RuntimeError("embedding 未构建成功，请检查 bootstrap 中的初始化方式")
-    if vector_db is None:
-        raise RuntimeError("vector_db 未构建成功，请检查 faiss 依赖或 bootstrap 配置")
+    if not store_only:
+        if embedding is None:
+            raise RuntimeError("embedding 未构建成功，请检查 bootstrap 中的初始化方式")
+        if vector_db is None:
+            raise RuntimeError("vector_db 未构建成功，请检查 faiss 依赖或 bootstrap 配置")
 
     parsed_items = parse_sources(parser=parser, source_type=source_type, source_path=source_path)
 
@@ -176,6 +187,14 @@ def build_index(
             if not isinstance(item.get("meta"), dict):
                 item["meta"] = {}
             item["meta"]["stored_path"] = str(Path(source_path).resolve())
+
+    if extra_meta:
+        for item in parsed_items:
+            if not isinstance(item, dict):
+                continue
+            if not isinstance(item.get("meta"), dict):
+                item["meta"] = {}
+            item["meta"].update(extra_meta)
 
     total_docs = 0
     total_chunks = 0
@@ -230,6 +249,21 @@ def build_index(
         content = document.get("content", "")
         meta = document.get("meta") or {}
         source = meta.get("source", "local")
+
+        # 会话附件: 正文已入 document_store (document_read 可读), 不进检索索引
+        if store_only:
+            total_docs += 1
+            docs_summary.append(
+                {
+                    "doc_id": doc_id,
+                    "file_name": file_name,
+                    "chunk_count": 0,
+                    "vector_count": 0,
+                    "upsert_result": None,
+                    "store_only": True,
+                }
+            )
+            continue
 
         chunks = chunk_document(
             doc_id=doc_id,

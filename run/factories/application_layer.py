@@ -132,7 +132,8 @@ def build_application_layer(
         index_runner = None
         rebuild_runner = None
         if data_layer is not None and data_layer.get("embedding") and data_layer.get("vector_db"):
-            def _index_runner(file_path: str):
+            def _index_runner(file_path: str, **kwargs):
+                # kwargs 透传 build_index (store_only/extra_meta — 会话附件 scope=chat 用)
                 from index_build import build_index as _build_index
                 return _build_index(
                     source_type="file",
@@ -140,6 +141,7 @@ def build_application_layer(
                     data_layer=data_layer,
                     bm25_retriever=bm25_for_index,
                     bm25_index_path=bm25_index_path_for_index,
+                    **kwargs,
                 )
             index_runner = _index_runner
 
