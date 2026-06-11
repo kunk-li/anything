@@ -391,6 +391,11 @@ class SimpleAgent(
         max_retries = int(request.get("max_retries") or self.max_retries)
         execution_mode = extra_params.get("execution_mode", self.default_execution_mode)
         strategy = extra_params.get("execution_strategy", self.execution_strategy)
+        # 有附件强制 ReAct: 附件内容必须经工具读取 (image_describe/pdf_read/...),
+        # single_shot 一次性规划常直接作答不调工具。工具选择权在 ReAct 循环 (方案B),
+        # 前端不再注入 execution_strategy/工具名。
+        if extra_params.get("attachments"):
+            strategy = "react"
 
         # 任务前处理 (执行计划④): refine → 记忆注入 → 画像注入 → 历史 → 纠正反馈, 抽成可组合
         # 步骤流水线 (components/task_preprocess.py)。某步早退 (UP-4 ask 澄清) → 直接返回其响应。

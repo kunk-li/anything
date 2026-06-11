@@ -162,9 +162,12 @@ class StreamingMixin:
         # 也算进 effective strategy, 与非流式 execute() 对齐。
         _effective_strategy = (extra_params.get("execution_strategy")
                                or getattr(self, "execution_strategy", "single_shot"))
+        # 有附件强制 ReAct (与非流式 execute 对齐): 附件须经工具读取, 直连 chat_stream
+        # 纯文本不跑工具, 模型根本看不到附件。
         _want_react = (
             _effective_strategy == "react"
             or (bool(extra_params.get("plan_only")) and not bool(extra_params.get("approve_plan")))
+            or bool(extra_params.get("attachments"))
         )
         if (not _want_react and getattr(self, "llm_client", None) is not None
                 and hasattr(self.llm_client, "chat_stream")):
@@ -219,6 +222,11 @@ class StreamingMixin:
             _hist_prefix = self._history_prefix(session_id)
             if _hist_prefix:
                 task = _hist_prefix + task
+
+        # 附件块注入 (与非流式 _pre_step_attachments 对齐 — 流式 react 不走前处理流水线)
+        _att_suffix = self._attachments_task_suffix(extra_params)
+        if _att_suffix:
+            task = (task or "") + _att_suffix
 
         # Task V (#56) 流式版: plan_only=true → 跑一遍拿 plan, yield 给前端就停
         plan_only = bool(extra_params.get("plan_only", False)) and not bool(

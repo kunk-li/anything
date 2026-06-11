@@ -235,6 +235,9 @@ class ExtraParams(BaseModel):
     execution_strategy: Optional[ExecutionStrategy] = None
     # 调用方溯源 (console_app / web / api)
     source: Optional[str] = None
+    # 聊天附件元信息 [{name, mime, path, doc_id}] -- 前端只上送事实,
+    # 由 Agent 按文件类型自选读取工具 (image_describe/pdf_read/excel_read/document_read)
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
 
     # 渐进迁移期允许未知 key 透传 (避免 BAD_REQUEST 阻断老调用方)
     model_config = {"extra": "allow"}

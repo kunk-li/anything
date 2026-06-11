@@ -5,7 +5,7 @@
     <!-- Task XXXX-16 (#163): viewport-fit=cover 让 iPhone 刘海屏底部 safe-area 生效 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Anything · RAG & Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=194">
+    <link rel="stylesheet" href="/static/style.css?v=195">
 </head>
 <body>
     <!-- 内联 SVG 图标 sprite (替代 emoji chrome 图标; stroke=currentColor 跟随主题/hover) -->
@@ -296,7 +296,7 @@
                         rows="1"
                         data-i18n-attr="placeholder:composer.placeholder.rag,aria-label:composer.placeholder.rag"
                     ></textarea>
-                    <input type="file" id="image-picker" accept="image/*" multiple hidden />
+                    <input type="file" id="image-picker" accept="image/*,.txt,.pdf,.docx,.md,.py,.xlsx,.xls,.ppt,.pptx,.csv,.json,.xml" multiple hidden />
                     <button id="image-btn" class="icon-btn"
                             data-i18n-attr="title:composer.attach.upload_image"
                             type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg></button>
@@ -768,7 +768,7 @@
 
     <!-- Task ZZZZ (#117): 加版本 query bust 浏览器静态 cache -->
     <script src="/static/api.js?v=194"></script>
-    <script src="/static/i18n.js?v=186"></script>
+    <script src="/static/i18n.js?v=195"></script>
     <script src="/static/markdown.js?v=186"></script>
     <!-- Task XXXX-9 (#156): IndexedDB KV mirror (workflows / drafts 用) -->
     <script src="/static/idb-store.js?v=186"></script>
@@ -786,6 +786,6 @@
     <!-- 执行计划⑦: 统一配置面板 -->
     <script src="/static/modules/config-panel.js?v=193"></script>
 
-    <script src="/static/app.js?v=193"></script>
+    <script src="/static/app.js?v=195"></script>
 </body>
 </html>

@@ -1540,7 +1540,7 @@
             els.inputText.style.height = Math.min(els.inputText.scrollHeight, 180) + 'px';
         });
 
-        // ========== 📷 文件选择按钮 (拖拽永远 fallback) ==========
+        // ========== 📎 文件选择按钮 (拖拽永远 fallback) ==========
         if (els.imageBtn && els.imagePicker) {
             els.imageBtn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -1551,13 +1551,19 @@
                 const files = e.target.files;
                 if (!files || !files.length) return;
                 let added = 0;
+                let invalid = 0;
                 let firstName = '';
                 for (const f of files) {
-                    if (f.type && f.type.startsWith('image/')) {
+                    if (isAllowedAttachment(f)) {
                         if (!firstName) firstName = f.name;
                         addAttachment(f);
                         added++;
+                    } else {
+                        invalid++;
                     }
+                }
+                if (invalid > 0) {
+                    toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
                 }
                 if (added > 0) {
                     toast('success', t('toast.attach.added'),
@@ -1653,7 +1659,7 @@
                     if (!files || !files.length) return;
                     let added = 0, invalid = 0;
                     for (const f of files) {
-                        if (f.type && f.type.startsWith('image/')) {
+                        if (isAllowedAttachment(f)) {
                             addAttachment(f);
                             added++;
                         } else {
@@ -1661,7 +1667,7 @@
                         }
                     }
                     if (added === 0 && invalid > 0) {
-                        toast('error', t('toast.attach.invalid'), '');
+                        toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
                     } else if (added > 0) {
                         toast('success', t('toast.attach.added'),
                             added === 1 ? '1 file' : `${added} files`);
@@ -1703,7 +1709,7 @@
                 let added = 0;
                 let invalid = 0;
                 for (const f of files) {
-                    if (f.type && f.type.startsWith('image/')) {
+                    if (isAllowedAttachment(f)) {
                         addAttachment(f);
                         added++;
                     } else {
@@ -1711,7 +1717,7 @@
                     }
                 }
                 if (added === 0 && invalid > 0) {
-                    toast('error', t('toast.attach.invalid'), '');
+                    toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
                 } else if (added > 0) {
                     toast('success', t('toast.attach.added'),
                         added === 1 ? '1 file' : `${added} files`);
@@ -1732,17 +1738,18 @@
                 }
             });
 
-            // 粘贴板里的图片也接 (Ctrl+V)
+            // 粘贴板里的文件也接 (Ctrl+V 截图 / 资源管理器复制的文件);
+            // kind=string 的普通文本粘贴不拦截
             els.inputText.addEventListener('paste', (e) => {
                 const items = e.clipboardData && e.clipboardData.items;
                 if (!items) return;
                 for (const item of items) {
-                    if (item.type && item.type.startsWith('image/')) {
+                    if (item.kind === 'file') {
                         const f = item.getAsFile();
-                        if (f) {
+                        if (f && isAllowedAttachment(f)) {
                             e.preventDefault();
                             addAttachment(f);
-                            toast('success', t('toast.attach.added'), f.name || 'pasted-image');
+                            toast('success', t('toast.attach.added'), f.name || 'pasted-file');
                         }
                     }
                 }
@@ -1988,17 +1995,38 @@
 
     // ---------- 发送 ----------
     // ========== 附件管理 ==========
+    // 聊天附件白名单: 图片 + document_parser 支持的文档类型
+    // (data_layer/document_parser_module/config/config.py SUPPORTED_FILE_TYPES)。
+    // 拖拽进来的文件 MIME 常为空, 所以图片看 MIME、文档看扩展名。
+    const ATTACH_DOC_EXTS = ['.txt', '.pdf', '.docx', '.md', '.py',
+        '.xlsx', '.xls', '.ppt', '.pptx', '.csv', '.json', '.xml'];
+    function isAllowedAttachment(file) {
+        if (file && file.type && file.type.startsWith('image/')) return true;
+        const name = ((file && file.name) || '').toLowerCase();
+        return ATTACH_DOC_EXTS.some(ext => name.endsWith(ext));
+    }
+
     function addAttachment(file) {
         const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        const isImage = !!(file.type && file.type.startsWith('image/'));
+        const att = {
+            id,
+            file,
+            isImage,
+            previewUrl: null,
+            status: 'pending',
+            storedPath: null,
+            docId: null,
+        };
+        if (!isImage) {
+            // 文档不做 dataURL 预览, chip 显示文件图标
+            state.pendingAttachments.push(att);
+            renderAttachments();
+            return;
+        }
         const reader = new FileReader();
         reader.onload = (e) => {
-            const att = {
-                id,
-                file,
-                previewUrl: e.target.result,
-                status: 'pending',
-                storedPath: null,
-            };
+            att.previewUrl = e.target.result;
             state.pendingAttachments.push(att);
             renderAttachments();
         };
@@ -2024,10 +2052,17 @@
             chip.className = 'attachment-chip';
             chip.dataset.id = a.id;
 
-            const img = document.createElement('img');
-            img.src = a.previewUrl;
-            img.alt = a.file.name;
-            chip.appendChild(img);
+            if (a.previewUrl) {
+                const img = document.createElement('img');
+                img.src = a.previewUrl;
+                img.alt = a.file.name;
+                chip.appendChild(img);
+            } else {
+                const icon = document.createElement('span');
+                icon.className = 'att-file-icon';
+                icon.textContent = '📄';
+                chip.appendChild(icon);
+            }
 
             const name = document.createElement('span');
             name.className = 'att-name';
@@ -2057,12 +2092,23 @@
         });
     }
 
-    /** 把所有 pending 附件上传到后端, 拿到 stored_path 列表 */
+    /** 附件 → 上送给后端的元信息 (extra_params.attachments 条目)。
+     *  只传事实 (名字/类型/路径/doc_id), 用什么工具读取由后端 Agent 决定。 */
+    function _attachmentMeta(att) {
+        return {
+            name: att.file.name,
+            mime: att.file.type || '',
+            path: att.storedPath || null,
+            doc_id: att.docId || null,
+        };
+    }
+
+    /** 把所有 pending 附件上传到后端, 返回元信息列表 ({name, mime, path, doc_id}) */
     async function uploadAllAttachments() {
-        const paths = [];
+        const metas = [];
         for (const att of state.pendingAttachments) {
-            if (att.status === 'ready' && att.storedPath) {
-                paths.push(att.storedPath);
+            if (att.status === 'ready') {
+                metas.push(_attachmentMeta(att));
                 continue;
             }
             att.status = 'uploading';
@@ -2070,9 +2116,14 @@
             try {
                 const { payload, status } = await ApiClient.uploadDocument(att.file);
                 if (status === 200 && payload?.code === 'SUCCESS') {
-                    att.storedPath = payload.data?.stored_path || '';
+                    const d = payload.data || {};
+                    att.storedPath = d.stored_path || '';
+                    // 文档上传即自动索引 → 带 doc_id 让 Agent 可 document_read;
+                    // 整文件重复时后端返 duplicate_of (stored_path 为空), 复用已有 doc_id
+                    const docs = (d.index_summary && d.index_summary.documents) || [];
+                    att.docId = d.duplicate_of || (docs[0] && docs[0].doc_id) || null;
                     att.status = 'ready';
-                    paths.push(att.storedPath);
+                    metas.push(_attachmentMeta(att));
                 } else {
                     att.status = 'failed';
                     throw new Error(payload?.message || `HTTP ${status}`);
@@ -2084,7 +2135,7 @@
             }
         }
         renderAttachments();
-        return paths;
+        return metas;
     }
 
     async function send() {
@@ -2105,7 +2156,7 @@
         const tenant = (els.tenantInput.value || '').trim() || 'default';
         const useStream = !!(els.streamToggle && els.streamToggle.checked);
 
-        // 有图片附件 -> 强制 agent 模式 (调 image_describe 工具)
+        // 有附件 -> 强制 agent 模式 (附件须经工具读取, RAG/直答模式看不到文件)
         if (hasAttachments) {
             mode = 'agent';
         }
@@ -2145,31 +2196,22 @@
             body.extra_params.system_prompt = sysPrompt;
         }
 
-        // ZZ-4: 有图片附件 → 强制走 ReAct (执行 image_describe 工具做多模态识别).
-        // 默认直连流 (chat_stream) 是纯文本、不跑工具的, 模型根本看不到图; 图片识别
-        // 必须经 ReAct 调 image_describe 拿到描述再回答. 仅附件场景注入, 不影响纯文本对话.
-        if (hasAttachments) {
-            body.extra_params = body.extra_params || {};
-            body.extra_params.execution_strategy = 'react';
-        }
-
-        // 若有附件: 先上传拿 stored_path, 再把 path 拼进 task
+        // 若有附件: 先上传 (后端自动索引), 元信息放 extra_params.attachments。
+        // 前端不再拼工具名/prompt, 也不注入 execution_strategy — 后端见 attachments
+        // 自会强制 ReAct 并按文件类型选工具 (image_describe/pdf_read/excel_read/document_read)。
         let finalText = text;
         if (hasAttachments) {
             state.sending = true;
             els.sendBtn.disabled = true;
             try {
-                const paths = await uploadAllAttachments();
-                const defaultPrompt = paths.length > 1
-                    ? t('composer.attach.images_default_prompt')
-                    : t('composer.attach.image_default_prompt');
-                const userPart = text || defaultPrompt;
-                const pathList = paths.map(p => `"${p}"`).join(', ');
-                finalText = (
-                    `请使用 image_describe 工具识别以下图片 (按顺序逐张处理), 然后回答用户的问题。\n` +
-                    `图片路径: [${pathList}]\n` +
-                    `用户问题: ${userPart}`
-                );
+                const attachMetas = await uploadAllAttachments();
+                body.extra_params = body.extra_params || {};
+                body.extra_params.attachments = attachMetas;
+                if (!finalText) {
+                    finalText = attachMetas.length > 1
+                        ? t('composer.attach.files_default_prompt')
+                        : t('composer.attach.file_default_prompt');
+                }
             } catch (e) {
                 state.sending = false;
                 els.sendBtn.disabled = false;
@@ -2181,14 +2223,14 @@
         if (mode === 'rag') body.query = finalText;
         else body.task = finalText;
 
-        // 用户消息显示原始文本 + 附件个数 (不暴露内部 prompt 拼接)
+        // 用户消息显示原始文本 + 附件个数 (不暴露内部元信息)
         let displayContent = text;
         if (hasAttachments) {
             const n = state.pendingAttachments.length;
             const defaultPrompt = n > 1
-                ? t('composer.attach.images_default_prompt')
-                : t('composer.attach.image_default_prompt');
-            displayContent = (text || defaultPrompt) + `\n📎 ${n} 张图片`;
+                ? t('composer.attach.files_default_prompt')
+                : t('composer.attach.file_default_prompt');
+            displayContent = (text || defaultPrompt) + `\n📎 ${n} ${t('composer.attach.unit')}`;
         }
         // 加用户消息
         addMessage({ role: 'user', mode, content: displayContent, ts: Date.now() });

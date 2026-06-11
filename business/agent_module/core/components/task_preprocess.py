@@ -34,12 +34,15 @@ class TaskPreprocessMixin:
     """execute 任务前处理流水线 (可组合步骤)。"""
 
     # 步骤顺序 (可重排/增删做 A/B): 方法名列表, 依次在 ctx 上执行
+    # attachments 放最后: 附件块是路径/doc_id 等机器信息, 提前拼会污染
+    # refine 的语义改写和记忆注入的相关性检索
     task_preprocess_steps = (
         "_pre_step_refine",
         "_pre_step_inject_memory",
         "_pre_step_inject_profile",
         "_pre_step_history",
         "_pre_step_correction",
+        "_pre_step_attachments",
     )
 
     def _preprocess_task(self, ctx: TaskPreContext) -> Optional[Dict[str, Any]]:
@@ -128,3 +131,42 @@ class TaskPreprocessMixin:
         corr_fb = ctx.extra_params.get("_correction_feedback")
         if corr_fb:
             ctx.task = f"{ctx.task}\n\n[上一轮验证未通过, 请针对性修正以下问题]\n{corr_fb}"
+
+    def _pre_step_attachments(self, ctx: TaskPreContext) -> None:
+        """聊天附件 (extra_params.attachments) 拼为附件块附到 task 尾。
+
+        前端只上送元信息 {name, mime, path, doc_id}, 不指定工具 —— 用哪个工具
+        读取由 ReAct 循环按文件类型自选 (块尾给一行类型→工具的映射提示)。"""
+        suffix = self._attachments_task_suffix(ctx.extra_params)
+        if suffix:
+            ctx.task = (ctx.task or "") + suffix
+
+    # ── 共享 helper ──────────────────────────────────────────────────────
+    def _attachments_task_suffix(self, extra_params: Dict[str, Any]) -> str:
+        """把 extra_params.attachments 渲染成 [用户附件] 文本块; 无有效附件返 ''。
+
+        流式 ReAct (streaming.py) 不走 _preprocess_task 流水线, 也直接调本方法
+        给 task 拼同一后缀, 保证两条路径附件语义一致。"""
+        atts = extra_params.get("attachments") or []
+        if not isinstance(atts, list):
+            return ""
+        items = [a for a in atts
+                 if isinstance(a, dict) and (a.get("path") or a.get("doc_id"))]
+        if not items:
+            return ""
+        lines = ["", "[用户附件]"]
+        for i, a in enumerate(items, 1):
+            name = str(a.get("name") or "(未命名)")
+            mime = str(a.get("mime") or "")
+            entry = f"{i}. {name}" + (f" ({mime})" if mime else "")
+            if a.get("path"):
+                entry += f' — 文件路径: "{a["path"]}"'
+            if a.get("doc_id"):
+                entry += f" — doc_id: {a['doc_id']} (已索引入知识库)"
+            lines.append(entry)
+        lines.append(
+            "请先用合适的工具读取附件内容再回答用户问题, 不要凭空猜测: "
+            "图片用 image_describe(image_path), PDF 用 pdf_read(file_path), "
+            "Excel 用 excel_read(file_path), 其他文档用 document_read(doc_id)。"
+        )
+        return "\n" + "\n".join(lines)

@@ -56,6 +56,21 @@ class TestExtraParamsKnownKeys(unittest.TestCase):
         p = ExtraParams.from_dict({"source": "console_app"})
         self.assertEqual(p.source, "console_app")
 
+    def test_attachments_default_empty(self):
+        self.assertEqual(ExtraParams.from_dict({}).attachments, [])
+
+    def test_attachments_roundtrip(self):
+        atts = [{"name": "a.pdf", "mime": "application/pdf",
+                 "path": "uploads/a.pdf", "doc_id": None}]
+        p = ExtraParams.from_dict({"attachments": atts})
+        self.assertEqual(p.attachments, atts)
+        self.assertEqual(p.to_dict()["attachments"], atts)
+
+    def test_attachments_not_list_raises(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            ExtraParams.from_dict({"attachments": "uploads/a.pdf"})
+
 
 class TestExtraParamsExtraAllow(unittest.TestCase):
     """未知 key 应该透传, 不报错 (渐进迁移期)."""
