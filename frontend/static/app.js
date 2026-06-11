@@ -2173,6 +2173,10 @@
                 toast('error', t('toast.attach.upload_fail'), e.message);
                 return;
             }
+            // 上传完成必须恢复可点: 流式阶段按钮要作"停止"键用,
+            // _updateSendButtonUI 只切视觉 class 不碰 disabled —
+            // 这里不复位的话一次附件发送后按钮就永久锁死 (再也发不了消息)
+            els.sendBtn.disabled = false;
         }
 
         if (mode === 'rag') body.query = finalText;
