@@ -19,6 +19,10 @@ from typing import Any, Dict, List, Optional
 # 允许读取的目录前缀 (按 cwd 解析). path 必须在这些里面.
 _ALLOWED_PREFIXES = ("uploads", "source_docs", "documents", "run/uploads")
 
+# 扫描版 PDF (无文字层) 自动渲染参数: 页数上限防止几百页扫描件逐页跑多模态
+SCAN_RENDER_MAX_PAGES = 5
+SCAN_RENDER_ZOOM = 2.0  # ~144 DPI, OCR 可读性与图片体积的折中
+
 
 def _resolve_safe_path(file_path: str) -> Optional[Path]:
     """归一化并校验路径; 不允许 .. 穿越或绝对路径出沙盒."""
@@ -119,6 +123,52 @@ def pdf_read(payload: Dict[str, Any]) -> Dict[str, Any]:
             break
 
     text = "".join(parts).strip()
+
+    # 扫描版兜底: 没有文字层 (纯图像 PDF) → 渲染页面为图片, 指示 Agent 转
+    # image_describe 多模态识别。文字层哪怕只有几个字也按正常文本走。
+    if not text:
+        page_images, render_note = _render_scanned_pages(safe, page_idxs)
+        if page_images:
+            return {
+                "code": "SUCCESS", "message": "ok",
+                "data": {
+                    "text": "",
+                    "num_pages": num_pages,
+                    "file_path": str(safe.relative_to(Path.cwd())),
+                    "pages_read": len(page_idxs),
+                    "scanned": True,
+                    "page_images": page_images,
+                    "description": (
+                        f"PDF {safe.name} 是扫描版 (无文字层, 共 {num_pages} 页)。"
+                        f"已渲染 {len(page_images)} 页为图片: {page_images}。"
+                        f"请对每个图片路径调用 image_describe(image_path) 识别页面内容, "
+                        f"再回答用户问题。" + (f" ({render_note})" if render_note else "")
+                    ),
+                },
+                "trace_id": trace_id,
+                "retryable": False,
+                "details": None,
+            }
+        # 渲染不可用 (缺 pymupdf 等) → 如实说明, 不让 Agent 误以为是空白文档
+        return {
+            "code": "SUCCESS", "message": "ok",
+            "data": {
+                "text": "",
+                "num_pages": num_pages,
+                "file_path": str(safe.relative_to(Path.cwd())),
+                "pages_read": len(page_idxs),
+                "scanned": True,
+                "page_images": [],
+                "description": (
+                    f"PDF {safe.name} 是扫描版 (无文字层, 共 {num_pages} 页), "
+                    f"且页面渲染不可用 ({render_note}), 无法转多模态识别。"
+                ),
+            },
+            "trace_id": trace_id,
+            "retryable": False,
+            "details": None,
+        }
+
     return {
         "code": "SUCCESS", "message": "ok",
         "data": {
@@ -136,6 +186,44 @@ def pdf_read(payload: Dict[str, Any]) -> Dict[str, Any]:
         "retryable": False,
         "details": None,
     }
+
+
+def _render_scanned_pages(pdf_path: Path, page_idxs: List[int]) -> "tuple[List[str], str]":
+    """扫描版 PDF → 页面 PNG。渲染到 PDF 同级 screenshots/ 子目录
+    (upload-janitor 把它当工具产物按保留期回收, 不会永久堆积)。
+
+    返回 (相对 cwd 的图片路径列表, 备注)。渲染库缺失/失败 → ([], 原因)。
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return [], "pymupdf 未安装, 跑 pip install pymupdf"
+
+    todo = page_idxs[:SCAN_RENDER_MAX_PAGES]
+    note = ""
+    if len(page_idxs) > len(todo):
+        note = (f"仅渲染前 {len(todo)} 页, 其余 {len(page_idxs) - len(todo)} 页"
+                f'用 page_range 参数 (如 "6-10") 再取')
+
+    out_dir = pdf_path.parent / "screenshots"
+    images: List[str] = []
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with fitz.open(str(pdf_path)) as doc:
+            mat = fitz.Matrix(SCAN_RENDER_ZOOM, SCAN_RENDER_ZOOM)
+            for i in todo:
+                if i < 0 or i >= doc.page_count:
+                    continue
+                pix = doc[i].get_pixmap(matrix=mat)
+                out = out_dir / f"{pdf_path.stem}.scan.p{i + 1}.png"
+                pix.save(str(out))
+                try:
+                    images.append(str(out.relative_to(Path.cwd())))
+                except ValueError:
+                    images.append(str(out))
+    except Exception as e:
+        return [], f"页面渲染失败: {e}"
+    return images, note
 
 
 def excel_read(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,7 +323,9 @@ PDF_READ_DESCRIPTION = (
     '读取本地 PDF 文件抽取文本. input: {"file_path": str, '
     '"max_chars": int? (默 6000), "page_range": "all"|"1-5"|"3"?}. '
     "路径只允许在 uploads/ source_docs/ documents/ 下. "
-    "返回 data.text + data.num_pages. 适合: PDF 总结/问答."
+    "返回 data.text + data.num_pages. 适合: PDF 总结/问答. "
+    "扫描版 (无文字层) 会自动渲染页面图并返回 data.page_images — "
+    "此时对每个路径调用 image_describe(image_path) 识别内容."
 )
 
 EXCEL_READ_DESCRIPTION = (

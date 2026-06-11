@@ -75,6 +75,55 @@ class TestPdfExcelPathSafety(unittest.TestCase):
         self.assertIsNone(_resolve_safe_path("../escape"))
 
 
+# ---------- pdf_read 扫描版兜底 ----------
+
+class TestPdfScannedFallback(unittest.TestCase):
+    """无文字层 PDF → 自动渲染页面图 + 指示 image_describe (零文字层才触发)."""
+
+    def setUp(self):
+        import pytest
+        pytest.importorskip("reportlab")
+        pytest.importorskip("fitz")
+        # pdf_read 沙盒只认 cwd 下 uploads/ 等前缀 — 在 cwd 建测试专用子目录
+        self.updir = os.path.join(os.getcwd(), "uploads", "_test_scan_pdf")
+        os.makedirs(self.updir, exist_ok=True)
+        self.pdf_path = os.path.join(self.updir, "scanned.pdf")
+        from reportlab.pdfgen import canvas
+        c = canvas.Canvas(self.pdf_path)
+        c.showPage()  # 空页: 无文字层
+        c.showPage()
+        c.save()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.updir, ignore_errors=True)
+
+    def test_scanned_pdf_renders_page_images(self):
+        rel = os.path.relpath(self.pdf_path, os.getcwd())
+        r = pdf_read({"file_path": rel})
+        self.assertEqual(r["code"], "SUCCESS")
+        d = r["data"]
+        self.assertTrue(d.get("scanned"))
+        self.assertEqual(d.get("text"), "")
+        imgs = d.get("page_images") or []
+        self.assertEqual(len(imgs), 2)
+        for p in imgs:
+            self.assertTrue(os.path.isfile(p), f"渲染图不存在: {p}")
+        # description 必须指示 image_describe 接力 (Agent 靠它续链)
+        self.assertIn("image_describe", d.get("description", ""))
+
+    def test_text_pdf_not_marked_scanned(self):
+        from reportlab.pdfgen import canvas
+        tpath = os.path.join(self.updir, "texty.pdf")
+        c = canvas.Canvas(tpath)
+        c.drawString(100, 750, "hello text layer")
+        c.save()
+        r = pdf_read({"file_path": os.path.relpath(tpath, os.getcwd())})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertNotIn("scanned", r["data"])
+        self.assertIn("hello text layer", r["data"]["text"])
+
+
 # ---------- sql_query 安全边界 ----------
 
 class TestSqlQuerySecurity(unittest.TestCase):

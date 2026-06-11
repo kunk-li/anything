@@ -170,5 +170,7 @@ class TaskPreprocessMixin:
             "Excel 用 excel_read(file_path); 其他带 doc_id 的附件 (文本/文档/压缩包) "
             "一律用 document_read(doc_id) — 压缩包入库时已解包为'清单+各成员正文', "
             "直接读即可, 不要用 shell/python 解压。"
+            "扫描版 PDF (无文字层) pdf_read 会返回 data.page_images, "
+            "再对其中每个路径调用 image_describe 识别页面。"
         )
         return "\n" + "\n".join(lines)
