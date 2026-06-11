@@ -167,6 +167,29 @@ class TestLocalDocumentParser(unittest.TestCase):
         self.assertIn("嵌套压缩包", c)          # 嵌套包不展开
         self.assertNotIn("\x00", c)            # 正文无二进制泄漏
 
+    def test_parse_nested_zip_one_level(self):
+        # 直接嵌套的 zip 展开 1 层; 二层嵌套只列清单不展开
+        import io
+        import zipfile
+        inner2 = io.BytesIO()
+        with zipfile.ZipFile(inner2, "w") as z2:
+            z2.writestr("deep.txt", "三层深处: 不该出现")
+        inner1 = io.BytesIO()
+        with zipfile.ZipFile(inner1, "w") as z1:
+            z1.writestr("src/main.py", "# 嵌套一层的源码: 蜂鸟引擎")
+            z1.writestr("inner2.zip", inner2.getvalue())
+        zpath = os.path.join(self.tmp_dir, "outer.zip")
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr("readme.txt", "外层说明")
+            zf.writestr("修改版.zip", inner1.getvalue())
+        res = self.parser.parse_file(zpath)
+        c = res["content"]
+        self.assertIn("外层说明", c)
+        self.assertIn("蜂鸟引擎", c)          # 一层嵌套包内的文本成员被提取
+        self.assertIn("src/main.py", c)       # 嵌套包清单也在
+        self.assertNotIn("不该出现", c)        # 二层嵌套不展开
+        self.assertIn("层级或数量超限", c)      # 且有明确标注
+
     def test_parse_tar_gz_archive(self):
         import io
         import tarfile as _tarfile

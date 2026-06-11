@@ -112,6 +112,10 @@ except Exception:  # pragma: no cover
 ARCHIVE_MAX_MEMBERS = 200
 ARCHIVE_MEMBER_MAX_BYTES = 50 * 1024 * 1024   # 单成员 50MB (20MB 实测拦住过正常文档)
 ARCHIVE_MAX_TOTAL_BYTES = 80 * 1024 * 1024
+# 嵌套压缩包 (zip 套 zip): 直接嵌套展开 1 层 (常见打包习惯), 每个外层包最多展开
+# 3 个嵌套包; 更深层/超量只列清单 — 防套娃 zip bomb
+ARCHIVE_MAX_NESTED_DEPTH = 1
+ARCHIVE_MAX_NESTED_COUNT = 3
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".gz")
 
 
@@ -328,11 +332,31 @@ class LocalDocumentParser(BaseDocumentParser):
             return [(inner, len(data), None, "解压超上限, 跳过")]
         return [(inner, len(data), data, "")]
 
+    def _expand_nested_archive(self, member_name: str, data: bytes, depth: int) -> Tuple[str, str]:
+        """直接嵌套的压缩包成员 → 落临时文件递归 _parse_archive (深度受控)。"""
+        suffix = next((s for s in _ARCHIVE_SUFFIXES
+                       if member_name.lower().endswith(s)), ".zip")
+        fd, tmp = tempfile.mkstemp(suffix=suffix)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            try:
+                return self._parse_archive(tmp, depth=depth, display_name=member_name), ""
+            except Exception as e:
+                return "", f"嵌套压缩包解析失败: {getattr(e, 'message', e)}"
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
     def _member_to_text(self, member_name: str, data: bytes) -> Tuple[str, str]:
         """单个成员 → (正文, 跳过原因)。已知格式落临时文件复用 parse_file;
         其余按内容嗅探 (与顶层文件同一套规则)。"""
         if self._is_archive(member_name):
-            return "", "嵌套压缩包, 不展开"
+            # 嵌套展开由 _parse_archive 主循环按深度/数量预算调度, 落到这里的
+            # 都是超出预算的 → 只列清单
+            return "", "嵌套压缩包, 不展开 (层级或数量超限)"
         suffix = os.path.splitext(member_name)[1].lower()
         if suffix in self.supported_file_types:
             fd, tmp = tempfile.mkstemp(suffix=suffix or ".txt")
@@ -352,11 +376,13 @@ class LocalDocumentParser(BaseDocumentParser):
             return "", "二进制, 仅列清单"
         return data.decode(DEFAULT_ENCODING, errors="ignore"), ""
 
-    def _parse_archive(self, file_path: str) -> str:
+    def _parse_archive(self, file_path: str, depth: int = 0,
+                       display_name: "Optional[str]" = None) -> str:
         """压缩包 → "清单 + 各成员正文" 单文档。全二进制成员的包也产出清单
-        (Agent 至少能回答"包里有什么")。"""
-        name = os.path.basename(file_path)
-        low = name.lower()
+        (Agent 至少能回答"包里有什么")。直接嵌套的压缩包展开 1 层 (受
+        ARCHIVE_MAX_NESTED_DEPTH/COUNT 预算控制)。"""
+        name = display_name or os.path.basename(file_path)
+        low = os.path.basename(file_path).lower()  # 派发按真实文件后缀 (嵌套时是临时文件)
         try:
             if low.endswith(".zip"):
                 members = self._read_zip_members(file_path)
@@ -372,10 +398,17 @@ class LocalDocumentParser(BaseDocumentParser):
         manifest: List[str] = []
         bodies: List[str] = []
         extracted = 0
+        nested_used = 0
         for mname, size, data, note in members:
             line = f"- {mname} ({size} bytes)"
             if data is not None:
-                text, skip_reason = self._member_to_text(mname, data)
+                if (self._is_archive(mname)
+                        and depth < ARCHIVE_MAX_NESTED_DEPTH
+                        and nested_used < ARCHIVE_MAX_NESTED_COUNT):
+                    nested_used += 1
+                    text, skip_reason = self._expand_nested_archive(mname, data, depth + 1)
+                else:
+                    text, skip_reason = self._member_to_text(mname, data)
                 if text.strip():
                     extracted += 1
                     bodies.append(f"=== {mname} ===\n{text}")
