@@ -85,12 +85,6 @@ class LocalDocumentStore(BaseDocumentStore):
         )
         self.storage_dir = os.path.join(self.base_storage_dir, self.tenant_id)
 
-        self.supported_file_types = self.config_manager.get_config(
-            "document_store.supported_file_types", default=defaults.supported_file_types
-        )
-        if isinstance(self.supported_file_types, str):
-            self.supported_file_types = [x.strip().lower() for x in self.supported_file_types.split(",") if x.strip()]
-
         self.hash_algorithm = str(
             self.config_manager.get_config("document_store.hash_algorithm", default=defaults.hash_algorithm)
         ).lower()
@@ -171,13 +165,12 @@ class LocalDocumentStore(BaseDocumentStore):
         except Exception as e:
             self.logger.error(f"Failed to save hash map: {e}", exc_info=True)
 
-    def _is_supported_type(self, file_type: str) -> bool:
-        ft = normalize_file_type(file_type)
-        return ft in set([x.lower() for x in self.supported_file_types])
-
     def _storage_type_for(self, file_type: str) -> str:
+        """落盘文件后缀。任意类型可入库 (内容到这里已是 parser 解析出的纯文本),
+        但后缀进文件名, 须消毒: 非 [a-z0-9]{1,16} 一律回落 txt。"""
+        import re
         ft = normalize_file_type(file_type)
-        if ft == "unknown":
+        if ft == "unknown" or not re.match(r"^[a-z0-9]{1,16}$", ft):
             return "txt"
         return ft
 
@@ -208,11 +201,10 @@ class LocalDocumentStore(BaseDocumentStore):
         # content_hash 语义不变: 仍是调用方对原始内容算的 hash (查重在调用侧一致即可)。
         content = content.replace("\r\n", "\n").replace("\r", "\n")
 
+        # 不再按类型清单拦截: 能走到这里的 content 已是 parser 解析出的纯文本,
+        # 第二道类型门只会跟 parser 清单漂移 (py/xml/html 都踩过)。文本/二进制
+        # 的真正把关在 parser 的内容嗅探。
         ft = normalize_file_type(file_type)
-        if ft != "unknown" and not self._is_supported_type(ft):
-            self.logger.warning(f"create_document failed: unsupported file_type={ft}, file_name={file_name}")
-            raise ValueError(f"不支持的文件类型：{ft}")
-
         storage_type = self._storage_type_for(ft)
 
         safe_file_name = sanitize_file_name(file_name, storage_type)

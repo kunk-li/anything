@@ -131,6 +131,8 @@ class LocalDocumentParser(BaseDocumentParser):
     """本地文档解析实现类。
 
     负责解析 txt/pdf/docx/md/py/excel/ppt/pptx/csv/json/xml/html 为文本，不做存储，返回统一标准结构。
+    其余扩展名按内容嗅探：文本文件 (log/yaml/源码等任意后缀) 当纯文本解析，二进制才拒
+    (仅 parse_file；parse_folder 批量扫描仍按 supported_file_types 白名单跳过, 防误吞目录杂物)。
     """
 
     def __init__(self, deps=None):
@@ -216,6 +218,15 @@ class LocalDocumentParser(BaseDocumentParser):
         parser.feed(html_text)
         return parser.get_text()
 
+    @staticmethod
+    def _sniff_is_text(file_path: str) -> bool:
+        """文本/二进制嗅探: 头 8KB 含 NUL 字节判二进制 (git 同款启发式)。
+        常见二进制 (图片/压缩包/可执行) 头部都有 NUL; 文本编码 (utf-8/gbk/latin-1)
+        正文不会出现 NUL。空文件按文本放行 (上游按空内容 skip)。"""
+        with open(file_path, "rb") as f:
+            head = f.read(8192)
+        return b"\x00" not in head
+
     def _parse_excel(self, file_path: str) -> str:
         # 以工作表组织文本：SheetName + 表格内容
         try:
@@ -283,13 +294,6 @@ class LocalDocumentParser(BaseDocumentParser):
         if not os.path.isfile(file_path):
             raise RAGException("DOCUMENT_NOT_FOUND", f"文档文件不存在：{file_path}")
 
-        if not check_file_type(file_path, self.supported_file_types):
-            ext = get_file_extension(file_path)
-            raise RAGException(
-                "UNSUPPORTED_FILE_TYPE",
-                f"不支持的文件类型：{ext}（文件：{file_path}）",
-            )
-
         ext = get_file_extension(file_path)
         file_name = os.path.basename(file_path)
 
@@ -317,8 +321,14 @@ class LocalDocumentParser(BaseDocumentParser):
             elif ext in (".html", ".htm"):
                 content = self._parse_html(file_path)
             else:
-                # 理论上不会到这里（已校验 supported_file_types）
-                raise RAGException("UNSUPPORTED_FILE_TYPE", f"不支持的文件类型：{ext}")
+                # 未知扩展名: 按内容嗅探, 不按后缀清单拒 — 后缀清单是打地鼠
+                # (.log/.yaml/.sql/各语言源码无穷尽)。文本就当纯文本解析, 二进制才拒。
+                if not self._sniff_is_text(file_path):
+                    raise RAGException(
+                        "UNSUPPORTED_FILE_TYPE",
+                        f"二进制文件无法提取文本：{ext or '(无扩展名)'}（文件：{file_path}）",
+                    )
+                content = self._parse_txt(file_path)
 
             # 基础清洗（优先使用系统 CommonUtils.clean_text）
             if hasattr(self.utils, "clean_text"):

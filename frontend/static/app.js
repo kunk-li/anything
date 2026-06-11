@@ -1550,25 +1550,9 @@
             els.imagePicker.addEventListener('change', (e) => {
                 const files = e.target.files;
                 if (!files || !files.length) return;
-                let added = 0;
-                let invalid = 0;
-                let firstName = '';
-                for (const f of files) {
-                    if (isAllowedAttachment(f)) {
-                        if (!firstName) firstName = f.name;
-                        addAttachment(f);
-                        added++;
-                    } else {
-                        invalid++;
-                    }
-                }
-                if (invalid > 0) {
-                    toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
-                }
-                if (added > 0) {
-                    toast('success', t('toast.attach.added'),
-                        added === 1 ? firstName : `${added} files`);
-                }
+                for (const f of files) addAttachment(f);
+                toast('success', t('toast.attach.added'),
+                    files.length === 1 ? files[0].name : `${files.length} files`);
             });
         }
 
@@ -1657,21 +1641,9 @@
                     const files = e.dataTransfer && e.dataTransfer.files;
                     dlog('chatPane drop, files.length=', files ? files.length : 0);
                     if (!files || !files.length) return;
-                    let added = 0, invalid = 0;
-                    for (const f of files) {
-                        if (isAllowedAttachment(f)) {
-                            addAttachment(f);
-                            added++;
-                        } else {
-                            invalid++;
-                        }
-                    }
-                    if (added === 0 && invalid > 0) {
-                        toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
-                    } else if (added > 0) {
-                        toast('success', t('toast.attach.added'),
-                            added === 1 ? '1 file' : `${added} files`);
-                    }
+                    for (const f of files) addAttachment(f);
+                    toast('success', t('toast.attach.added'),
+                        files.length === 1 ? '1 file' : `${files.length} files`);
                 });
             }
 
@@ -1706,22 +1678,9 @@
                 if (!files || !files.length) {
                     return;
                 }
-                let added = 0;
-                let invalid = 0;
-                for (const f of files) {
-                    if (isAllowedAttachment(f)) {
-                        addAttachment(f);
-                        added++;
-                    } else {
-                        invalid++;
-                    }
-                }
-                if (added === 0 && invalid > 0) {
-                    toast('error', t('toast.attach.invalid'), t('toast.attach.invalid.body'));
-                } else if (added > 0) {
-                    toast('success', t('toast.attach.added'),
-                        added === 1 ? '1 file' : `${added} files`);
-                }
+                for (const f of files) addAttachment(f);
+                toast('success', t('toast.attach.added'),
+                    files.length === 1 ? '1 file' : `${files.length} files`);
             });
 
             // textarea 自己也要单独处理 (它会拦 drop)
@@ -1746,7 +1705,7 @@
                 for (const item of items) {
                     if (item.kind === 'file') {
                         const f = item.getAsFile();
-                        if (f && isAllowedAttachment(f)) {
+                        if (f) {
                             e.preventDefault();
                             addAttachment(f);
                             toast('success', t('toast.attach.added'), f.name || 'pasted-file');
@@ -1995,17 +1954,8 @@
 
     // ---------- 发送 ----------
     // ========== 附件管理 ==========
-    // 聊天附件白名单: 图片 + document_parser 支持的文档类型
-    // (data_layer/document_parser_module/config/config.py SUPPORTED_FILE_TYPES)。
-    // 拖拽进来的文件 MIME 常为空, 所以图片看 MIME、文档看扩展名。
-    const ATTACH_DOC_EXTS = ['.txt', '.pdf', '.docx', '.md', '.py',
-        '.xlsx', '.xls', '.ppt', '.pptx', '.csv', '.json', '.xml', '.html', '.htm'];
-    function isAllowedAttachment(file) {
-        if (file && file.type && file.type.startsWith('image/')) return true;
-        const name = ((file && file.name) || '').toLowerCase();
-        return ATTACH_DOC_EXTS.some(ext => name.endsWith(ext));
-    }
-
+    // 附件不做前端扩展名白名单 (按后缀维护清单是打地鼠): 什么文件都可拖入,
+    // 真把关在后端 parser 的内容嗅探 — 解析失败的非图片附件在发送时报"无法解析"。
     function addAttachment(file) {
         const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         const isImage = !!(file.type && file.type.startsWith('image/'));
@@ -2122,6 +2072,11 @@
                     // 整文件重复时后端返 duplicate_of (stored_path 为空), 复用已有 doc_id
                     const docs = (d.index_summary && d.index_summary.documents) || [];
                     att.docId = d.duplicate_of || (docs[0] && docs[0].doc_id) || null;
+                    // 真把关 (前端无扩展名白名单): 非图片且后端解析失败 → 该附件
+                    // 没有任何工具能读 (图片走 image_describe 按路径, 不需要索引)
+                    if (!att.isImage && !att.docId && d.index_error) {
+                        throw new Error(t('toast.attach.unparseable'));
+                    }
                     att.status = 'ready';
                     metas.push(_attachmentMeta(att));
                 } else {

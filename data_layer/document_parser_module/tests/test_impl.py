@@ -147,6 +147,16 @@ class TestLocalDocumentParser(unittest.TestCase):
         self.assertNotIn("JS_NOISE", res["content"])
         self.assertNotIn("color: red", res["content"])
 
+    def test_parse_unknown_ext_text_fallback(self):
+        # 未知后缀 (白名单外) 的文本文件 → 内容嗅探兜底为纯文本, 不再被拒
+        log_path = os.path.join(self.tmp_dir, "app.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("2026-06-11 INFO 服务启动\n2026-06-11 ERROR 连接超时")
+        res = self.parser.parse_file(log_path)
+        self._assert_standard_structure(res, ".log")
+        self.assertIn("连接超时", res["content"])
+
+
     def test_parse_py_file(self):
         res = self.parser.parse_file(self.test_py_path)
         self._assert_standard_structure(res, ".py")
@@ -180,9 +190,10 @@ class TestLocalDocumentParser(unittest.TestCase):
         self.assertIn('"root"', res["content"])
 
     def test_parse_invalid_file_type(self):
+        # 内容嗅探后, "拒收"的判据从扩展名清单变成二进制内容 (头部含 NUL)
         invalid_path = os.path.join(self.tmp_dir, "bad.bin")
         with open(invalid_path, "wb") as f:
-            f.write(b"123")
+            f.write(b"MZ\x00\x03\x00\x04")
         with self.assertRaises(Exception) as ctx:
             self.parser.parse_file(invalid_path)
         # RAGException 的 str() 是 message 不含 code; 错误码在 .code 属性上
