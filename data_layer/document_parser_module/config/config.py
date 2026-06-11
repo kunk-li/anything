@@ -15,6 +15,8 @@ SUPPORTED_FILE_TYPES = [
     ".csv",
     ".json",
     ".xml",
+    ".html",
+    ".htm",
 ]
 
 DEFAULT_ENCODING = "utf-8"

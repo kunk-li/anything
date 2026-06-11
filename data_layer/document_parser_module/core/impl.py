@@ -109,9 +109,18 @@ class _HTMLTextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
         self._chunks: List[str] = []
+        self._skip_depth = 0  # script/style 内的文本不是正文, 不收集
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in ("script", "style"):
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style") and self._skip_depth > 0:
+            self._skip_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        if data:
+        if data and self._skip_depth == 0:
             self._chunks.append(data)
 
     def get_text(self) -> str:
@@ -121,7 +130,7 @@ class _HTMLTextExtractor(HTMLParser):
 class LocalDocumentParser(BaseDocumentParser):
     """本地文档解析实现类。
 
-    负责解析 txt/pdf/docx/md/py/excel/ppt/pptx/csv/json/xml 为文本，不做存储，返回统一标准结构。
+    负责解析 txt/pdf/docx/md/py/excel/ppt/pptx/csv/json/xml/html 为文本，不做存储，返回统一标准结构。
     """
 
     def __init__(self, deps=None):
@@ -197,6 +206,15 @@ class LocalDocumentParser(BaseDocumentParser):
         # 保留代码结构与注释：直接读取文本
         with open(file_path, "r", encoding=DEFAULT_ENCODING, errors="ignore") as f:
             return f.read()
+
+    def _parse_html(self, file_path: str) -> str:
+        # 复用 _HTMLTextExtractor (跟 _parse_md 的 markdown→HTML 路径同一套),
+        # script/style 内容在 extractor 里跳过
+        with open(file_path, "r", encoding=DEFAULT_ENCODING, errors="ignore") as f:
+            html_text = f.read()
+        parser = _HTMLTextExtractor()
+        parser.feed(html_text)
+        return parser.get_text()
 
     def _parse_excel(self, file_path: str) -> str:
         # 以工作表组织文本：SheetName + 表格内容
@@ -296,6 +314,8 @@ class LocalDocumentParser(BaseDocumentParser):
                 content = self._parse_json(file_path)
             elif ext == ".xml":
                 content = self._parse_xml(file_path)
+            elif ext in (".html", ".htm"):
+                content = self._parse_html(file_path)
             else:
                 # 理论上不会到这里（已校验 supported_file_types）
                 raise RAGException("UNSUPPORTED_FILE_TYPE", f"不支持的文件类型：{ext}")

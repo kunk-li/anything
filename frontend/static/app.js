@@ -1999,7 +1999,7 @@
     // (data_layer/document_parser_module/config/config.py SUPPORTED_FILE_TYPES)。
     // 拖拽进来的文件 MIME 常为空, 所以图片看 MIME、文档看扩展名。
     const ATTACH_DOC_EXTS = ['.txt', '.pdf', '.docx', '.md', '.py',
-        '.xlsx', '.xls', '.ppt', '.pptx', '.csv', '.json', '.xml'];
+        '.xlsx', '.xls', '.ppt', '.pptx', '.csv', '.json', '.xml', '.html', '.htm'];
     function isAllowedAttachment(file) {
         if (file && file.type && file.type.startsWith('image/')) return true;
         const name = ((file && file.name) || '').toLowerCase();

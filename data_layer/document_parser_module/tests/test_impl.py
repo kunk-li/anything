@@ -42,6 +42,7 @@ class TestLocalDocumentParser(unittest.TestCase):
         self.test_csv_path = os.path.join(self.tmp_dir, "test.csv")
         self.test_json_path = os.path.join(self.tmp_dir, "test.json")
         self.test_xml_path = os.path.join(self.tmp_dir, "test.xml")
+        self.test_html_path = os.path.join(self.tmp_dir, "test.html")
 
         # txt
         with open(self.test_txt_path, "w", encoding="utf-8") as f:
@@ -95,6 +96,15 @@ class TestLocalDocumentParser(unittest.TestCase):
         with open(self.test_xml_path, "w", encoding="utf-8") as f:
             f.write(xml_text)
 
+        # html (script/style 内容须被剔除)
+        with open(self.test_html_path, "w", encoding="utf-8") as f:
+            f.write(
+                "<html><head><title>页面标题</title>"
+                "<style>body { color: red; }</style>"
+                "<script>var secret = 'JS_NOISE';</script></head>"
+                "<body><h1>hello html</h1><p>正文段落</p></body></html>"
+            )
+
     def tearDown(self):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
@@ -127,6 +137,15 @@ class TestLocalDocumentParser(unittest.TestCase):
         self._assert_standard_structure(res, ".md")
         self.assertIn("Title", res["content"])
         self.assertIn("bold", res["content"])
+
+    def test_parse_html_file(self):
+        res = self.parser.parse_file(self.test_html_path)
+        self._assert_standard_structure(res, ".html")
+        self.assertIn("hello html", res["content"])
+        self.assertIn("正文段落", res["content"])
+        # script/style 内容不是正文
+        self.assertNotIn("JS_NOISE", res["content"])
+        self.assertNotIn("color: red", res["content"])
 
     def test_parse_py_file(self):
         res = self.parser.parse_file(self.test_py_path)
