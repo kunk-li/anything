@@ -110,7 +110,7 @@ except Exception:  # pragma: no cover
 # 压缩包解析参数 (防 zip bomb): 数量/单成员/累计三重上限, 超出只列清单不展开
 # ------------------------
 ARCHIVE_MAX_MEMBERS = 200
-ARCHIVE_MEMBER_MAX_BYTES = 20 * 1024 * 1024
+ARCHIVE_MEMBER_MAX_BYTES = 50 * 1024 * 1024   # 单成员 50MB (20MB 实测拦住过正常文档)
 ARCHIVE_MAX_TOTAL_BYTES = 80 * 1024 * 1024
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".gz")
 
