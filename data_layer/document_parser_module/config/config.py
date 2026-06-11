@@ -17,6 +17,10 @@ SUPPORTED_FILE_TYPES = [
     ".xml",
     ".html",
     ".htm",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
 ]
 
 DEFAULT_ENCODING = "utf-8"

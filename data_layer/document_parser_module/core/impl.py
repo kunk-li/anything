@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
+import tarfile
+import tempfile
+import zipfile
 from html.parser import HTMLParser
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 # 第三方解析依赖 — 改为可选 import:
 # 这些库各自较重(pandas / PyPDF2 / python-docx / python-pptx),不应该让
@@ -103,6 +107,15 @@ except Exception:  # pragma: no cover
 
 
 # ------------------------
+# 压缩包解析参数 (防 zip bomb): 数量/单成员/累计三重上限, 超出只列清单不展开
+# ------------------------
+ARCHIVE_MAX_MEMBERS = 200
+ARCHIVE_MEMBER_MAX_BYTES = 20 * 1024 * 1024
+ARCHIVE_MAX_TOTAL_BYTES = 80 * 1024 * 1024
+_ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".gz")
+
+
+# ------------------------
 # 内部辅助：HTML -> 纯文本
 # ------------------------
 class _HTMLTextExtractor(HTMLParser):
@@ -131,6 +144,7 @@ class LocalDocumentParser(BaseDocumentParser):
     """本地文档解析实现类。
 
     负责解析 txt/pdf/docx/md/py/excel/ppt/pptx/csv/json/xml/html 为文本，不做存储，返回统一标准结构。
+    压缩包 (zip/tar/gz) 当容器展开：成员逐个解析，产出"清单+正文"单文档 (防炸弹三重上限)。
     其余扩展名按内容嗅探：文本文件 (log/yaml/源码等任意后缀) 当纯文本解析，二进制才拒
     (仅 parse_file；parse_folder 批量扫描仍按 supported_file_types 白名单跳过, 防误吞目录杂物)。
     """
@@ -227,6 +241,159 @@ class LocalDocumentParser(BaseDocumentParser):
             head = f.read(8192)
         return b"\x00" not in head
 
+    # ------------------------
+    # 压缩包 (zip/tar/gz): 容器不是"不可解析的二进制" — 展开成员逐个解析
+    # ------------------------
+    @staticmethod
+    def _is_archive(file_name: str) -> bool:
+        return str(file_name or "").lower().endswith(_ARCHIVE_SUFFIXES)
+
+    @staticmethod
+    def _fix_zip_name(info: "zipfile.ZipInfo") -> str:
+        """zip 规范: flag 0x800 表示文件名 UTF-8; 未设时 zipfile 按 cp437 解码 —
+        Windows 中文压缩包实际是 GBK, 还原一次, 否则清单里全是乱码。"""
+        name = info.filename
+        if not (info.flag_bits & 0x800):
+            try:
+                name = name.encode("cp437").decode("gbk")
+            except Exception:
+                pass
+        return name
+
+    def _read_zip_members(self, file_path: str) -> List[Tuple[str, int, Optional[bytes], str]]:
+        out: List[Tuple[str, int, Optional[bytes], str]] = []
+        total = 0
+        with zipfile.ZipFile(file_path) as zf:
+            infos = [i for i in zf.infolist() if not i.is_dir()]
+            for idx, info in enumerate(infos):
+                if idx >= ARCHIVE_MAX_MEMBERS:
+                    out.append((f"(其余 {len(infos) - idx} 个成员)", 0, None, "超出成员数上限, 仅列出"))
+                    break
+                mname = self._fix_zip_name(info)
+                size = int(info.file_size or 0)
+                if info.flag_bits & 0x1:
+                    out.append((mname, size, None, "加密成员, 跳过"))
+                    continue
+                if size > ARCHIVE_MEMBER_MAX_BYTES:
+                    out.append((mname, size, None, "成员过大, 跳过"))
+                    continue
+                if total + size > ARCHIVE_MAX_TOTAL_BYTES:
+                    out.append((mname, size, None, "解压总量达上限, 跳过"))
+                    continue
+                try:
+                    data = zf.read(info)
+                except Exception as e:
+                    out.append((mname, size, None, f"读取失败: {e}"))
+                    continue
+                total += len(data)
+                out.append((mname, size, data, ""))
+        return out
+
+    def _read_tar_members(self, file_path: str) -> List[Tuple[str, int, Optional[bytes], str]]:
+        out: List[Tuple[str, int, Optional[bytes], str]] = []
+        total = 0
+        count = 0
+        with tarfile.open(file_path, "r:*") as tf:
+            for m in tf:
+                if not m.isfile():
+                    continue
+                if count >= ARCHIVE_MAX_MEMBERS:
+                    out.append(("(更多成员)", 0, None, "超出成员数上限, 仅列出"))
+                    break
+                count += 1
+                size = int(m.size or 0)
+                if size > ARCHIVE_MEMBER_MAX_BYTES:
+                    out.append((m.name, size, None, "成员过大, 跳过"))
+                    continue
+                if total + size > ARCHIVE_MAX_TOTAL_BYTES:
+                    out.append((m.name, size, None, "解压总量达上限, 跳过"))
+                    continue
+                f = tf.extractfile(m)
+                if f is None:
+                    out.append((m.name, size, None, "无法读取"))
+                    continue
+                data = f.read()
+                total += len(data)
+                out.append((m.name, size, data, ""))
+        return out
+
+    def _read_gz_member(self, file_path: str) -> List[Tuple[str, int, Optional[bytes], str]]:
+        """裸 .gz 单文件 (如 app.log.gz)。.tar.gz 走 tar 分支, 不到这里。"""
+        inner = os.path.basename(file_path)
+        if inner.lower().endswith(".gz"):
+            inner = inner[:-3] or inner
+        with gzip.open(file_path, "rb") as f:
+            data = f.read(ARCHIVE_MAX_TOTAL_BYTES + 1)
+        if len(data) > ARCHIVE_MAX_TOTAL_BYTES:
+            return [(inner, len(data), None, "解压超上限, 跳过")]
+        return [(inner, len(data), data, "")]
+
+    def _member_to_text(self, member_name: str, data: bytes) -> Tuple[str, str]:
+        """单个成员 → (正文, 跳过原因)。已知格式落临时文件复用 parse_file;
+        其余按内容嗅探 (与顶层文件同一套规则)。"""
+        if self._is_archive(member_name):
+            return "", "嵌套压缩包, 不展开"
+        suffix = os.path.splitext(member_name)[1].lower()
+        if suffix in self.supported_file_types:
+            fd, tmp = tempfile.mkstemp(suffix=suffix or ".txt")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                try:
+                    return str(self.parse_file(tmp).get("content") or ""), ""
+                except Exception as e:
+                    return "", f"成员解析失败: {getattr(e, 'message', e)}"
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        if b"\x00" in data[:8192]:
+            return "", "二进制, 仅列清单"
+        return data.decode(DEFAULT_ENCODING, errors="ignore"), ""
+
+    def _parse_archive(self, file_path: str) -> str:
+        """压缩包 → "清单 + 各成员正文" 单文档。全二进制成员的包也产出清单
+        (Agent 至少能回答"包里有什么")。"""
+        name = os.path.basename(file_path)
+        low = name.lower()
+        try:
+            if low.endswith(".zip"):
+                members = self._read_zip_members(file_path)
+            elif low.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz")):
+                members = self._read_tar_members(file_path)
+            else:
+                members = self._read_gz_member(file_path)
+        except RAGException:
+            raise
+        except Exception as e:
+            raise RAGException("DOCUMENT_PARSE_FAILED", f"压缩包解析失败：{file_path}，原因：{e}")
+
+        manifest: List[str] = []
+        bodies: List[str] = []
+        extracted = 0
+        for mname, size, data, note in members:
+            line = f"- {mname} ({size} bytes)"
+            if data is not None:
+                text, skip_reason = self._member_to_text(mname, data)
+                if text.strip():
+                    extracted += 1
+                    bodies.append(f"=== {mname} ===\n{text}")
+                elif skip_reason:
+                    note = skip_reason
+            if note:
+                line += f" — {note}"
+            manifest.append(line)
+
+        parts = [
+            f"[压缩包 {name} — {len(members)} 个成员, 提取正文 {extracted} 个]",
+            "清单:",
+            "\n".join(manifest) if manifest else "(空压缩包)",
+        ]
+        if bodies:
+            parts.append("\n\n".join(bodies))
+        return "\n".join(parts)
+
     def _parse_excel(self, file_path: str) -> str:
         # 以工作表组织文本：SheetName + 表格内容
         try:
@@ -320,6 +487,9 @@ class LocalDocumentParser(BaseDocumentParser):
                 content = self._parse_xml(file_path)
             elif ext in (".html", ".htm"):
                 content = self._parse_html(file_path)
+            elif self._is_archive(file_name):
+                # 压缩包在二进制嗅探之前接住 (zip/tar 头部含 NUL, 嗅探会误拒)
+                content = self._parse_archive(file_path)
             else:
                 # 未知扩展名: 按内容嗅探, 不按后缀清单拒 — 后缀清单是打地鼠
                 # (.log/.yaml/.sql/各语言源码无穷尽)。文本就当纯文本解析, 二进制才拒。

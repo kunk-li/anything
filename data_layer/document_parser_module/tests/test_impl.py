@@ -147,6 +147,39 @@ class TestLocalDocumentParser(unittest.TestCase):
         self.assertNotIn("JS_NOISE", res["content"])
         self.assertNotIn("color: red", res["content"])
 
+    def test_parse_zip_archive(self):
+        # 压缩包是容器: 文本/已知格式成员解析正文, 二进制/嵌套包只列清单
+        import zipfile
+        zpath = os.path.join(self.tmp_dir, "bundle.zip")
+        with zipfile.ZipFile(zpath, "w") as zf:
+            zf.writestr("docs/读我.txt", "压缩包成员正文: 火星车")
+            zf.writestr("notes.md", "# 标题\n第二成员内容")
+            zf.writestr("img.png", b"\x89PNG\x00\x00binaryjunk")
+            zf.writestr("inner.zip", b"PK\x03\x04\x00\x00")
+        res = self.parser.parse_file(zpath)
+        self._assert_standard_structure(res, ".zip")
+        c = res["content"]
+        self.assertIn("火星车", c)             # 文本成员正文
+        self.assertIn("第二成员内容", c)        # md 成员经 parse_file 解析
+        self.assertIn("读我.txt", c)           # 清单含中文文件名
+        self.assertIn("img.png", c)            # 二进制成员列清单
+        self.assertIn("二进制", c)             # 且标注原因
+        self.assertIn("嵌套压缩包", c)          # 嵌套包不展开
+        self.assertNotIn("\x00", c)            # 正文无二进制泄漏
+
+    def test_parse_tar_gz_archive(self):
+        import io
+        import tarfile as _tarfile
+        tpath = os.path.join(self.tmp_dir, "logs.tar.gz")
+        with _tarfile.open(tpath, "w:gz") as tf:
+            data = "tar 成员关键词: 风暴眼".encode("utf-8")
+            ti = _tarfile.TarInfo("app.log")
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+        res = self.parser.parse_file(tpath)
+        self.assertIn("风暴眼", res["content"])
+        self.assertIn("app.log", res["content"])
+
     def test_parse_unknown_ext_text_fallback(self):
         # 未知后缀 (白名单外) 的文本文件 → 内容嗅探兜底为纯文本, 不再被拒
         log_path = os.path.join(self.tmp_dir, "app.log")

@@ -167,6 +167,8 @@ class TaskPreprocessMixin:
         lines.append(
             "请先用合适的工具读取附件内容再回答用户问题, 不要凭空猜测: "
             "图片用 image_describe(image_path), PDF 用 pdf_read(file_path), "
-            "Excel 用 excel_read(file_path), 其他文档用 document_read(doc_id)。"
+            "Excel 用 excel_read(file_path); 其他带 doc_id 的附件 (文本/文档/压缩包) "
+            "一律用 document_read(doc_id) — 压缩包入库时已解包为'清单+各成员正文', "
+            "直接读即可, 不要用 shell/python 解压。"
         )
         return "\n" + "\n".join(lines)
