@@ -262,12 +262,18 @@ class StreamingMixin:
 
         try:
             for iteration in range(1, self.max_react_iterations + 1):
-                # AUDIT-2a: 每轮入口检查超时; 超过则 yield done(AGENT_TIMEOUT) 收尾, 不再开新一轮
+                # AUDIT-2a: 每轮入口检查超时; 超过则停止开新轮 — 但不能像旧版那样直接
+                # yield done(AGENT_TIMEOUT) 丢弃已收集的全部工具结果 (前端收到 0 chunk
+                # 渲染成空白气泡)。break 进下方收尾流程: 基于已有结果组答案+meta+chunks。
                 if _stream_timeout and (time.time() - start_time) > _stream_timeout:
-                    yield {"type": "done", "code": "AGENT_TIMEOUT",
-                           "message": f"Agent 流式执行超过 {_stream_timeout}s 超时中止 (已完成 {len(history)} 轮)",
-                           "cost_time": round(time.time() - start_time, 3)}
-                    return
+                    self.logger.warning(
+                        f"[react-stream] wall-clock 超时 ({_stream_timeout}s, 已完成 "
+                        f"{len(history)} 轮), 停止迭代基于已收集结果收尾: trace_id={trace_id}"
+                    )
+                    yield {"type": "loop_break", "iteration": iteration,
+                           "message": (f"已达 {_stream_timeout}s 时间上限, 停止继续调用工具, "
+                                       f"基于已收集的结果作答。")}
+                    break
                 prompt = self._build_react_prompt(
                     task=task, available_tools=available_tools,
                     history=history, iteration=iteration,

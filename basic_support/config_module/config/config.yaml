@@ -95,7 +95,10 @@ rag:
 
 agent:
   max_retries: 3
-  timeout: 30
+  # 墙钟超时 120s (对齐 factories/business_layer 注释意图): 多轮 ReAct + 附件读取 +
+  # qwen 单次延迟, 30s 连"读附件再总结"都跑不完 — 撞超时丢掉全部已收集结果。
+  # 用户优先"慢但能完成"。
+  timeout: 120
   # 默认走 ReAct 多轮 (observe→think→act 迭代), 比 single_shot 单轮规划更能完成
   # 复杂任务. 单次 invoke 可用 extra_params.execution_strategy / max_iterations 覆盖.
   execution_strategy: "react"

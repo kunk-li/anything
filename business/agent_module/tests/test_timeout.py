@@ -66,6 +66,35 @@ class TestAgentTimeoutEnforce(unittest.TestCase):
         self.assertEqual(result["code"], "SUCCESS")
         self.assertIn("42", result["data"]["answer"])
 
+    def test_stream_timeout_finalizes_with_partial_results(self):
+        """流式 ReAct 超时: 不再 done(AGENT_TIMEOUT) 丢弃已收集结果 (前端收 0 chunk
+        渲染空白气泡), 而是 loop_break → 收尾流程基于已有工具结果产出答案 chunks。"""
+        agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None)
+
+        def _slow_llm(prompt):
+            time.sleep(1.2)  # 单次 LLM 调用就吃满 timeout=1
+            return '{"thought":"查一下","action":{"tool":"llm_generate","input":{}}}'
+
+        agent._resolve_llm_planner = lambda trace_id=None: _slow_llm
+        agent._available_tool_names = lambda: ["llm_generate"]
+
+        events = list(agent.run_stream({
+            "task": "做点啥", "trace_id": "t1", "session_id": "s1", "timeout": 1,
+            "extra_params": {"execution_strategy": "react"},
+        }))
+        types = [e.get("type") for e in events]
+        # 第 1 轮完成后第 2 轮入口检测到超时 → loop_break (不是直接 done)
+        self.assertIn("loop_break", types)
+        # 收尾流程照常产出 meta + 答案 chunks + done
+        self.assertIn("meta", types)
+        self.assertIn("chunk", types)
+        self.assertEqual(types[-1], "done")
+        done = events[-1]
+        self.assertEqual(done.get("code"), "SUCCESS")
+        # chunk 总内容非空 (铁底兜底保证) — 旧 bug 是 0 chunk
+        total = "".join(e.get("text", "") for e in events if e.get("type") == "chunk")
+        self.assertTrue(total.strip())
+
     def test_single_shot_timeout_marks_agent_timeout(self):
         """single_shot 步骤循环超时 → 中止后续步骤, response code=AGENT_TIMEOUT。"""
         agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None)

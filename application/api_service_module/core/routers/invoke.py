@@ -363,9 +363,13 @@ class InvokeRoutesMixin:
                             # Task #48: Agent ReAct 思维链事件直接透传给前端
                             await ws.send_json(evt)
                         elif etype == "done":
+                            # 透传生成器的真实 code/message — 此前硬编码 SUCCESS,
+                            # 把 AGENT_TIMEOUT/PLAN_PENDING 等也洗成"成功", 前端
+                            # 渲染成空白气泡还无从排查
                             await ws.send_json({
                                 "type": "done",
-                                "code": "SUCCESS",
+                                "code": evt.get("code", "SUCCESS"),
+                                "message": evt.get("message", ""),
                                 "cost_time": evt.get("cost_time", round(duration, 3)),
                                 "trace_id": trace_id,
                             })

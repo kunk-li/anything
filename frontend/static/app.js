@@ -2427,12 +2427,23 @@
                 },
                 onDone: (m) => {
                     // 完成 -> 重新渲染 (走 markdown 完整路径)
+                    // done 可能带非 SUCCESS code (如 AGENT_TIMEOUT/PLAN_PENDING) —
+                    // 不能硬编码 SUCCESS 丢掉 message, 否则渲染成"成功的空气泡"
+                    const doneCode = m.code || 'SUCCESS';
+                    let doneContent = accumulated;
+                    if (doneCode !== 'SUCCESS') {
+                        doneContent = accumulated
+                            ? `${accumulated}\n\n[${doneCode}] ${m.message || ''}`
+                            : `[${doneCode}] ${m.message || ''}`;
+                    } else if (!doneContent) {
+                        doneContent = t('msg.empty');  // 铁底: 永不渲染空白气泡
+                    }
                     updateMessage(placeholderId, {
                         loading: false,
                         streaming: false,
-                        content: accumulated,
+                        content: doneContent,
                         meta: {
-                            code: 'SUCCESS',
+                            code: doneCode,
                             traceId: m.trace_id || traceId,
                             costTime: m.cost_time != null ? m.cost_time.toFixed(3) : '',
                             tenant,
