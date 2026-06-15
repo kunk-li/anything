@@ -1543,12 +1543,17 @@ class SimpleAgent(
                 if "returncode" in data and "output" in data:
                     rc = data.get("returncode")
                     out = str(data.get("output") or "")
-                    body_cap = _LIMIT - 90  # 留位置给抬头标记
-                    if len(out) > body_cap or data.get("output_truncated"):
+                    # 命令/文件输出比一般摘要给更大额度: 审代码/读整文件必须看到全文, 2000 会把
+                    # 文件腰斩 → 模型据残文误报"不完整/某符号未定义"(实测 llm_compat.py 被切到第
+                    # 68 行就误判 _stub_with_err 未定义)。12000 ≈ 300 行源码, 覆盖绝大多数文件;
+                    # shell_exec 自身仍有 _OUTPUT_CAP=20000 兜底, 不会无界。_build_react_prompt
+                    # 的最近一轮 observation 渲染上限已同步抬到 12000。
+                    shell_cap = 12000
+                    if len(out) > shell_cap or data.get("output_truncated"):
                         return (
                             f"[命令执行完毕 returncode={rc}; 输出较长, 下面只是前一部分 —— "
                             f"但这已是该命令的真实结果, 同一命令重复执行结果完全相同、不要再重复执行, "
-                            f"如需更少数据请改查询条件]\n{out[:body_cap]}"
+                            f"如需更少数据请改查询条件]\n{out[:shell_cap]}"
                         )
                     return f"[命令执行完毕 returncode={rc}; 以下为完整输出]\n{out}"
                 if "description" in data:

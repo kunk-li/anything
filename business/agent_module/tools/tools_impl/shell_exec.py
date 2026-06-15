@@ -231,6 +231,10 @@ SHELL_EXEC_DESCRIPTION = (
     "(带 extra_params.approve_tools=['shell_exec'] 放行)。"
     '例: 列 MongoDB 数据库 → command=`mongosh --quiet --eval "db.adminCommand({listDatabases:1})"`; '
     '看已装软件 → command=`wmic product get name,version` (Windows) 或 `dpkg -l` (Linux)。'
+    '读/审查本项目自身的源码也用我 (只读, 自动放行): 看某个文件内容 → command=`type <文件绝对路径>` '
+    '(Windows; Linux 用 `cat`); 在整个项目里找某函数/类的定义或用法 → '
+    'command=`findstr /s /n "def 函数名" <项目根>\\*.py` (Windows) 或 `grep -rn "def 函数名" <项目根>`。'
+    '注意服务进程工作目录在 run\\ 下, 读项目根的文件要用绝对路径或 ..\\ 上溯。'
     ' ⚠️ 查某个库的集合/数据时**必须指定目标库**: mongosh 不指定库默认连 test, 会查到空! '
     '用连接串 `mongosh "mongodb://localhost:27017/<库名>" --quiet --eval "..."` 或在 eval 里 '
     '`db.getSiblingDB("<库名>").<集合>.find().toArray()`。'

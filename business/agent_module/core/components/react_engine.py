@@ -147,6 +147,20 @@ class ReActEngineMixin:
 
             step = self._parse_react_response(raw, available_tools)
             if step is None:
+                # 工具已跑过 (history 非空) 却没套 ReAct 的 JSON 壳 → 这是"收集完信息后直接写自然语言
+                # 答案"的常见形态, 尤其"读完文件后写长篇 markdown 代码评审"几乎必然不是 JSON。
+                # 若仍 return None 弹回 single_shot 重新规划, 会重复读同一文件直到撞 timeout(实测审
+                # 代码就这样空转成 504)。故 history 非空时把这段正文当最终答案走收尾整合 (用上已读到的
+                # 真实文件内容), 与流式 streaming.py 同一处理。首轮 (history 为空) 仍保留 single_shot
+                # 回退 (一个工具都没调就给非 JSON, 多半是规划没起步, 让 single_shot 重试更稳)。
+                raw_text = (raw or "").strip()
+                if raw_text and history:
+                    self.logger.info(
+                        f"[react] iter={iteration} 输出非 ReAct JSON 但已有工具结果, 按自然语言答案收尾"
+                    )
+                    final_answer = raw_text
+                    history.append({"thought": "", "final_answer": final_answer})
+                    break
                 self.logger.warning(f"[react] LLM 输出无法解析 iter={iteration}, fallback")
                 return None
 

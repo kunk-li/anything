@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from common_utils_module import (
@@ -21,6 +22,17 @@ from common_utils_module import (
     get_skill_registry,
     inject_skills_into_prompt,
 )
+
+# 项目根目录: 本文件在 business/agent_module/core/components/ 下, 上溯 5 级 (parents[4]) 到仓库根
+# (与 impl.py._resolve_project_root 同源; _build_react_prompt 是 @staticmethod 无 self, 故就地解析)。
+# 注入 ReAct 提示词原则⑧, 让 agent 知道"本项目源码在哪、用绝对路径读" —— 根治"审代码靠记忆编造"。
+try:
+    _PROJECT_ROOT = str(Path(__file__).resolve().parents[4])
+except Exception:
+    _PROJECT_ROOT = "(无法解析项目根)"
+
+# 读文件示例的绝对路径 (用 Path 拼, 拿 OS 原生单分隔符, 避免在 f-string literal 里手写反斜杠)。
+_READ_FILE_EXAMPLE = str(Path(_PROJECT_ROOT) / "目标文件.py")
 
 
 class PromptBuilderMixin:
@@ -63,11 +75,13 @@ class PromptBuilderMixin:
                 a = h["action"]
                 history_lines.append(f"  Action: {a.get('tool')}({a.get('input')})")
             if h.get("observation"):
-                # 最近一轮 observation 给足额度 (≤2000, 与 _summarize_tool_output 上限一致),
+                # 最近一轮 observation 给足额度 (≤12000, 与 _summarize_tool_output 的 shell 输出上限一致),
                 # 让模型据"当前完整结果"作答; 更早的压到 300 防 context 膨胀。
                 # 早期若一律压 300, 会把"列清单/查库"类长输出切成半截 JSON, 诱导模型以为
                 # 没查全而重复执行同一只读命令 → 死循环, 故最近一条不截短。
-                _obs_cap = 2000 if i == _n_hist else 300
+                # 12000(≈300 行源码): 审代码/读文件需看到整文件, 旧的 2000 会把文件腰斩 →
+                # 模型据残文误报"不完整/某符号未定义"(实测 llm_compat.py 被切到第 68 行就误判)。
+                _obs_cap = 12000 if i == _n_hist else 300
                 history_lines.append(f"  Observation: {h['observation'][:_obs_cap]}")
 
         history_text = "\n".join(history_lines) if history_lines else "(尚无历史)"
@@ -126,8 +140,10 @@ class PromptBuilderMixin:
             f"你是一个有真实执行能力的智能助手 (Agent)。下面列出的工具都会真正执行操作"
             f"(查询/计算/搜索/访问网页/读写文件/运行代码/看本机状态等), 不是模拟也不是假设。\n"
             f"用工具 vs 直接答 的判断原则:\n"
-            f"①能用你自己的知识直接回答的 (规划/建议/方案/解释/写作/分析/常识等), 就直接给 final_answer, "
-            f"不要为这类问题去搜知识库或外网 —— 你本来就会, 搜了反而慢还可能失败;\n"
+            f"①纯靠你自己知识就能回答的[通用]问题 (通用规划/建议/方案/写作/常识、对通用概念的解释等), "
+            f"直接给 final_answer, 不要去搜知识库或外网 —— 你本来就会, 搜了反而慢还可能失败; "
+            f"但凡问题涉及[某个具体文件/源代码/目录结构/配置/真实数据]的内容 (尤其'看看/检查/审查/分析"
+            f"本项目代码'这类), **不属于这一类** —— 必须先按下面⑧用工具读到真实内容再答, 绝不能凭记忆直接编;\n"
             f"②只有在确实需要[外部/实时数据]或[对本机的操作]时才调工具: 实时/最新资讯→web_search; "
             f"精确算数→calculator; 本机状态(CPU/内存/磁盘/进程/系统)→system_info; 查用户已上传的文档→rag_search; "
             f"读写文件/运行代码/控制桌面→对应工具;\n"
@@ -140,6 +156,11 @@ class PromptBuilderMixin:
             f"⑦但**一旦你在本次任务的前几轮已经执行过某命令并拿到结果**(见下方历史的 Observation), 那就是当前真实结果, **直接据此作答**; "
             f"尤其**不要因为输出看起来被截断/不完整就重复执行同一条只读命令** —— 同一命令重复执行结果完全相同, "
             f"截断只是显示长度限制, 重跑拿不到更多, 只会空转死循环。\n"
+            f"⑧**事实落地(防编造)**: 凡要陈述/引用/审查/定位[文件内容、源代码、函数/类/变量、配置、目录结构、真实数据、行号、bug]时, "
+            f"**必须先用工具读到真实内容再据此作答**; 严禁凭记忆复述或编造代码/路径/函数名/行号/bug —— 读不到就如实说'没读到', 绝不猜。"
+            f"读本项目或本机的源码与文件用 shell_exec: 看内容 `type <绝对路径>`(Linux 用 cat/Get-Content)、"
+            f"全局找定义或用法 `findstr /s /n \"关键字\" <项目根>\\*.py`(或 `grep -rn`); 查用户上传的文档才用 rag_search/document_read。"
+            f"本项目根目录: {_PROJECT_ROOT} (服务进程工作目录在 run\\ 下, 读项目根的文件请用绝对路径或 ..\\ 上溯)。\n"
             f"\n可用工具:\n" + "\n".join(tool_lines) + "\n"
             f"{catalog_block}"
             f"\n请只输出严格 JSON(不要解释/markdown 围栏),三选一格式:\n"
@@ -188,6 +209,9 @@ class PromptBuilderMixin:
             "规划原则:\n"
             "- 如果任务需要查阅知识库后再回答,先 rag_search 再 llm_generate\n"
             "- 如果只是文本生成/创作/计划,直接 llm_generate\n"
+            "- 涉及[具体文件/源代码/目录结构/真实数据]内容时 (如检查/审查/分析本项目代码),"
+            " **必须先用 shell_exec 读到真实文件内容再分析**, 严禁凭记忆编造代码/路径/bug;"
+            f" 读本项目源码用绝对路径(不要用占位符), 例 input_data={{\"command\": \"type {_READ_FILE_EXAMPLE}\"}} (Windows) 或 cat(Linux)\n"
             "- 步骤数不超过 3 步\n"
             "\n"
             f"用户任务: {task}\n"
