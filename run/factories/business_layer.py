@@ -343,6 +343,22 @@ def build_business_layer(
     except Exception as e:
         deps.logger.warning(f"[bootstrap] spawn_subagent 注册失败 (忽略): {e}")
 
+    # 防漂移守卫 (安全): 审批白名单里的名字必须都对应真实注册的工具, 否则 _needs_approval 精确
+    # 匹配不上, 该工具会裸跑不审批、审批门形同虚设 (历史 bug: 写 py_sandbox/http_request 而注册名
+    # 是 python_sandbox/http_get)。此处在全部工具 (含 external + spawn_subagent) 注册完后校验运行期
+    # 真实集合, 名字漂移即 WARN。fail-safe: 仅告警, 不阻断启动。
+    try:
+        _registered_names = set(tool_registry.list_tools())
+        _orphan_approval = sorted(getattr(agent, "tool_approval_required", set()) - _registered_names)
+        if _orphan_approval:
+            deps.logger.warning(
+                f"[security] agent.tool_approval_required 含未注册工具名 {_orphan_approval} —— "
+                f"这些审批门永远匹配不上, 对应工具会裸跑不审批! 请对齐 business_layer 的注册名 "
+                f"(已注册工具: {sorted(_registered_names)})。"
+            )
+    except Exception as _appchk_err:
+        deps.logger.warning(f"[security] 审批白名单防漂移校验跳过 (异常, 忽略): {_appchk_err}")
+
     orchestrator = SimpleOrchestrator(
         rag_runner=rag,
         agent_runner=agent,

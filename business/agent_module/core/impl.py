@@ -236,11 +236,18 @@ class SimpleAgent(
 
         # Task W (#57): 危险工具白名单 — 这些工具被 LLM 选中时, 必须用户带
         # extra_params.approve_tools=[...] 显式通过才会执行, 否则返回 TOOL_APPROVAL_REQUIRED.
+        # 名字必须与 run/factories/business_layer.py 里 tool_registry.register 的注册名严格一致,
+        # 否则 _needs_approval 精确匹配不上、审批门形同虚设 (历史 bug: 曾写 py_sandbox/http_request,
+        # 而注册名是 python_sandbox/http_get → 沙箱/http 工具裸跑不审批)。business_layer 启动时会
+        # 校验本集合与已注册工具名, 不一致即 WARN。
         default_dangerous = [
-            "py_sandbox", "http_request", "file_write", "email_send",
-            "computer_use",   # 控制真实桌面 (截屏/鼠标/键盘) — 默认需审批
+            "python_sandbox",   # 跑任意 python 代码 (虽 AST 已锁死 import/open, 仍按原意默认需审批)
+            "http_get",         # 抓任意 URL (有 SSRF 防御, 但可外联/打内网端点 → 默认需审批)
+            "email_send",       # 发邮件
+            "computer_use",     # 控制真实桌面 (截屏/鼠标/键盘)
             # 注: shell_exec 不在此列 — 它在工具内做*命令级*风险分级 (只读直执行 / 危险逐条拦),
             # 工具级审批会把每条命令都拦下、架空命令级判断。见 tools_impl/shell_exec.py。
+            # 注: 原 'file_write' 已删 — 没有该名工具 (写文件经 shell_exec 的命令级风险分级)。
         ]
         env_approval = os.environ.get("ANYTHING_AGENT_APPROVAL", "")
         if env_approval:
