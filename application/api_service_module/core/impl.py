@@ -43,6 +43,7 @@ from .routers import (
     AgentRoutesMixin,  # Task FFFF (#123)
     FeedbackRoutesMixin,  # Task PM-2
     KbRoutesMixin,  # Task PM-5
+    ProjectsRoutesMixin,  # Part B: 多项目
     FrontendRoutesMixin,
 )
 
@@ -59,6 +60,7 @@ class ApiService(
     AgentRoutesMixin,  # Task FFFF (#123)
     FeedbackRoutesMixin,  # Task PM-2
     KbRoutesMixin,  # Task PM-5
+    ProjectsRoutesMixin,  # Part B: 多项目
     FrontendRoutesMixin,
 ):
     """标准 API 服务实现: 只负责 HTTP 协议层, 不承载业务语义校验.
@@ -495,6 +497,7 @@ class ApiService(
         self._register_agent_routes()  # Task FFFF (#123): /agent/tools 1 路由
         self._register_feedback_routes()  # Task PM-2: /feedback 3 路由
         self._register_kb_routes()  # Task PM-5: /kb 6 路由
+        self._register_projects_routes()  # Part B: /projects 3 路由 (多项目注册表)
         # Task VV (#82): 在前端路由之前, 把所有现有 API 路由复制一份到 /v1/<path>
         # 让客户端可逐步迁到带版本的 URL; 老 path 保留无限期 (打 deprecated 头).
         self._register_v1_aliases()
