@@ -1488,6 +1488,27 @@
         _syncProjectSelector();
     }
 
+    // 打开设置抽屉并聚焦"添加项目"输入 (从下拉的 ➕ 添加项目… 进来, 让"加项目"在选择器里就能触发)。
+    function _openProjectAdd() {
+        if (els.settingsBtn) els.settingsBtn.click();   // 开设置 (内部会 loadProjects)
+        setTimeout(() => {
+            if (els.projectNameInput) {
+                try { els.projectNameInput.scrollIntoView({ block: 'center' }); } catch (_) {}
+                els.projectNameInput.focus();
+            }
+        }, 250);
+    }
+
+    // 下拉 change 统一入口: 选了 "➕ 添加项目…" → 开添加流程 (不当成选中); 否则按会话设作用域。
+    function _onProjectSelectChange(value) {
+        if (value === '__add_new__') {
+            _syncProjectSelector();   // 把下拉还原到当前项目, 不让它停在"添加项目"上
+            _openProjectAdd();
+            return;
+        }
+        setActiveProject(value);
+    }
+
     // 填充一个项目下拉。fullLabel: 设置抽屉里带路径详情; 顶栏 mini 只显项目名 (省地方)。
     function _fillProjectSelect(selectEl, items, fullLabel) {
         if (!selectEl) return;
@@ -1505,6 +1526,11 @@
                 : it.name;
             selectEl.appendChild(o);
         }
+        // 入口: 让用户在下拉里就能"添加项目" (否则空下拉只有 Anything, 不知道怎么加别的 → 等于没用)。
+        const optAdd = document.createElement('option');
+        optAdd.value = '__add_new__';
+        optAdd.textContent = '➕ 添加项目…';
+        selectEl.appendChild(optAdd);
     }
 
     // Part B: 拉项目清单填充"当前项目"下拉 (顶栏 mini + 设置抽屉, 含默认 Anything 项)。
@@ -1827,10 +1853,10 @@
 
         // Part B: 当前项目选择器 — 选中即生效并持久化 (作用域立刻切, 不必点保存); 顶栏 mini 与设置抽屉双向同步
         if (els.projectSelect) {
-            els.projectSelect.addEventListener('change', () => setActiveProject(els.projectSelect.value));
+            els.projectSelect.addEventListener('change', () => _onProjectSelectChange(els.projectSelect.value));
         }
         if (els.projectSelectMini) {
-            els.projectSelectMini.addEventListener('change', () => setActiveProject(els.projectSelectMini.value));
+            els.projectSelectMini.addEventListener('change', () => _onProjectSelectChange(els.projectSelectMini.value));
         }
         if (els.projectAddBtn) {
             els.projectAddBtn.addEventListener('click', async () => {
