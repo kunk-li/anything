@@ -129,10 +129,19 @@ class _RealShell:
 
     def run(self, command: str, timeout: int) -> Tuple[Optional[int], str]:
         import subprocess
-        argv, use_shell = _plan_exec(command)
         kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                   stderr=subprocess.STDOUT, timeout=timeout, text=True, errors="replace")
         try:
+            if _IS_WINDOWS:
+                # Windows 一律经 cmd.exe (shell=True): cmd 原生处理反斜杠路径 (D:\a\b 不被吞)、
+                # dir/type/findstr/where 等内建+自带命令, 以及 "..." 引号传参 (实测 mongosh
+                # --eval "d => printjson(d)" 的箭头与引号也正确)。**不能**走下面 shlex argv:
+                # posix shlex 会把路径反斜杠当转义吃掉 (D:\projects→D:projects), 且若 PATH 含
+                # Git/usr/bin 还会把 dir/find 解析到 MinGW coreutils (跑 GNU 版 → Windows
+                # 参数 /s /b 全被当路径报错)。命令级风险分级在工具外层已做, 此处只管执行。
+                p = subprocess.run(command, shell=True, **kw)
+                return p.returncode, (p.stdout or "")
+            argv, use_shell = _plan_exec(command)
             if use_shell:
                 p = subprocess.run(command, shell=True, **kw)
             else:
@@ -222,7 +231,19 @@ def make_shell_exec_tool(
     return shell_exec
 
 
+# 运行期 OS 提示拼进描述: agent 不会自己知道在哪个系统, 不提示就会乱发命令 (实测在 Windows 上发
+# unix 的 `find -name -exec`/`ls`/`grep`/`cat` → cmd 下不存在或语义不同 → 空转好几轮)。
+_OS_HINT = (
+    '⚠️ 本机是 **Windows**, 命令经 cmd.exe 执行 —— 必须用 Windows 命令: '
+    '递归列/找文件 `dir /s /b <目录或通配>`、看文件内容 `type <文件>`、'
+    '全文搜索 `findstr /s /n /c:"关键字" <目录>\\*.py`、定位程序 `where`。'
+    '**不要**用 ls/cat/find/grep/`find -name -exec` 等 Unix 命令 (cmd 下不存在或行为不同)。 '
+) if _IS_WINDOWS else (
+    '本机是类 Unix 系统, 用 ls/cat/grep/find 等命令。 '
+)
+
 SHELL_EXEC_DESCRIPTION = (
+    _OS_HINT +
     '通用终端执行: 直接在本机跑 shell 命令, 用来查询/操作系统、数据库、文件、进程等 —— '
     '需要什么信息就自己写命令拿, 不要因为"没有专门的工具"就说做不了。'
     'input: {"command": str (完整命令行), "timeout_seconds": int? (默认 30, 上限 120)}。'
