@@ -30,6 +30,12 @@
         projectRootInput: $('project-root-input'),
         projectAddBtn: $('project-add-btn'),
         projectDelBtn: $('project-del-btn'),
+        // 就地添加项目小框 (composer 上方弹出)
+        projAddPop: $('project-add-pop'),
+        projPopName: $('proj-pop-name'),
+        projPopRoot: $('proj-pop-root'),
+        projPopAdd: $('proj-pop-add'),
+        projPopCancel: $('proj-pop-cancel'),
         healthBadge: $('health-badge'),
         healthDot: $('health-dot'),
         healthText: $('health-text'),
@@ -1488,15 +1494,34 @@
         _syncProjectSelector();
     }
 
-    // 打开设置抽屉并聚焦"添加项目"输入 (从下拉的 ➕ 添加项目… 进来, 让"加项目"在选择器里就能触发)。
+    // 就地弹出"添加项目"小框 (浮在输入框上方, 不跳设置)。从下拉的 ➕ 添加项目… 进来。
     function _openProjectAdd() {
-        if (els.settingsBtn) els.settingsBtn.click();   // 开设置 (内部会 loadProjects)
-        setTimeout(() => {
-            if (els.projectNameInput) {
-                try { els.projectNameInput.scrollIntoView({ block: 'center' }); } catch (_) {}
-                els.projectNameInput.focus();
-            }
-        }, 250);
+        if (!els.projAddPop) {  // 兜底: 万一没有小框, 退回设置抽屉
+            if (els.settingsBtn) els.settingsBtn.click();
+            setTimeout(() => els.projectNameInput && els.projectNameInput.focus(), 250);
+            return;
+        }
+        if (els.projPopName) els.projPopName.value = '';
+        if (els.projPopRoot) els.projPopRoot.value = '';
+        els.projAddPop.hidden = false;
+        setTimeout(() => els.projPopName && els.projPopName.focus(), 30);
+    }
+    function _closeProjectAdd() {
+        if (els.projAddPop) els.projAddPop.hidden = true;
+    }
+    async function _submitProjectAdd() {
+        const name = (els.projPopName && els.projPopName.value || '').trim();
+        const root = (els.projPopRoot && els.projPopRoot.value || '').trim();
+        if (!name || !root) { toast('error', '缺少信息', '请填项目名和项目根绝对路径'); return; }
+        const { payload, status } = await ApiClient.createProject(name, root, state.settings.tenant || 'default');
+        if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
+            toast('error', (payload && payload.code) || status, (payload && payload.message) || '添加项目失败');
+            return;  // 失败保留小框, 让用户改 (路径不对最常见)
+        }
+        _closeProjectAdd();
+        setActiveProject((payload.data && payload.data.root_path) || root);  // 新增即设为当前会话项目
+        await loadProjects();
+        toast('success', '已添加项目', name);
     }
 
     // 下拉 change 统一入口: 选了 "➕ 添加项目…" → 开添加流程 (不当成选中); 否则按会话设作用域。
@@ -1893,6 +1918,17 @@
                 toast('success', '已删除项目', '');
             });
         }
+        // 就地添加项目小框: 添加 / 取消 / 回车提交 / Esc 关
+        if (els.projPopAdd) els.projPopAdd.addEventListener('click', _submitProjectAdd);
+        if (els.projPopCancel) els.projPopCancel.addEventListener('click', _closeProjectAdd);
+        if (els.projPopName) els.projPopName.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); if (els.projPopRoot) els.projPopRoot.focus(); }
+            else if (e.key === 'Escape') _closeProjectAdd();
+        });
+        if (els.projPopRoot) els.projPopRoot.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); _submitProjectAdd(); }
+            else if (e.key === 'Escape') _closeProjectAdd();
+        });
 
         // 流式开关持久化
         if (els.streamToggle) {

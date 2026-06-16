@@ -1321,6 +1321,49 @@ body.has-drag .chat-pane::before {
     overflow-y: auto;
     z-index: 30;
 }
+/* Part B: 就地添加项目小框 (从 📁 下拉的 ➕ 添加项目… 弹出, 浮在 composer 上方, 不跳设置) */
+.project-add-pop {
+    position: absolute;
+    bottom: 100%;
+    left: 24px;
+    margin-bottom: 6px;
+    width: min(360px, calc(100% - 48px));
+    background: var(--bg-elev2);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-md);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 60;
+}
+.project-add-pop[hidden] { display: none; }
+.project-add-pop .pop-title { font-weight: 600; color: var(--text-strong); }
+.project-add-pop input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    font: inherit;
+}
+.project-add-pop input:focus { outline: none; border-color: var(--accent); }
+.project-add-pop .pop-hint { font-size: 12px; color: var(--text-faint); }
+.project-add-pop .pop-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.project-add-pop .pop-actions button {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+}
+.project-add-pop .pop-actions .pop-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.project-add-pop .pop-actions button:hover { filter: brightness(1.12); }
 .slash-item {
     padding: 8px 12px;
     cursor: pointer;

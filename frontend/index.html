@@ -251,6 +251,17 @@
 
             <!-- 输入区 -->
             <div class="composer">
+                <!-- Part B: 就地添加项目小框 (从 📁 下拉的 ➕ 添加项目… 弹出, 不跳设置) -->
+                <div class="project-add-pop" id="project-add-pop" hidden>
+                    <div class="pop-title">添加项目</div>
+                    <input type="text" id="proj-pop-name" placeholder="项目名 (如 我的后端)" maxlength="60" />
+                    <input type="text" id="proj-pop-root" placeholder="项目根绝对路径 (如 D:\code\myapp)" />
+                    <div class="pop-hint">填服务器能访问到的绝对路径 — Agent 会去读这个目录; 有 AGENTS.md 更好。</div>
+                    <div class="pop-actions">
+                        <button type="button" id="proj-pop-cancel">取消</button>
+                        <button type="button" id="proj-pop-add" class="pop-primary">添加</button>
+                    </div>
+                </div>
                 <div class="composer-row">
                     <div class="mode-tabs" role="tablist">
                         <button class="mode-tab active" data-mode="rag" role="tab" aria-selected="true">RAG</button>
