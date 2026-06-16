@@ -163,7 +163,9 @@
             apiKey: 'dev_api_key_1_change_in_prod',
             sessionId: '',
             tenant: 'default',
-            activeProjectRoot: '',  // Part B: 当前项目作用域根 (空 = 本系统 Anything 默认)
+            // Part B: 当前项目作用域 — **按会话**绑定 {sessionId: 项目根路径}。每个会话各自选项目,
+            // 切会话时选择器跟着变; 空/未绑定 = 本系统 Anything 默认。
+            projectBySession: {},
             useStream: false,
             theme: 'light',  // Task NNNN (#131): dark/light/auto — 默认暖奶油浅色
         },
@@ -1015,6 +1017,8 @@
     }
 
     async function refreshSessions() {
+        // Part B: 切换/新建会话都会走到这里 — 把项目选择器同步到"当前会话"绑定的项目。
+        if (typeof _syncProjectSelector === 'function') _syncProjectSelector();
         if (!els.sessionList) return;
         try {
             const { payload, status } = await ApiClient.listSessions(200);  // XXXX-8: 拉 200, 客户端分页
@@ -1463,12 +1467,25 @@
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
     }
 
-    // Part B: 设当前项目作用域 — 同步两个下拉 (顶栏 mini + 设置抽屉) + 持久化。
+    // Part B: 当前**会话**绑定的项目根 (空 = Anything 默认)。每个会话各自一份。
+    function getActiveProject() {
+        const m = state.settings.projectBySession || {};
+        return m[state.settings.sessionId] || '';
+    }
+    // 把两个下拉 (顶栏 mini + 设置抽屉) 的选中值同步到"当前会话"绑定的项目 (切会话时调)。
+    function _syncProjectSelector() {
+        const v = getActiveProject();
+        if (els.projectSelect) els.projectSelect.value = v;
+        if (els.projectSelectMini) els.projectSelectMini.value = v;
+    }
+    // 设**当前会话**的项目作用域 + 持久化 + 同步两个下拉。
     function setActiveProject(root) {
-        state.settings.activeProjectRoot = root || '';
+        state.settings.projectBySession = state.settings.projectBySession || {};
+        const sid = state.settings.sessionId;
+        if (root) state.settings.projectBySession[sid] = root;
+        else delete state.settings.projectBySession[sid];
         _persistSettings();
-        if (els.projectSelect) els.projectSelect.value = state.settings.activeProjectRoot;
-        if (els.projectSelectMini) els.projectSelectMini.value = state.settings.activeProjectRoot;
+        _syncProjectSelector();
     }
 
     // 填充一个项目下拉。fullLabel: 设置抽屉里带路径详情; 顶栏 mini 只显项目名 (省地方)。
@@ -1503,15 +1520,14 @@
         } catch (_) {}
         _fillProjectSelect(els.projectSelect, items, true);
         _fillProjectSelect(els.projectSelectMini, items, false);
-        // 选中的项目已不在列表 (被删) → 回退默认并清掉失效持久化值
-        const cur = state.settings.activeProjectRoot || '';
+        // 当前会话绑定的项目已不在列表 (被删) → 该会话回退默认
+        const cur = getActiveProject();
         if (cur && !items.some(it => (it.root_path || '') === cur)) {
-            state.settings.activeProjectRoot = '';
+            const m = state.settings.projectBySession || {};
+            delete m[state.settings.sessionId];
             _persistSettings();
         }
-        const v = state.settings.activeProjectRoot || '';
-        if (els.projectSelect) els.projectSelect.value = v;
-        if (els.projectSelectMini) els.projectSelectMini.value = v;
+        _syncProjectSelector();
     }
 
     function persistHistory() {
@@ -1828,9 +1844,8 @@
                 }
                 if (els.projectNameInput) els.projectNameInput.value = '';
                 if (els.projectRootInput) els.projectRootInput.value = '';
-                // 新增即设为当前项目
-                state.settings.activeProjectRoot = (payload.data && payload.data.root_path) || root;
-                _persistSettings();
+                // 新增即设为**当前会话**的项目
+                setActiveProject((payload.data && payload.data.root_path) || root);
                 await loadProjects();
                 toast('success', '已添加项目', name);
             });
@@ -1840,13 +1855,14 @@
                 const opt = els.projectSelect && els.projectSelect.selectedOptions[0];
                 const pid = opt && opt.dataset && opt.dataset.projId;
                 if (!pid) { toast('error', '无法删除', '当前选的是"本系统 Anything (默认)", 不是已注册项目'); return; }
+                const delRoot = (opt && opt.value) || '';
                 const { payload, status } = await ApiClient.deleteProject(pid);
                 if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
                     toast('error', payload && payload.code || status, payload && payload.message || '删除失败');
                     return;
                 }
-                state.settings.activeProjectRoot = '';
-                _persistSettings();
+                // 当前会话若正绑在被删项目上 → 回退默认 (其它会话由各自 loadProjects 惰性清理)
+                if (getActiveProject() === delRoot) setActiveProject('');
                 await loadProjects();
                 toast('success', '已删除项目', '');
             });
@@ -2234,9 +2250,9 @@
 
         const body = { type: mode, top_k: topK, tenant_id: tenant };
 
-        // Part B: 当前项目作用域 → extra_params.active_project_root (空则后端回退本系统 Anything)。
-        // Agent 据此把读码根/项目记忆对准所选项目; 与全局使用者画像无关。
-        const _projRoot = (state.settings.activeProjectRoot || '').trim();
+        // Part B: 当前**会话**绑定的项目作用域 → extra_params.active_project_root (空则后端回退 Anything)。
+        // Agent 据此把读码根/项目记忆对准该会话所选项目; 与全局使用者画像无关。
+        const _projRoot = (getActiveProject() || '').trim();
         if (_projRoot) {
             body.extra_params = body.extra_params || {};
             body.extra_params.active_project_root = _projRoot;
@@ -3436,6 +3452,8 @@
         } catch (_) {}
         els.sessionInput.value = state.settings.sessionId;
         ApiClient.configure(state.settings);
+        // Part B: 清空对话会换新 sessionId → 新会话无项目绑定, 选择器回退默认。
+        if (typeof _syncProjectSelector === 'function') _syncProjectSelector();
         toast('info', t('toast.history.cleared'), '');
         closeDrawer('settings');
     }
