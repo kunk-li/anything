@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import string
 import time
 import uuid
 from pathlib import Path
@@ -65,6 +66,41 @@ def _has_memory_file(root_path: str) -> bool:
         except OSError:
             continue
     return False
+
+
+_MAX_DIRS = 1000
+
+
+def _browse_dir(raw: str) -> Dict[str, Any]:
+    """只读列目录给前端目录浏览器。raw 空 → 盘符(Windows)/根(posix); 否则列子目录(不列文件)。
+    可能抛 OSError 子类 (PermissionError/FileNotFoundError/NotADirectoryError), 由路由转 HTTP 码。"""
+    raw = (raw or "").strip()
+    if not raw:
+        if os.name == "nt":
+            drives = [{"name": f"{d}:\\", "path": f"{d}:\\", "has_project_memory": False}
+                      for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+            return {"path": "", "parent": None, "is_root": True,
+                    "dirs": drives, "has_project_memory": False}
+        raw = "/"
+    base = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isdir(base):
+        raise NotADirectoryError(base)
+    dirs = []
+    for name in sorted(os.listdir(base), key=lambda s: s.lower()):
+        full = os.path.join(base, name)
+        try:
+            if os.path.isdir(full):
+                dirs.append({"name": name, "path": full,
+                             "has_project_memory": _has_memory_file(full)})
+                if len(dirs) >= _MAX_DIRS:
+                    break
+        except OSError:
+            continue
+    parent = os.path.dirname(base)
+    if parent == base:  # 盘符根 / posix '/' → 上一级回到盘符列表(Windows)或无上级(posix)
+        parent = "" if os.name == "nt" else None
+    return {"path": base, "parent": parent, "is_root": False,
+            "dirs": dirs, "has_project_memory": _has_memory_file(base)}
 
 
 def _project_row(row) -> Dict[str, Any]:
@@ -163,6 +199,34 @@ class ProjectsRoutesMixin:
                 })
             except Exception as e:
                 return _err(trace_id, "PROJECT_DELETE_FAILED", str(e))
+
+        @self.app.get("/projects/fs")
+        async def project_fs_browse(request: Request):
+            """只读列目录 — 给前端做"服务器目录浏览器"选项目根用 (浏览器拿不到本地绝对路径)。
+            path 空 → Windows 列盘符 / 类 Unix 列 '/'; 否则列该目录下的子目录 (不列文件)。
+            仅列目录名 + 标注有无 AGENTS.md, 不读文件内容。访问受现有鉴权约束。"""
+            trace_id = request.state.trace_id
+            raw = request.query_params.get("path", "") or ""
+            try:
+                return JSONResponse({
+                    "code": "SUCCESS", "message": "ok",
+                    "data": _browse_dir(raw),
+                    "trace_id": trace_id, "retryable": False, "details": None,
+                })
+            except PermissionError:
+                return JSONResponse(
+                    {"code": "PERMISSION_DENIED", "message": f"无权访问该目录: {raw}",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=403,
+                )
+            except (FileNotFoundError, NotADirectoryError):
+                return JSONResponse(
+                    {"code": "NOT_FOUND", "message": f"目录不存在: {raw}",
+                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
+                    status_code=404,
+                )
+            except Exception as e:
+                return _err(trace_id, "PROJECT_FS_FAILED", str(e))
 
 
 def _bad(trace_id: str, message: str) -> JSONResponse:

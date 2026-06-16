@@ -555,6 +555,7 @@ const ApiClient = (() => {
         listProjects,
         createProject,
         deleteProject,
+        browseFs,
     };
 
     async function submitFeedback(body) {
@@ -600,6 +601,10 @@ const ApiClient = (() => {
     }
     async function deleteProject(projId) {
         return _doFetch('DELETE', `/projects/${encodeURIComponent(projId)}`);
+    }
+    // 只读列服务器目录 (给"选项目目录"浏览器用)。path 空 → 盘符/根。
+    async function browseFs(path = '') {
+        return _doFetch('GET', `/projects/fs?path=${encodeURIComponent(path)}`);
     }
 })();
 

@@ -1364,6 +1364,29 @@ body.has-drag .chat-pane::before {
 }
 .project-add-pop .pop-actions .pop-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .project-add-pop .pop-actions button:hover { filter: brightness(1.12); }
+.project-add-pop .pop-curbar { display: flex; gap: 6px; align-items: center; }
+.project-add-pop .pop-up {
+    flex: 0 0 auto; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border-strong); background: var(--bg-elev); color: var(--text); cursor: pointer;
+}
+.project-add-pop .pop-up:hover { filter: brightness(1.12); }
+.project-add-pop .pop-curbar input { flex: 1 1 auto; }
+.project-add-pop .pop-dirlist {
+    list-style: none; margin: 0; padding: 4px;
+    max-height: 200px; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.project-add-pop .pop-dirlist li {
+    padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; gap: 8px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-add-pop .pop-dirlist li:hover { background: var(--accent-soft); }
+.project-add-pop .pop-dirlist li.empty { color: var(--text-faint); cursor: default; }
+.project-add-pop .pop-dirlist li.empty:hover { background: transparent; }
+.project-add-pop .pop-dirlist .mem-dot { color: var(--accent); margin-left: auto; }
+.project-add-pop .pop-namerow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
+.project-add-pop .pop-namerow input { flex: 1 1 auto; }
 .slash-item {
     padding: 8px 12px;
     cursor: pointer;

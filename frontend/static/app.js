@@ -33,7 +33,9 @@
         // 就地添加项目小框 (composer 上方弹出)
         projAddPop: $('project-add-pop'),
         projPopName: $('proj-pop-name'),
-        projPopRoot: $('proj-pop-root'),
+        projPopCur: $('proj-pop-cur'),
+        projPopUp: $('proj-pop-up'),
+        projPopList: $('proj-pop-list'),
         projPopAdd: $('proj-pop-add'),
         projPopCancel: $('proj-pop-cancel'),
         healthBadge: $('health-badge'),
@@ -1494,7 +1496,54 @@
         _syncProjectSelector();
     }
 
-    // 就地弹出"添加项目"小框 (浮在输入框上方, 不跳设置)。从下拉的 ➕ 添加项目… 进来。
+    // 目录浏览器状态
+    let _fsParent = null;     // 当前目录的上一级 (null/'' = 已到顶)
+    let _fsNameAuto = true;   // 项目名是否还自动跟文件夹名 (用户手敲过 → false)
+
+    function _basename(p) {
+        if (!p) return '';
+        const s = String(p).replace(/[\\/]+$/, '');
+        const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+        return i >= 0 ? s.slice(i + 1) : s;
+    }
+
+    // 列服务器目录并渲染到小框 (点文件夹进入 / ⬆ 上级 / 直接粘路径)。path 空 → 盘符/根。
+    async function _browseFs(path) {
+        if (!els.projPopList) return;
+        els.projPopList.innerHTML = '<li class="empty">加载中…</li>';
+        let data = null;
+        try {
+            const { payload, status } = await ApiClient.browseFs(path || '');
+            if (status === 200 && payload && payload.code === 'SUCCESS') data = payload.data;
+            else { els.projPopList.innerHTML = `<li class="empty">${(payload && payload.message) || '无法访问该目录'}</li>`; return; }
+        } catch (_) { els.projPopList.innerHTML = '<li class="empty">请求失败</li>'; return; }
+        _fsParent = data.parent;
+        const cur = data.path || '';
+        if (els.projPopCur) els.projPopCur.value = cur;
+        try { localStorage.setItem('anything_fs_last', cur); } catch (_) {}
+        if (_fsNameAuto && els.projPopName && cur) els.projPopName.value = _basename(cur);
+        els.projPopList.innerHTML = '';
+        const dirs = data.dirs || [];
+        if (!dirs.length) {
+            els.projPopList.innerHTML = '<li class="empty">(没有子文件夹 — 可直接"添加这个目录")</li>';
+            return;
+        }
+        for (const d of dirs) {
+            const li = document.createElement('li');
+            li.dataset.path = d.path;
+            const nm = document.createElement('span');
+            nm.textContent = '📁 ' + d.name;
+            li.appendChild(nm);
+            if (d.has_project_memory) {
+                const dot = document.createElement('span');
+                dot.className = 'mem-dot'; dot.textContent = '●'; dot.title = '有 AGENTS.md';
+                li.appendChild(dot);
+            }
+            els.projPopList.appendChild(li);
+        }
+    }
+
+    // 就地弹出"选择项目目录"小框 (浮在输入框上方, 不跳设置)。从下拉的 ➕ 添加项目… 进来。
     function _openProjectAdd() {
         if (!els.projAddPop) {  // 兜底: 万一没有小框, 退回设置抽屉
             if (els.settingsBtn) els.settingsBtn.click();
@@ -1502,17 +1551,20 @@
             return;
         }
         if (els.projPopName) els.projPopName.value = '';
-        if (els.projPopRoot) els.projPopRoot.value = '';
+        _fsNameAuto = true;
         els.projAddPop.hidden = false;
-        setTimeout(() => els.projPopName && els.projPopName.focus(), 30);
+        let start = '';
+        try { start = localStorage.getItem('anything_fs_last') || ''; } catch (_) {}
+        _browseFs(start);  // 上次浏览到的目录, 没有则盘符列表
     }
     function _closeProjectAdd() {
         if (els.projAddPop) els.projAddPop.hidden = true;
     }
     async function _submitProjectAdd() {
-        const name = (els.projPopName && els.projPopName.value || '').trim();
-        const root = (els.projPopRoot && els.projPopRoot.value || '').trim();
-        if (!name || !root) { toast('error', '缺少信息', '请填项目名和项目根绝对路径'); return; }
+        const root = (els.projPopCur && els.projPopCur.value || '').trim();
+        if (!root) { toast('error', '没选目录', '点文件夹进到目标目录, 或在上面粘一个绝对路径'); return; }
+        const name = (els.projPopName && els.projPopName.value || '').trim() || _basename(root);
+        if (!name) { toast('error', '缺少项目名', '给这个项目起个名'); return; }
         const { payload, status } = await ApiClient.createProject(name, root, state.settings.tenant || 'default');
         if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
             toast('error', (payload && payload.code) || status, (payload && payload.message) || '添加项目失败');
@@ -1918,17 +1970,25 @@
                 toast('success', '已删除项目', '');
             });
         }
-        // 就地添加项目小框: 添加 / 取消 / 回车提交 / Esc 关
+        // 目录浏览器小框: 添加 / 取消 / ⬆上级 / 点文件夹进入 / 路径回车浏览 / 项目名
         if (els.projPopAdd) els.projPopAdd.addEventListener('click', _submitProjectAdd);
         if (els.projPopCancel) els.projPopCancel.addEventListener('click', _closeProjectAdd);
-        if (els.projPopName) els.projPopName.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); if (els.projPopRoot) els.projPopRoot.focus(); }
+        if (els.projPopUp) els.projPopUp.addEventListener('click', () => _browseFs(_fsParent || ''));
+        if (els.projPopList) els.projPopList.addEventListener('click', (e) => {
+            const li = e.target.closest('li[data-path]');
+            if (li) _browseFs(li.dataset.path);
+        });
+        if (els.projPopCur) els.projPopCur.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); _browseFs((els.projPopCur.value || '').trim()); }
             else if (e.key === 'Escape') _closeProjectAdd();
         });
-        if (els.projPopRoot) els.projPopRoot.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); _submitProjectAdd(); }
-            else if (e.key === 'Escape') _closeProjectAdd();
-        });
+        if (els.projPopName) {
+            els.projPopName.addEventListener('input', () => { _fsNameAuto = false; });
+            els.projPopName.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); _submitProjectAdd(); }
+                else if (e.key === 'Escape') _closeProjectAdd();
+            });
+        }
 
         // 流式开关持久化
         if (els.streamToggle) {
