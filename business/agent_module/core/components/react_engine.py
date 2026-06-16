@@ -71,6 +71,7 @@ class ReActEngineMixin:
             plan_result = self._generate_plan(
                 task=task, available_tools=available_tools, trace_id=trace_id,
                 llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
+                project_root=extra_params.get("active_project_root"),
             )
             if plan_result is not None:
                 self._append_state_event(
@@ -138,6 +139,7 @@ class ReActEngineMixin:
                 iteration=iteration,
                 max_iterations=max_iter,
                 tool_descriptions=tool_descriptions,
+                project_root=extra_params.get("active_project_root"),
             )
             try:
                 raw = llm_call(prompt)
@@ -628,6 +630,7 @@ class ReActEngineMixin:
             trace_id: Optional[str],
             llm_call: Callable[[str], str],
             tool_descriptions: Optional[Dict[str, str]] = None,
+            project_root: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Task V (#56): 跑一次 ReAct 风格 LLM 调用拿 plan, 不执行任何工具.
 
@@ -643,6 +646,7 @@ class ReActEngineMixin:
             iteration=1,
             max_iterations=self.max_react_iterations,
             tool_descriptions=tool_descriptions or {},
+            project_root=project_root,
         )
         try:
             raw = llm_call(prompt)

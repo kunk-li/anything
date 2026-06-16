@@ -9,10 +9,12 @@ from project_memory_module.impl import (
     ProjectMemory,
     get_project_memory,
     reset_project_memory,
+    load_project_memory_for_root,
 )
 
 __all__ = [
     "ProjectMemory",
     "get_project_memory",
     "reset_project_memory",
+    "load_project_memory_for_root",
 ]

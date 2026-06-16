@@ -265,6 +265,7 @@ class StreamingMixin:
             plan_result = self._generate_plan(
                 task=task, available_tools=available_tools, trace_id=trace_id,
                 llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
+                project_root=extra_params.get("active_project_root"),
             )
             if plan_result is not None:
                 yield {
@@ -308,6 +309,7 @@ class StreamingMixin:
                     history=history, iteration=iteration,
                     max_iterations=self.max_react_iterations,
                     tool_descriptions=tool_descriptions,
+                    project_root=extra_params.get("active_project_root"),
                 )
                 # 健壮: react 计划 LLM 调用撞网络抖动会抛异常 — 重试 (短退避) 而非直接报错。
                 # 本 generator 在线程池跑 (handle_stream via run_in_executor), time.sleep 安全。

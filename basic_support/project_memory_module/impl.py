@@ -34,7 +34,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # 默认查找路径列表 (按优先级)
@@ -167,3 +167,54 @@ def reset_project_memory() -> None:
     global _default_memory
     with _default_lock:
         _default_memory = None
+
+
+# 多项目支持: 按"项目根"加载 ProjectMemory。全局单例只认 CWD/CWD.parent 的一份 AGENTS.md
+# (默认作用域, 通常是本平台自身); 当请求带了 active_project_root (用户选的"当前项目")时, 要读
+# 那个根下的 AGENTS.md/CLAUDE.md。按 root 缓存 + mtime 热刷新; root 为空 -> 回退全局单例。
+_root_memory_cache: Dict[str, Tuple[Path, float, str]] = {}
+_root_memory_lock = threading.Lock()
+_ROOT_MEMORY_MAX_CHARS = 8000
+
+
+def load_project_memory_for_root(root: Optional[str]) -> str:
+    """读 <root>/{AGENTS.md|CLAUDE.md|.anything/memory.md} 第一个存在的文件内容; 找不到返回 ''。
+    root 为空 -> 回退全局单例 get_project_memory().load() (默认作用域)。按 root 缓存 + mtime 热刷新,
+    超 8000 字截断。给 Agent 提示词按"当前项目"注入项目记忆用 (见 prompt_builder._build_react_prompt)。"""
+    if not root:
+        return get_project_memory().load()
+    try:
+        base = Path(root).expanduser()
+    except Exception:
+        return ""
+    key = str(base)
+    with _root_memory_lock:
+        path: Optional[Path] = None
+        for cand in _DEFAULT_CANDIDATES:
+            p = base / cand
+            try:
+                if p.is_file():
+                    path = p
+                    break
+            except OSError:
+                continue
+        if path is None:
+            _root_memory_cache.pop(key, None)
+            return ""
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            cached = _root_memory_cache.get(key)
+            return cached[2] if cached else ""
+        cached = _root_memory_cache.get(key)
+        if cached and cached[0] == path and cached[1] == mtime:
+            return cached[2]
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            cached = _root_memory_cache.get(key)
+            return cached[2] if cached else ""
+        if len(content) > _ROOT_MEMORY_MAX_CHARS:
+            content = content[:_ROOT_MEMORY_MAX_CHARS] + "\n\n... [truncated]"
+        _root_memory_cache[key] = (path, mtime, content)
+        return content

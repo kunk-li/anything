@@ -905,6 +905,7 @@ class SimpleAgent(
         prompt = self._build_planner_prompt(
             task=task, available_tools=available_tools,
             tool_descriptions=self._tool_descriptions(),
+            project_root=extra_params.get("active_project_root"),
         )
 
         try:

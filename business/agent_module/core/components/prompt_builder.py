@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from common_utils_module import (
     get_project_memory,
+    load_project_memory_for_root,
     get_skill_registry,
     inject_skills_into_prompt,
 )
@@ -30,9 +31,6 @@ try:
     _PROJECT_ROOT = str(Path(__file__).resolve().parents[4])
 except Exception:
     _PROJECT_ROOT = "(无法解析项目根)"
-
-# 读文件示例的绝对路径 (用 Path 拼, 拿 OS 原生单分隔符, 避免在 f-string literal 里手写反斜杠)。
-_READ_FILE_EXAMPLE = str(Path(_PROJECT_ROOT) / "目标文件.py")
 
 
 class PromptBuilderMixin:
@@ -46,6 +44,7 @@ class PromptBuilderMixin:
             iteration: int,
             max_iterations: int,
             tool_descriptions: Optional[Dict[str, str]] = None,
+            project_root: Optional[str] = None,
     ) -> str:
         """构造 ReAct prompt: 任务 + 工具 + 历史 + 期望输出格式.
 
@@ -86,10 +85,15 @@ class PromptBuilderMixin:
 
         history_text = "\n".join(history_lines) if history_lines else "(尚无历史)"
 
-        # Task U: 顶部拼项目记忆 (AGENTS.md / CLAUDE.md)
+        # 多项目: 当前项目作用域根 (来自请求 active_project_root); 不传则回退本平台自身根 _PROJECT_ROOT。
+        # 用于: ProjectMemory 按该根加载 + 原则⑧ 告诉 agent "当前项目根在哪、读码用绝对路径打这里"。
+        effective_root = project_root or _PROJECT_ROOT
+
+        # Task U: 顶部拼项目记忆 (当前项目的 AGENTS.md / CLAUDE.md)。多项目: 按 effective_root 加载,
+        # 选了别的项目就注入那个项目的说明; 没选 (project_root=None) 回退全局单例 (= 本平台自身)。
         memory_block = ""
         try:
-            mem = get_project_memory().load()
+            mem = load_project_memory_for_root(project_root)
             if mem:
                 memory_block = (
                     f"<ProjectMemory>\n{mem.strip()}\n</ProjectMemory>\n\n"
@@ -160,7 +164,7 @@ class PromptBuilderMixin:
             f"**必须先用工具读到真实内容再据此作答**; 严禁凭记忆复述或编造代码/路径/函数名/行号/bug —— 读不到就如实说'没读到', 绝不猜。"
             f"读本项目或本机的源码与文件用 shell_exec: 看内容 `type <绝对路径>`(Linux 用 cat/Get-Content)、"
             f"全局找定义或用法 `findstr /s /n \"关键字\" <项目根>\\*.py`(或 `grep -rn`); 查用户上传的文档才用 rag_search/document_read。"
-            f"本项目根目录: {_PROJECT_ROOT} (服务进程工作目录在 run\\ 下, 读项目根的文件请用绝对路径或 ..\\ 上溯)。\n"
+            f"当前项目根目录: {effective_root} (读该项目的文件请用绝对路径打到这个根下; 服务进程工作目录在 run\\ 下, 相对路径会落到别处)。\n"
             f"⑨**分析/审查整个项目或代码库时**(不是单个文件): 不能只列目录名就照名字猜 —— "
             f"'application 可能是核心逻辑'这种是**猜**, 不是分析。要真正读代码再下结论, 按这个顺序: "
             f"(a) 先看结构: `dir /s /b <项目根>` 或读 AGENTS.md/README/CLAUDE.md; "
@@ -191,13 +195,17 @@ class PromptBuilderMixin:
         task: str,
         available_tools: List[str],
         tool_descriptions: Optional[Dict[str, str]] = None,
+        project_root: Optional[str] = None,
     ) -> str:
         """构造 LLM 规划 prompt (single_shot 路径用).
 
         tool_descriptions: 从 registry 取的描述, 优先级最高;
                            缺失时 fall back 到内置 tool_docs.
+        project_root: 当前项目作用域根 (多项目); 不传回退本平台自身根。
         """
         tool_descriptions = tool_descriptions or {}
+        # 多项目: 读文件示例路径打到"当前项目根"下 (不传则本平台自身根)。
+        effective_read_example = str(Path(project_root or _PROJECT_ROOT) / "目标文件.py")
         fallback_docs = {
             "rag_search": "在知识库中检索相关文档片段。input: {\"query\": str, \"top_k\": int}",
             "llm_generate": "调用大语言模型生成文本。input: {\"prompt\": str}",
@@ -219,7 +227,7 @@ class PromptBuilderMixin:
             "- 如果只是文本生成/创作/计划,直接 llm_generate\n"
             "- 涉及[具体文件/源代码/目录结构/真实数据]内容时 (如检查/审查/分析本项目代码),"
             " **必须先用 shell_exec 读到真实文件内容再分析**, 严禁凭记忆编造代码/路径/bug;"
-            f" 读本项目源码用绝对路径(不要用占位符), 例 input_data={{\"command\": \"type {_READ_FILE_EXAMPLE}\"}} (Windows) 或 cat(Linux)\n"
+            f" 读当前项目源码用绝对路径(不要用占位符), 例 input_data={{\"command\": \"type {effective_read_example}\"}} (Windows) 或 cat(Linux)\n"
             "- 步骤数不超过 3 步\n"
             "\n"
             f"用户任务: {task}\n"
