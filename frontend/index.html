@@ -45,15 +45,6 @@
             </button>
             <!-- 真实 input 隐藏放这里, 兼容现有 JS 引用 (settings drawer 也会出现) -->
             <input id="tenant-input" type="text" placeholder="default" maxlength="32" hidden aria-hidden="true" />
-            <!-- Part B: 顶栏当前项目选择器 (随手切 Agent 作用域; 添加/管理在设置里) -->
-            <label class="tenant-chip-mini project-chip-mini" id="project-chip-mini"
-                   title="Agent 作用域: 当前分析/操作哪个项目 (添加项目在设置里)">
-                <span class="tenant-prefix">📁</span>
-                <select id="project-select-mini" aria-label="当前项目"
-                        style="background:transparent;border:none;color:inherit;font:inherit;outline:none;cursor:pointer;max-width:150px;">
-                    <option value="">Anything (默认)</option>
-                </select>
-            </label>
             <!-- Task XXXX (#112): health badge 缩成纯 dot, hover 显文字 -->
             <span class="health-badge compact" id="health-badge"
                   data-i18n-attr="title:health.checkAgain.title"
@@ -267,6 +258,15 @@
                         <button class="mode-tab" data-mode="hybrid" role="tab" aria-selected="false">Hybrid</button>
                     </div>
                     <div class="composer-extras">
+                        <!-- Part B: 当前项目作用域 (按会话; 这条对话 Agent 读/分析哪个项目)。添加/管理在设置里。 -->
+                        <label class="composer-project has-tip"
+                               data-tip="当前项目 (Agent 作用域): 这个对话让 Agent 读/分析哪个项目; 选 Anything = 改本系统自己。添加项目在设置里。">
+                            <span aria-hidden="true">📁</span>
+                            <select id="project-select-mini" aria-label="当前项目"
+                                    style="background:transparent;border:none;color:inherit;font:inherit;outline:none;cursor:pointer;max-width:150px;">
+                                <option value="">Anything (默认)</option>
+                            </select>
+                        </label>
                         <!-- Task JJJJ (#127): 加 data-tip 自绘 tooltip, 解释每个 toggle 啥用 -->
                         <!-- 主行: 流式 (常用) + 高级折叠器 -->
                         <label class="stream-toggle has-tip"
