@@ -775,6 +775,25 @@ class SimpleAgent(
         except Exception:
             pass  # fail-open: 沉淀永不影响主流程
 
+    def _extract_memory_async(self, task, final_answer, session_id, tenant_id, trace_id=None):
+        """流式收尾后台抽 fact 入长期记忆 (不阻塞 done)。同步 execute 是 inline 抽 (impl.py:571);
+        流式路径此前完全不抽 → "越用越懂你/使用者画像" 在网页(流式)路径不生效, 这里补齐。
+        async (daemon 线程) 跑, 与 _distill_skill_async 同样不增 done 延迟。全程 fail-open。"""
+        try:
+            if not (getattr(self, "memory_enabled", False)
+                    and getattr(self, "long_term_memory", None) is not None):
+                return
+            if not (task and final_answer and str(final_answer).strip()):
+                return
+            import threading
+            threading.Thread(
+                target=self._extract_and_store_memory,
+                args=(task, final_answer, session_id, tenant_id, trace_id),
+                daemon=True,
+            ).start()
+        except Exception:
+            pass  # fail-open: 抽取永不影响主流程
+
     def _distill_skill(self, task, tool_results, final_answer, trace_id=None):
         """LLM 从一次成功任务提炼一条可复用 skill 并写入 skill 库。去重 + 全程 fail-open。"""
         try:

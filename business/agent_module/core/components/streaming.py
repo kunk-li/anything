@@ -53,9 +53,11 @@ class StreamingMixin:
         augmented = task
         try:
             if getattr(self, "memory_enabled", False):
-                augmented, _hits = self._inject_long_term_memory(
-                    task, self._memory_tenant(request), trace_id,
-                )
+                _mt = self._memory_tenant(request)
+                augmented, _hits = self._inject_long_term_memory(task, _mt, trace_id)
+                # 全局常驻: 始终注入 [使用者画像] (越用越懂你) —— 此前流式直答只注了 query 相关
+                # fact, 漏了画像。与非流式 _pre_step_inject_profile 对齐。
+                augmented = self._inject_user_profile(augmented, _mt)
         except Exception:
             augmented = task
         # 2. 注入对话历史 (多轮上下文) — 修金鱼记忆. 读 state_store 最近 N 轮.
@@ -112,6 +114,15 @@ class StreamingMixin:
         # 到 state_store. _save_state_safe 会读老 events 并 append 这两条 (merge,
         # 不覆盖历史). 切会话/刷新页面时前端从后端拉, 不再丢失流式对话.
         self._persist_stream_answer(sid, task, "".join(buf), trace_id)
+        # 越用越懂你 (补流式缺口): 后台抽 fact 入长期记忆 (同步 execute 有, 流式直答之前漏了)。
+        # 用原始 task (本方法里 augmented 才是注入版, task 仍是原话)。
+        try:
+            self._extract_memory_async(
+                task=task, final_answer="".join(buf),
+                session_id=sid, tenant_id=self._memory_tenant(request), trace_id=trace_id,
+            )
+        except Exception:
+            pass
         yield {"type": "done", "code": "SUCCESS",
                "cost_time": round(time.time() - start_time, 3)}
         return True
@@ -215,6 +226,24 @@ class StreamingMixin:
             yield {"type": "error", "code": "AGENT_RUN_FAILED",
                    "message": "LLM 或 tool_registry 不可用"}
             return
+
+        # 全局常驻记忆 (补流式缺口): 流式 ReAct 也注入 [长期记忆] + [使用者画像] —— 与非流式
+        # _preprocess_task (_pre_step_inject_memory / _pre_step_inject_profile) 对齐。此前流式 ReAct
+        # 只拼了历史/附件, 漏了画像/记忆 → "全局应是使用者习惯(越用越懂你)" 这层在网页(流式)路径实际
+        # 缺席, 占着全局位置的反而只有项目 AGENTS.md。顺序对齐同步: 先长期记忆、再画像(画像更靠外),
+        # 历史前缀仍在最外层。纠正递归 (_skip_history_prefix) 跳过 (与同步一致)。
+        if (task and getattr(self, "memory_enabled", False)
+                and getattr(self, "long_term_memory", None) is not None
+                and not extra_params.get("_skip_history_prefix")):
+            _mem_tenant = self._memory_tenant(request)
+            try:
+                task, _ = self._inject_long_term_memory(task, _mem_tenant, trace_id)
+            except Exception as _me:
+                self.logger.warning(f"[memory] 流式 ReAct 注入长期记忆失败 (忽略): {_me}")
+            try:
+                task = self._inject_user_profile(task, _mem_tenant)
+            except Exception as _pe:
+                self.logger.warning(f"[profile] 流式 ReAct 注入画像失败 (忽略): {_pe}")
 
         # ZZ-5: 多轮上下文 — 流式 ReAct / plan 也注入对话历史 (默认流式 _run_stream_direct 已有,
         # 这里补上工具/计划场景, 否则 ReAct 仍是金鱼记忆).
@@ -540,6 +569,19 @@ class StreamingMixin:
                     task=request.get("task"),  # 原始 task (未拼历史前缀), 提炼更通用
                     tool_results=tool_results,
                     final_answer="".join(_streamed_text) or final_answer,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                pass
+
+            # 越用越懂你 (补流式缺口): 后台抽 fact 入长期记忆 — 同步 execute 有 (impl.py:571),
+            # 流式之前完全没抽, 导致网页用户怎么用画像都是空的。用原始 task (未拼记忆/画像/历史)。
+            try:
+                self._extract_memory_async(
+                    task=request.get("task"),
+                    final_answer="".join(_streamed_text) or final_answer,
+                    session_id=session_id,
+                    tenant_id=self._memory_tenant(request),
                     trace_id=trace_id,
                 )
             except Exception:
