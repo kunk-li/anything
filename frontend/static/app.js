@@ -25,6 +25,7 @@
         tenantInputDrawer: $('tenant-input-drawer'),
         // Part B: 多项目 当前项目选择器
         projectSelect: $('project-select'),
+        projectSelectMini: $('project-select-mini'),
         projectNameInput: $('project-name-input'),
         projectRootInput: $('project-root-input'),
         projectAddBtn: $('project-add-btn'),
@@ -199,6 +200,9 @@
         // Task FFFF (#123): 启动后拉一次 /agent/tools, 让 "工具调用" tab 空态时
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
+
+        // Part B: 启动后拉项目清单填顶栏"当前项目"下拉 (随手可切作用域)。
+        setTimeout(loadProjects, 700);
 
         // Task PM-7-5: 检测 ?share=<sid> → 进入 read-only 模式
         const shareParam = new URLSearchParams(location.search).get('share');
@@ -1459,9 +1463,36 @@
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
     }
 
-    // Part B: 拉项目清单填充"当前项目"下拉 (含默认 "本系统 Anything" 选项)。
+    // Part B: 设当前项目作用域 — 同步两个下拉 (顶栏 mini + 设置抽屉) + 持久化。
+    function setActiveProject(root) {
+        state.settings.activeProjectRoot = root || '';
+        _persistSettings();
+        if (els.projectSelect) els.projectSelect.value = state.settings.activeProjectRoot;
+        if (els.projectSelectMini) els.projectSelectMini.value = state.settings.activeProjectRoot;
+    }
+
+    // 填充一个项目下拉。fullLabel: 设置抽屉里带路径详情; 顶栏 mini 只显项目名 (省地方)。
+    function _fillProjectSelect(selectEl, items, fullLabel) {
+        if (!selectEl) return;
+        selectEl.innerHTML = '';
+        const optDefault = document.createElement('option');
+        optDefault.value = '';
+        optDefault.textContent = fullLabel ? '本系统 Anything (默认)' : 'Anything (默认)';
+        selectEl.appendChild(optDefault);
+        for (const it of items) {
+            const o = document.createElement('option');
+            o.value = it.root_path || '';
+            if (it.id) o.dataset.projId = it.id;
+            o.textContent = fullLabel
+                ? `${it.name} — ${it.root_path}${it.has_project_memory ? '' : ' (无 AGENTS.md)'}`
+                : it.name;
+            selectEl.appendChild(o);
+        }
+    }
+
+    // Part B: 拉项目清单填充"当前项目"下拉 (顶栏 mini + 设置抽屉, 含默认 Anything 项)。
     async function loadProjects() {
-        if (!els.projectSelect) return;
+        if (!els.projectSelect && !els.projectSelectMini) return;
         const tenant = state.settings.tenant || 'default';
         let items = [];
         try {
@@ -1470,26 +1501,17 @@
                 items = (payload.data && payload.data.items) || [];
             }
         } catch (_) {}
-        els.projectSelect.innerHTML = '';
-        const optDefault = document.createElement('option');
-        optDefault.value = '';
-        optDefault.textContent = '本系统 Anything (默认)';
-        els.projectSelect.appendChild(optDefault);
-        for (const it of items) {
-            const o = document.createElement('option');
-            o.value = it.root_path || '';
-            if (it.id) o.dataset.projId = it.id;
-            o.textContent = `${it.name} — ${it.root_path}${it.has_project_memory ? '' : ' (无 AGENTS.md)'}`;
-            els.projectSelect.appendChild(o);
-        }
+        _fillProjectSelect(els.projectSelect, items, true);
+        _fillProjectSelect(els.projectSelectMini, items, false);
+        // 选中的项目已不在列表 (被删) → 回退默认并清掉失效持久化值
         const cur = state.settings.activeProjectRoot || '';
-        // 选中的项目还在列表 → 选它; 否则回退默认并清掉失效的持久化值
-        if (cur && items.some(it => (it.root_path || '') === cur)) {
-            els.projectSelect.value = cur;
-        } else {
-            if (cur) { state.settings.activeProjectRoot = ''; _persistSettings(); }
-            els.projectSelect.value = '';
+        if (cur && !items.some(it => (it.root_path || '') === cur)) {
+            state.settings.activeProjectRoot = '';
+            _persistSettings();
         }
+        const v = state.settings.activeProjectRoot || '';
+        if (els.projectSelect) els.projectSelect.value = v;
+        if (els.projectSelectMini) els.projectSelectMini.value = v;
     }
 
     function persistHistory() {
@@ -1787,12 +1809,12 @@
             });
         }
 
-        // Part B: 当前项目选择器 — 选中即生效并持久化 (作用域立刻切, 不必点保存)
+        // Part B: 当前项目选择器 — 选中即生效并持久化 (作用域立刻切, 不必点保存); 顶栏 mini 与设置抽屉双向同步
         if (els.projectSelect) {
-            els.projectSelect.addEventListener('change', () => {
-                state.settings.activeProjectRoot = els.projectSelect.value || '';
-                _persistSettings();
-            });
+            els.projectSelect.addEventListener('change', () => setActiveProject(els.projectSelect.value));
+        }
+        if (els.projectSelectMini) {
+            els.projectSelectMini.addEventListener('change', () => setActiveProject(els.projectSelectMini.value));
         }
         if (els.projectAddBtn) {
             els.projectAddBtn.addEventListener('click', async () => {

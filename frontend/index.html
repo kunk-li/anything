@@ -45,6 +45,15 @@
             </button>
             <!-- 真实 input 隐藏放这里, 兼容现有 JS 引用 (settings drawer 也会出现) -->
             <input id="tenant-input" type="text" placeholder="default" maxlength="32" hidden aria-hidden="true" />
+            <!-- Part B: 顶栏当前项目选择器 (随手切 Agent 作用域; 添加/管理在设置里) -->
+            <label class="tenant-chip-mini project-chip-mini" id="project-chip-mini"
+                   title="Agent 作用域: 当前分析/操作哪个项目 (添加项目在设置里)">
+                <span class="tenant-prefix">📁</span>
+                <select id="project-select-mini" aria-label="当前项目"
+                        style="background:transparent;border:none;color:inherit;font:inherit;outline:none;cursor:pointer;max-width:150px;">
+                    <option value="">Anything (默认)</option>
+                </select>
+            </label>
             <!-- Task XXXX (#112): health badge 缩成纯 dot, hover 显文字 -->
             <span class="health-badge compact" id="health-badge"
                   data-i18n-attr="title:health.checkAgain.title"
