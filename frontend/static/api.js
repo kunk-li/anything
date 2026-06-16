@@ -551,6 +551,10 @@ const ApiClient = (() => {
         deleteKB,
         addDocsToKB,
         removeDocFromKB,
+        // Part B: 多项目
+        listProjects,
+        createProject,
+        deleteProject,
     };
 
     async function submitFeedback(body) {
@@ -585,6 +589,17 @@ const ApiClient = (() => {
     async function removeDocFromKB(kbId, docId) {
         return _doFetch('DELETE',
             `/kb/${encodeURIComponent(kbId)}/docs/${encodeURIComponent(docId)}`);
+    }
+
+    // Part B: 多项目 (workspace) 注册表
+    async function listProjects(tenant = 'default') {
+        return _doFetch('GET', `/projects?tenant=${encodeURIComponent(tenant)}`);
+    }
+    async function createProject(name, rootPath, tenant = 'default') {
+        return _doFetch('POST', '/projects', { body: { name, root_path: rootPath, tenant_id: tenant } });
+    }
+    async function deleteProject(projId) {
+        return _doFetch('DELETE', `/projects/${encodeURIComponent(projId)}`);
     }
 })();
 

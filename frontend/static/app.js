@@ -23,6 +23,12 @@
         tenantChipMini: $('tenant-chip-mini'),
         tenantValue: $('tenant-value'),
         tenantInputDrawer: $('tenant-input-drawer'),
+        // Part B: 多项目 当前项目选择器
+        projectSelect: $('project-select'),
+        projectNameInput: $('project-name-input'),
+        projectRootInput: $('project-root-input'),
+        projectAddBtn: $('project-add-btn'),
+        projectDelBtn: $('project-del-btn'),
         healthBadge: $('health-badge'),
         healthDot: $('health-dot'),
         healthText: $('health-text'),
@@ -156,6 +162,7 @@
             apiKey: 'dev_api_key_1_change_in_prod',
             sessionId: '',
             tenant: 'default',
+            activeProjectRoot: '',  // Part B: 当前项目作用域根 (空 = 本系统 Anything 默认)
             useStream: false,
             theme: 'light',  // Task NNNN (#131): dark/light/auto — 默认暖奶油浅色
         },
@@ -1448,6 +1455,43 @@
         closeDrawer('settings');
     }
 
+    function _persistSettings() {
+        try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
+    }
+
+    // Part B: 拉项目清单填充"当前项目"下拉 (含默认 "本系统 Anything" 选项)。
+    async function loadProjects() {
+        if (!els.projectSelect) return;
+        const tenant = state.settings.tenant || 'default';
+        let items = [];
+        try {
+            const { payload, status } = await ApiClient.listProjects(tenant);
+            if (status === 200 && payload && payload.code === 'SUCCESS') {
+                items = (payload.data && payload.data.items) || [];
+            }
+        } catch (_) {}
+        els.projectSelect.innerHTML = '';
+        const optDefault = document.createElement('option');
+        optDefault.value = '';
+        optDefault.textContent = '本系统 Anything (默认)';
+        els.projectSelect.appendChild(optDefault);
+        for (const it of items) {
+            const o = document.createElement('option');
+            o.value = it.root_path || '';
+            if (it.id) o.dataset.projId = it.id;
+            o.textContent = `${it.name} — ${it.root_path}${it.has_project_memory ? '' : ' (无 AGENTS.md)'}`;
+            els.projectSelect.appendChild(o);
+        }
+        const cur = state.settings.activeProjectRoot || '';
+        // 选中的项目还在列表 → 选它; 否则回退默认并清掉失效的持久化值
+        if (cur && items.some(it => (it.root_path || '') === cur)) {
+            els.projectSelect.value = cur;
+        } else {
+            if (cur) { state.settings.activeProjectRoot = ''; _persistSettings(); }
+            els.projectSelect.value = '';
+        }
+    }
+
     function persistHistory() {
         // 修复 (多会话幽灵历史): 不再写全局 anything_history key.
         // 历史持久化交给后端 (state_store + events append). 切会话拉真实 history.
@@ -1743,6 +1787,49 @@
             });
         }
 
+        // Part B: 当前项目选择器 — 选中即生效并持久化 (作用域立刻切, 不必点保存)
+        if (els.projectSelect) {
+            els.projectSelect.addEventListener('change', () => {
+                state.settings.activeProjectRoot = els.projectSelect.value || '';
+                _persistSettings();
+            });
+        }
+        if (els.projectAddBtn) {
+            els.projectAddBtn.addEventListener('click', async () => {
+                const name = (els.projectNameInput && els.projectNameInput.value || '').trim();
+                const root = (els.projectRootInput && els.projectRootInput.value || '').trim();
+                if (!name || !root) { toast('error', '缺少信息', '请填项目名和项目根绝对路径'); return; }
+                const { payload, status } = await ApiClient.createProject(name, root, state.settings.tenant || 'default');
+                if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
+                    toast('error', payload && payload.code || status, payload && payload.message || '添加项目失败');
+                    return;
+                }
+                if (els.projectNameInput) els.projectNameInput.value = '';
+                if (els.projectRootInput) els.projectRootInput.value = '';
+                // 新增即设为当前项目
+                state.settings.activeProjectRoot = (payload.data && payload.data.root_path) || root;
+                _persistSettings();
+                await loadProjects();
+                toast('success', '已添加项目', name);
+            });
+        }
+        if (els.projectDelBtn) {
+            els.projectDelBtn.addEventListener('click', async () => {
+                const opt = els.projectSelect && els.projectSelect.selectedOptions[0];
+                const pid = opt && opt.dataset && opt.dataset.projId;
+                if (!pid) { toast('error', '无法删除', '当前选的是"本系统 Anything (默认)", 不是已注册项目'); return; }
+                const { payload, status } = await ApiClient.deleteProject(pid);
+                if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
+                    toast('error', payload && payload.code || status, payload && payload.message || '删除失败');
+                    return;
+                }
+                state.settings.activeProjectRoot = '';
+                _persistSettings();
+                await loadProjects();
+                toast('success', '已删除项目', '');
+            });
+        }
+
         // 流式开关持久化
         if (els.streamToggle) {
             els.streamToggle.addEventListener('change', () => {
@@ -1807,6 +1894,8 @@
             loadModels();
             // Task XXXX-20 (#164): 同时刷 chat 模型 picker
             _loadChatModelPicker();
+            // Part B: 刷新当前项目下拉
+            loadProjects();
         });
         // Task XXXX-20 (#164): chat 模型 picker change
         const chatModelSelect = document.getElementById('chat-model-select');
@@ -2122,6 +2211,14 @@
         }
 
         const body = { type: mode, top_k: topK, tenant_id: tenant };
+
+        // Part B: 当前项目作用域 → extra_params.active_project_root (空则后端回退本系统 Anything)。
+        // Agent 据此把读码根/项目记忆对准所选项目; 与全局使用者画像无关。
+        const _projRoot = (state.settings.activeProjectRoot || '').trim();
+        if (_projRoot) {
+            body.extra_params = body.extra_params || {};
+            body.extra_params.active_project_root = _projRoot;
+        }
 
         // Task X (#58): plan mode 注入到 extra_params 让 Agent 走 plan_only 分支
         const planMode = !!(els.planToggle && els.planToggle.checked);
