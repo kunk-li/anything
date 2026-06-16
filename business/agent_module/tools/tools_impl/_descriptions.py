@@ -60,9 +60,10 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
     ),
     "code_lint": (
         "代码语法检查 (静态, 不执行), 不联网。"
-        ' input: {"code": str, "language": "python"|"json"|"yaml"|"sql"}.'
-        " 返回 valid + 行列号 + 错误描述。"
-        " 适合: 用户/LLM 输出代码前做合法性校验。"
+        ' input: {"path": str(文件路径), "code": str, "language": "python"|"json"|"yaml"|"sql"}'
+        " —— path 与 code 二选一。**检查本项目/磁盘上某个源码文件时优先传 path**: 工具直接读真实"
+        "文件再查, 别把文件内容抄进 code(抄长文件易截断/抄错, 会误报语法错)。语言不传时按扩展名推断。"
+        " 返回 valid + 行列号 + 错误描述。适合: 校验某文件或一段代码语法是否合法。"
     ),
     "email_send": (
         "通过 SMTP 发邮件。需要后端注入 smtp 配置 (host/port/user/password/from_addr)。"
