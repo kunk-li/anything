@@ -45,6 +45,71 @@ _DEFAULT_CANDIDATES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# 工作区根安全校验 (服务器目录选择限制)
+#
+# 两道闸, 在所有"把某目录当工作区"的服务器消费端统一调用 (shell_exec 的 CWD /
+# 目录浏览 / 项目注册 / 本函数的项目记忆加载) —— 因为 active_project_root 是前端
+# 可传的任意字符串, 只限制浏览器 UI 是安全表演, 真正的边界必须落在服务器侧。
+#
+#   ① 防手滑护栏 (始终生效): 盘符根 / 文件系统根 (C:\ 或 /) 不可作工作区
+#      —— 按"父目录 == 自身"能力判定, 不是维护系统目录黑名单。
+#   ② 配置式 jail (仅当 env ANYTHING_FS_ROOT 已设): 工作区根必须落在该沙箱根内。
+#      不设 = 不开 jail (localhost 全盘自由, 零行为变化); 部署到服务器时一设即生效。
+#
+# 防逃逸: 先 realpath 解析符号链接/junction/.. 再比对, 否则共享内的恶意软链可绕过。
+# ---------------------------------------------------------------------------
+
+def get_fs_root() -> Optional[str]:
+    """沙箱根 (env ANYTHING_FS_ROOT) 的规范化绝对路径; 未设/无效 -> None = 不开 jail。"""
+    raw = (os.environ.get("ANYTHING_FS_ROOT") or "").strip()
+    if not raw:
+        return None
+    try:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(raw)))
+    except Exception:
+        return None
+
+
+def _is_fs_root(path: str) -> bool:
+    """path 是否是盘符根 / 文件系统根 (C:\\ 、D:\\ 、/)。按"父 == 自身"判定, 不枚举。"""
+    return os.path.dirname(path) == path
+
+
+def validate_workspace_root(
+    raw: Optional[str], *, for_browse: bool = False
+) -> Tuple[Optional[str], Optional[str]]:
+    """校验一个"工作区根 / 浏览目标"路径是否可接受。
+
+    返回 (normalized_abspath, reason):
+        - (None, None)  : raw 为空 —— 没指定, 调用方回退默认 (不是错误)。
+        - (None, reason): 被拒, reason ∈ {'not_a_dir', 'drive_root', 'outside_jail'}。
+        - (norm, None)  : 通过, norm 是 realpath 规范化后的绝对路径。
+
+    for_browse=True: 跳过"盘符根"护栏 (浏览盘符根是正常的目录导航), 仅保留存在性 + jail。
+    """
+    if not raw or not str(raw).strip():
+        return None, None
+    try:
+        norm = os.path.realpath(os.path.abspath(os.path.expanduser(str(raw).strip())))
+    except Exception:
+        return None, "not_a_dir"
+    if not os.path.isdir(norm):
+        return None, "not_a_dir"
+    if not for_browse and _is_fs_root(norm):
+        return None, "drive_root"
+    fs_root = get_fs_root()
+    if fs_root:
+        nc_root = os.path.normcase(fs_root)
+        try:
+            if os.path.commonpath([os.path.normcase(norm), nc_root]) != nc_root:
+                return None, "outside_jail"
+        except ValueError:
+            # 不同盘符 (Windows) / 无公共前缀 -> 必在 jail 外
+            return None, "outside_jail"
+    return norm, None
+
+
 class ProjectMemory:
     """项目级记忆: 读 AGENTS.md / CLAUDE.md, 按 mtime 热刷新."""
 
@@ -183,10 +248,11 @@ def load_project_memory_for_root(root: Optional[str]) -> str:
     超 8000 字截断。给 Agent 提示词按"当前项目"注入项目记忆用 (见 prompt_builder._build_react_prompt)。"""
     if not root:
         return get_project_memory().load()
-    try:
-        base = Path(root).expanduser()
-    except Exception:
+    # 越界/盘符根/不存在 -> 不读它的 AGENTS.md (与 shell_exec/浏览器同一道闸)。
+    norm, why = validate_workspace_root(root)
+    if why is not None:
         return ""
+    base = Path(norm)
     key = str(base)
     with _root_memory_lock:
         path: Optional[Path] = None

@@ -22,6 +22,9 @@ from common_utils_module import (
     ProjectMemory,
     get_project_memory,
     reset_project_memory,
+    load_project_memory_for_root,
+    validate_workspace_root,
+    get_fs_root,
 )
 
 
@@ -128,6 +131,102 @@ class TestProjectMemory(unittest.TestCase):
         path, n = mem.info()
         self.assertEqual(path, str(p))
         self.assertEqual(n, 5)
+
+
+def _fs_root_of(p) -> str:
+    """p 所在的盘符根 / 文件系统根 (跨平台): Windows 'C:\\', posix '/'。"""
+    drive, _ = os.path.splitdrive(os.path.abspath(str(p)))
+    return (drive + os.sep) if drive else os.sep
+
+
+class TestValidateWorkspaceRoot(unittest.TestCase):
+    """工作区根校验: 防手滑护栏(盘符根) + 配置式 jail(ANYTHING_FS_ROOT)。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        self.outside = tempfile.TemporaryDirectory()
+        self.outside_path = Path(self.outside.name)
+        os.environ.pop("ANYTHING_FS_ROOT", None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        self.outside.cleanup()
+        os.environ.pop("ANYTHING_FS_ROOT", None)
+
+    def _nc(self, p):
+        return os.path.normcase(os.path.realpath(str(p)))
+
+    # ---- 基础: 空 / 存在性 ----
+    def test_empty_is_no_workspace_not_error(self):
+        for raw in ("", None, "   "):
+            norm, why = validate_workspace_root(raw)
+            self.assertIsNone(norm)
+            self.assertIsNone(why)   # 空 = 没指定, 不是错误
+
+    def test_valid_dir_returns_realpath(self):
+        norm, why = validate_workspace_root(str(self.tmp_path))
+        self.assertIsNone(why)
+        self.assertEqual(os.path.normcase(norm), self._nc(self.tmp_path))
+
+    def test_nonexistent_is_not_a_dir(self):
+        norm, why = validate_workspace_root(str(self.tmp_path / "nope"))
+        self.assertIsNone(norm)
+        self.assertEqual(why, "not_a_dir")
+
+    # ---- 防手滑护栏: 盘符根 ----
+    def test_drive_root_rejected_as_workspace(self):
+        norm, why = validate_workspace_root(_fs_root_of(self.tmp_path))
+        self.assertIsNone(norm)
+        self.assertEqual(why, "drive_root")
+
+    def test_drive_root_allowed_for_browse(self):
+        # 浏览盘符根是正常导航, 不该被护栏拦
+        norm, why = validate_workspace_root(_fs_root_of(self.tmp_path), for_browse=True)
+        self.assertIsNone(why)
+        self.assertIsNotNone(norm)
+
+    # ---- 配置式 jail ----
+    def test_jail_off_by_default(self):
+        self.assertIsNone(get_fs_root())   # 没设环境变量 → 不开 jail
+        # 任意存在目录(非盘符根)都放行
+        norm, why = validate_workspace_root(str(self.outside_path))
+        self.assertIsNone(why)
+
+    def test_jail_allows_inside_and_root_itself(self):
+        os.environ["ANYTHING_FS_ROOT"] = str(self.tmp_path)
+        sub = self.tmp_path / "proj"
+        sub.mkdir()
+        for target in (self.tmp_path, sub):
+            norm, why = validate_workspace_root(str(target))
+            self.assertIsNone(why, f"{target} 应在 jail 内")
+
+    def test_jail_blocks_outside(self):
+        os.environ["ANYTHING_FS_ROOT"] = str(self.tmp_path)
+        norm, why = validate_workspace_root(str(self.outside_path))
+        self.assertIsNone(norm)
+        self.assertEqual(why, "outside_jail")
+
+    def test_jail_blocks_symlink_escape(self):
+        os.environ["ANYTHING_FS_ROOT"] = str(self.tmp_path)
+        link = self.tmp_path / "escape"
+        try:
+            os.symlink(str(self.outside_path), str(link), target_is_directory=True)
+        except (OSError, NotImplementedError, AttributeError):
+            self.skipTest("symlink 不可用 (权限/平台)")
+        # realpath 在校验前解析软链 → 指向 jail 外 → 拦
+        norm, why = validate_workspace_root(str(link))
+        self.assertEqual(why, "outside_jail")
+
+    # ---- 与 load_project_memory_for_root 同一道闸 ----
+    def test_memory_load_respects_jail(self):
+        (self.outside_path / "AGENTS.md").write_text("outside-rules", encoding="utf-8")
+        (self.tmp_path / "AGENTS.md").write_text("inside-rules", encoding="utf-8")
+        os.environ["ANYTHING_FS_ROOT"] = str(self.tmp_path)
+        # jail 外的 AGENTS.md 不读
+        self.assertEqual(load_project_memory_for_root(str(self.outside_path)), "")
+        # jail 内正常读
+        self.assertEqual(load_project_memory_for_root(str(self.tmp_path)), "inside-rules")
 
 
 if __name__ == "__main__":

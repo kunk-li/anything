@@ -10,6 +10,8 @@ from project_memory_module.impl import (
     get_project_memory,
     reset_project_memory,
     load_project_memory_for_root,
+    validate_workspace_root,
+    get_fs_root,
 )
 
 __all__ = [
@@ -17,4 +19,6 @@ __all__ = [
     "get_project_memory",
     "reset_project_memory",
     "load_project_memory_for_root",
+    "validate_workspace_root",
+    "get_fs_root",
 ]

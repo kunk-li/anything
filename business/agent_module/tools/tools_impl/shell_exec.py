@@ -34,6 +34,8 @@ import shlex
 import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from project_memory_module.impl import validate_workspace_root
+
 _IS_WINDOWS = sys.platform.startswith("win")
 _RUN_TIMEOUT_DEFAULT = 30
 _RUN_TIMEOUT_MAX = 120
@@ -223,20 +225,30 @@ def make_shell_exec_tool(
 
         # 工作区: 当前项目根 (extra_params.active_project_root) 作 CWD → 命令在那里跑, 相对路径
         # 读写都落进项目 (产物按约定写 outputs/)。没设/非目录 → None = 进程默认 CWD (run/)。
+        # active_project_root 是前端可传的任意字符串, 这里是真正的服务器侧边界:
+        # validate_workspace_root 挡住盘符根/系统根 (防手滑) + ANYTHING_FS_ROOT 沙箱外 (若设)。
+        # 提供了根但被拒 → 回退默认 CWD, 与"非目录→None"的既有行为一致, 不中断执行。
         _root = extra.get("active_project_root")
-        _cwd = _root if (_root and os.path.isdir(str(_root))) else None
+        _cwd, _root_reject = validate_workspace_root(_root)
 
         be = backend if backend is not None else _RealShell()
         rc, out = be.run(cmd, timeout, cwd=_cwd)
         _audit(cmd, level, reason, executed=True, trace_id=trace_id)
         truncated = len(out) > _OUTPUT_CAP
-        return _ok({
+        _data = {
             "command": cmd, "risk": level, "risk_reason": reason,
             "returncode": rc,
             "cwd": _cwd,
             "output": out[:_OUTPUT_CAP],
             "output_truncated": truncated,
-        }, trace_id)
+        }
+        if _root and _root_reject:
+            _data["workspace_note"] = {
+                "drive_root": "active_project_root 是盘符根/系统根, 已忽略, 命令在默认目录执行",
+                "outside_jail": "active_project_root 不在允许范围 (ANYTHING_FS_ROOT) 内, 已忽略",
+                "not_a_dir": "active_project_root 不是存在的目录, 已忽略",
+            }.get(_root_reject, "active_project_root 被拒, 已忽略")
+        return _ok(_data, trace_id)
 
     return shell_exec
 

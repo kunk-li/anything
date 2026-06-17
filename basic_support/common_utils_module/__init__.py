@@ -11,6 +11,7 @@ from .core.impl import CommonUtils
 from .utils.project_memory import (
     ProjectMemory, get_project_memory, reset_project_memory,
     load_project_memory_for_root,
+    validate_workspace_root, get_fs_root,
 )
 from .utils.hooks import (
     BlockedError,
@@ -44,6 +45,7 @@ __all__ = [
     "BaseUtils", "CommonUtils",
     "ProjectMemory", "get_project_memory", "reset_project_memory",
     "load_project_memory_for_root",
+    "validate_workspace_root", "get_fs_root",
     "BlockedError", "HookRegistry", "get_hook_registry", "reset_hook_registry",
     "Skill", "SkillRegistry", "get_skill_registry", "reset_skill_registry",
     "inject_skills_into_prompt",

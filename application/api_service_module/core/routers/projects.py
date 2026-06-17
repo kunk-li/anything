@@ -28,6 +28,8 @@ from typing import Any, Dict
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from project_memory_module.impl import validate_workspace_root, get_fs_root
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
@@ -72,17 +74,30 @@ _MAX_DIRS = 1000
 
 
 def _browse_dir(raw: str) -> Dict[str, Any]:
-    """只读列目录给前端目录浏览器。raw 空 → 盘符(Windows)/根(posix); 否则列子目录(不列文件)。
+    """只读列目录给前端目录浏览器。raw 空 → 盘符(Windows)/根(posix)/沙箱根(设了 jail);
+    否则列子目录(不列文件)。设了 ANYTHING_FS_ROOT 时, 浏览被钉死在沙箱根内 (越界 → PermissionError)。
     可能抛 OSError 子类 (PermissionError/FileNotFoundError/NotADirectoryError), 由路由转 HTTP 码。"""
     raw = (raw or "").strip()
+    fs_root = get_fs_root()
     if not raw:
-        if os.name == "nt":
+        if fs_root:
+            base = fs_root          # jail 开: 空 → 列沙箱根本身, 不暴露盘符
+        elif os.name == "nt":
             drives = [{"name": f"{d}:\\", "path": f"{d}:\\", "has_project_memory": False}
                       for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
             return {"path": "", "parent": None, "is_root": True,
                     "dirs": drives, "has_project_memory": False}
-        raw = "/"
-    base = os.path.abspath(os.path.expanduser(raw))
+        else:
+            base = "/"
+    else:
+        # 浏览模式: 盘符根可列 (导航需要), 但 jail 边界仍生效。
+        norm, why = validate_workspace_root(raw, for_browse=True)
+        if why == "outside_jail":
+            raise PermissionError(raw)
+        if why is not None:
+            raise NotADirectoryError(raw)
+        base = norm
+    base = os.path.abspath(os.path.expanduser(base))
     if not os.path.isdir(base):
         raise NotADirectoryError(base)
     dirs = []
@@ -97,7 +112,9 @@ def _browse_dir(raw: str) -> Dict[str, Any]:
         except OSError:
             continue
     parent = os.path.dirname(base)
-    if parent == base:  # 盘符根 / posix '/' → 上一级回到盘符列表(Windows)或无上级(posix)
+    if fs_root and os.path.normcase(base) == os.path.normcase(fs_root):
+        parent = None  # jail 开: 到沙箱根就到顶, 不让 ⬆ 爬出去
+    elif parent == base:  # 盘符根 / posix '/' → 上一级回到盘符列表(Windows)或无上级(posix)
         parent = "" if os.name == "nt" else None
     return {"path": base, "parent": parent, "is_root": False,
             "dirs": dirs, "has_project_memory": _has_memory_file(base)}
@@ -132,16 +149,22 @@ class ProjectsRoutesMixin:
             root_path = (body.get("root_path") or "").strip()
             if not root_path:
                 return _bad(trace_id, "root_path 必填 (项目在文件系统的根目录绝对路径)")
-            # 校验是真实目录 (绝对化后存); Agent 会按这个根 dir/type 读码, 非目录直接拒。
+            # 同一道闸: 真实目录 + 非盘符根/系统根(防手滑) + ANYTHING_FS_ROOT 沙箱内(若设)。
             abs_root = os.path.abspath(os.path.expanduser(root_path))
-            if not os.path.isdir(abs_root):
+            norm, why = validate_workspace_root(root_path)
+            if why is not None:
+                msg = {
+                    "not_a_dir": f"root_path 不是一个存在的目录: {abs_root}",
+                    "drive_root": f"不能把盘符根/系统根目录设为工作区: {abs_root}",
+                    "outside_jail": f"该目录不在允许的工作区范围 (ANYTHING_FS_ROOT) 内: {abs_root}",
+                }.get(why, f"root_path 无效: {abs_root}")
                 return JSONResponse(
-                    {"code": "PARAM_INVALID",
-                     "message": f"root_path 不是一个存在的目录: {abs_root}",
+                    {"code": "PARAM_INVALID", "message": msg,
                      "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": {"root_path": abs_root}},
+                     "retryable": False, "details": {"root_path": abs_root, "reason": why}},
                     status_code=400,
                 )
+            abs_root = norm  # 用规范化后的根做去重/存储
             tenant_id = (body.get("tenant_id") or "default").strip() or "default"
             proj_id = "proj_" + uuid.uuid4().hex[:12]
             now = int(time.time())
