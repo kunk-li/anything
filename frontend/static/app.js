@@ -24,12 +24,8 @@
         tenantValue: $('tenant-value'),
         tenantInputDrawer: $('tenant-input-drawer'),
         // Part B: 多项目 当前项目选择器
-        projectSelect: $('project-select'),
+        projectSelect: $('project-select'),   // 设置抽屉里那个已删 → null; 引用处都有 if 守卫
         projectSelectMini: $('project-select-mini'),
-        projectNameInput: $('project-name-input'),
-        projectRootInput: $('project-root-input'),
-        projectAddBtn: $('project-add-btn'),
-        projectDelBtn: $('project-del-btn'),
         // 就地添加项目小框 (composer 上方弹出)
         projAddPop: $('project-add-pop'),
         projPopName: $('proj-pop-name'),
@@ -1576,18 +1572,47 @@
         toast('success', '已添加项目', name);
     }
 
-    // 下拉 change 统一入口: 选了 "➕ 添加项目…" → 开添加流程 (不当成选中); 否则按会话设作用域。
+    // 下拉 change 统一入口: ➕ 添加 / 🗑 删除 当成动作(不当成选中); 否则按会话设作用域。
     function _onProjectSelectChange(value) {
         if (value === '__add_new__') {
-            _syncProjectSelector();   // 把下拉还原到当前项目, 不让它停在"添加项目"上
+            _syncProjectSelector();   // 还原下拉到当前项目, 不停在"添加项目"上
             _openProjectAdd();
+            return;
+        }
+        if (value === '__delete_current__') {
+            _syncProjectSelector();
+            _deleteCurrentProject();
             return;
         }
         setActiveProject(value);
     }
 
-    // 填充一个项目下拉。fullLabel: 设置抽屉里带路径详情; 顶栏 mini 只显项目名 (省地方)。
-    function _fillProjectSelect(selectEl, items, fullLabel) {
+    // 删除"当前选中的"项目 (从下拉的 🗑 删除「name」进来)。只删登记, 不动磁盘文件。
+    async function _deleteCurrentProject() {
+        const root = getActiveProject();
+        if (!root) return;
+        const tenant = state.settings.tenant || 'default';
+        let pid = null, name = root;
+        try {
+            const { payload } = await ApiClient.listProjects(tenant);
+            const it = ((payload && payload.data && payload.data.items) || []).find(x => (x.root_path || '') === root);
+            if (it) { pid = it.id; name = it.name; }
+        } catch (_) {}
+        if (!pid) { toast('error', '删不了', '没找到这个项目'); return; }
+        if (!window.confirm(`从列表删除项目「${name}」?\n(只删登记, 不动磁盘上的文件)`)) return;
+        const { payload, status } = await ApiClient.deleteProject(pid);
+        if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
+            toast('error', (payload && payload.code) || status, (payload && payload.message) || '删除失败');
+            return;
+        }
+        setActiveProject('');   // 回退默认 Anything
+        await loadProjects();
+        toast('success', '已删除项目', name);
+    }
+
+    // 填充项目下拉。fullLabel: 带路径详情(已不用, 设置里那个已删); mini 只显项目名。
+    // curRoot: 当前选中的项目根 — 选中已注册项目时, 末尾追加"删除当前项目"入口。
+    function _fillProjectSelect(selectEl, items, fullLabel, curRoot) {
         if (!selectEl) return;
         selectEl.innerHTML = '';
         const optDefault = document.createElement('option');
@@ -1603,11 +1628,19 @@
                 : it.name;
             selectEl.appendChild(o);
         }
-        // 入口: 让用户在下拉里就能"添加项目" (否则空下拉只有 Anything, 不知道怎么加别的 → 等于没用)。
+        // 添加入口 (空下拉时也能加项目)
         const optAdd = document.createElement('option');
         optAdd.value = '__add_new__';
         optAdd.textContent = '➕ 添加项目…';
         selectEl.appendChild(optAdd);
+        // 删除入口: 仅当前选中的是个已注册项目时给 (不动 "Anything 默认")
+        const curItem = curRoot ? items.find(it => (it.root_path || '') === curRoot) : null;
+        if (curItem) {
+            const optDel = document.createElement('option');
+            optDel.value = '__delete_current__';
+            optDel.textContent = `🗑 删除「${curItem.name}」`;
+            selectEl.appendChild(optDel);
+        }
     }
 
     // Part B: 拉项目清单填充"当前项目"下拉 (顶栏 mini + 设置抽屉, 含默认 Anything 项)。
@@ -1621,10 +1654,10 @@
                 items = (payload.data && payload.data.items) || [];
             }
         } catch (_) {}
-        _fillProjectSelect(els.projectSelect, items, true);
-        _fillProjectSelect(els.projectSelectMini, items, false);
-        // 当前会话绑定的项目已不在列表 (被删) → 该会话回退默认
         const cur = getActiveProject();
+        _fillProjectSelect(els.projectSelect, items, true, cur);
+        _fillProjectSelect(els.projectSelectMini, items, false, cur);
+        // 当前会话绑定的项目已不在列表 (被删) → 该会话回退默认
         if (cur && !items.some(it => (it.root_path || '') === cur)) {
             const m = state.settings.projectBySession || {};
             delete m[state.settings.sessionId];
@@ -1935,41 +1968,7 @@
         if (els.projectSelectMini) {
             els.projectSelectMini.addEventListener('change', () => _onProjectSelectChange(els.projectSelectMini.value));
         }
-        if (els.projectAddBtn) {
-            els.projectAddBtn.addEventListener('click', async () => {
-                const name = (els.projectNameInput && els.projectNameInput.value || '').trim();
-                const root = (els.projectRootInput && els.projectRootInput.value || '').trim();
-                if (!name || !root) { toast('error', '缺少信息', '请填项目名和项目根绝对路径'); return; }
-                const { payload, status } = await ApiClient.createProject(name, root, state.settings.tenant || 'default');
-                if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
-                    toast('error', payload && payload.code || status, payload && payload.message || '添加项目失败');
-                    return;
-                }
-                if (els.projectNameInput) els.projectNameInput.value = '';
-                if (els.projectRootInput) els.projectRootInput.value = '';
-                // 新增即设为**当前会话**的项目
-                setActiveProject((payload.data && payload.data.root_path) || root);
-                await loadProjects();
-                toast('success', '已添加项目', name);
-            });
-        }
-        if (els.projectDelBtn) {
-            els.projectDelBtn.addEventListener('click', async () => {
-                const opt = els.projectSelect && els.projectSelect.selectedOptions[0];
-                const pid = opt && opt.dataset && opt.dataset.projId;
-                if (!pid) { toast('error', '无法删除', '当前选的是"本系统 Anything (默认)", 不是已注册项目'); return; }
-                const delRoot = (opt && opt.value) || '';
-                const { payload, status } = await ApiClient.deleteProject(pid);
-                if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
-                    toast('error', payload && payload.code || status, payload && payload.message || '删除失败');
-                    return;
-                }
-                // 当前会话若正绑在被删项目上 → 回退默认 (其它会话由各自 loadProjects 惰性清理)
-                if (getActiveProject() === delRoot) setActiveProject('');
-                await loadProjects();
-                toast('success', '已删除项目', '');
-            });
-        }
+        // (设置抽屉里的项目添加/删除表单已移除: 添加走目录浏览器小框, 删除走下拉的 🗑 删除「name」)
         // 目录浏览器小框: 添加 / 取消 / ⬆上级 / 点文件夹进入 / 路径回车浏览 / 项目名
         if (els.projPopAdd) els.projPopAdd.addEventListener('click', _submitProjectAdd);
         if (els.projPopCancel) els.projPopCancel.addEventListener('click', _closeProjectAdd);

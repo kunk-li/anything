@@ -148,6 +148,22 @@ class ProjectsRoutesMixin:
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
             try:
                 conn = _get_conn()
+                # 幂等去重: 同 tenant 下同一根路径已注册 → 直接返回那个, 不再建重复项。
+                cur = conn.execute(
+                    "SELECT id, name, root_path, tenant_id, created_at_iso "
+                    "FROM projects WHERE tenant_id = ? AND root_path = ?",
+                    (tenant_id, abs_root),
+                )
+                ex = cur.fetchone()
+                if ex:
+                    conn.close()
+                    return JSONResponse({
+                        "code": "SUCCESS", "message": "already exists",
+                        "data": {"id": ex[0], "name": ex[1], "root_path": ex[2],
+                                 "tenant_id": ex[3], "created_at_iso": ex[4],
+                                 "has_project_memory": _has_memory_file(ex[2])},
+                        "trace_id": trace_id, "retryable": False, "details": None,
+                    })
                 conn.execute(
                     "INSERT INTO projects (id, name, root_path, tenant_id, created_at, created_at_iso) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
