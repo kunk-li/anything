@@ -28,6 +28,7 @@ backend 可注入 (测试不起子进程)。
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import sys
@@ -127,10 +128,13 @@ class _RealShell:
     """默认后端: 真 subprocess 跑命令。无 shell 元字符 → argv+shell=False (引号可靠,
     绕开 Windows shell 嵌套引号坑); 含管道/重定向才 shell=True。测试可注入 fake 顶替。"""
 
-    def run(self, command: str, timeout: int) -> Tuple[Optional[int], str]:
+    def run(self, command: str, timeout: int, cwd: Optional[str] = None) -> Tuple[Optional[int], str]:
         import subprocess
+        # cwd = 当前项目(工作区)根 → 命令在那里执行, 相对路径读写都落进项目 (产物写 outputs/)。
+        # None → 进程默认 CWD (run/), 即"挂 Anything 默认"时的老行为。
         kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                  stderr=subprocess.STDOUT, timeout=timeout, text=True, errors="replace")
+                  stderr=subprocess.STDOUT, timeout=timeout, text=True, errors="replace",
+                  cwd=cwd or None)
         try:
             if _IS_WINDOWS:
                 # Windows 一律经 cmd.exe (shell=True): cmd 原生处理反斜杠路径 (D:\a\b 不被吞)、
@@ -217,13 +221,19 @@ def make_shell_exec_tool(
                 "trace_id": trace_id, "retryable": False, "details": None,
             }
 
+        # 工作区: 当前项目根 (extra_params.active_project_root) 作 CWD → 命令在那里跑, 相对路径
+        # 读写都落进项目 (产物按约定写 outputs/)。没设/非目录 → None = 进程默认 CWD (run/)。
+        _root = extra.get("active_project_root")
+        _cwd = _root if (_root and os.path.isdir(str(_root))) else None
+
         be = backend if backend is not None else _RealShell()
-        rc, out = be.run(cmd, timeout)
+        rc, out = be.run(cmd, timeout, cwd=_cwd)
         _audit(cmd, level, reason, executed=True, trace_id=trace_id)
         truncated = len(out) > _OUTPUT_CAP
         return _ok({
             "command": cmd, "risk": level, "risk_reason": reason,
             "returncode": rc,
+            "cwd": _cwd,
             "output": out[:_OUTPUT_CAP],
             "output_truncated": truncated,
         }, trace_id)
@@ -255,7 +265,8 @@ SHELL_EXEC_DESCRIPTION = (
     '读/审查本项目自身的源码也用我 (只读, 自动放行): 看某个文件内容 → command=`type <文件绝对路径>` '
     '(Windows; Linux 用 `cat`); 在整个项目里找某函数/类的定义或用法 → '
     'command=`findstr /s /n "def 函数名" <项目根>\\*.py` (Windows) 或 `grep -rn "def 函数名" <项目根>`。'
-    '注意服务进程工作目录在 run\\ 下, 读项目根的文件要用绝对路径或 ..\\ 上溯。'
+    '工作目录: 本对话设了"当前项目"时, 命令就在该项目根下执行(这是工作区), 读写相对路径都落进项目, '
+    '生成的文件/产物按约定写 outputs\\ 子目录; 没设项目时工作目录在 run\\ 下, 读文件用绝对路径。'
     ' ⚠️ 查某个库的集合/数据时**必须指定目标库**: mongosh 不指定库默认连 test, 会查到空! '
     '用连接串 `mongosh "mongodb://localhost:27017/<库名>" --quiet --eval "..."` 或在 eval 里 '
     '`db.getSiblingDB("<库名>").<集合>.find().toArray()`。'

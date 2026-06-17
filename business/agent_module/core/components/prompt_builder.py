@@ -89,6 +89,20 @@ class PromptBuilderMixin:
         # 用于: ProjectMemory 按该根加载 + 原则⑧ 告诉 agent "当前项目根在哪、读码用绝对路径打这里"。
         effective_root = project_root or _PROJECT_ROOT
 
+        # 工作区说明 (原则⑧用): 选了项目时 shell_exec 的 CWD 已被设成该项目根 (见 shell_exec),
+        # 产物按约定写到 outputs/ 子目录; 没选项目 (挂 Anything) 时 CWD 在 run/ 下。
+        if project_root:
+            _ws_line = (
+                f"当前项目根目录: {effective_root} —— 这是本对话的**工作区**, shell_exec 命令就在这个目录下执行。"
+                f"读该项目文件用相对或绝对路径都行; **生成的文件/报告/产物一律写到 outputs\\ 子目录** "
+                f"(相对路径写 `outputs\\文件名`, 目录不存在先 `mkdir outputs`), 别散落到别处、也别和源码混在根目录。\n"
+            )
+        else:
+            _ws_line = (
+                f"当前项目根目录: {effective_root} (未指定具体项目; shell_exec 工作目录在 run\\ 下 —— "
+                f"读项目文件请用绝对路径打到上面这个根下)。\n"
+            )
+
         # Task U: 顶部拼项目记忆 (当前项目的 AGENTS.md / CLAUDE.md)。多项目: 按 effective_root 加载,
         # 选了别的项目就注入那个项目的说明; 没选 (project_root=None) 回退全局单例 (= 本平台自身)。
         memory_block = ""
@@ -164,7 +178,7 @@ class PromptBuilderMixin:
             f"**必须先用工具读到真实内容再据此作答**; 严禁凭记忆复述或编造代码/路径/函数名/行号/bug —— 读不到就如实说'没读到', 绝不猜。"
             f"读本项目或本机的源码与文件用 shell_exec: 看内容 `type <绝对路径>`(Linux 用 cat/Get-Content)、"
             f"全局找定义或用法 `findstr /s /n \"关键字\" <项目根>\\*.py`(或 `grep -rn`); 查用户上传的文档才用 rag_search/document_read。"
-            f"当前项目根目录: {effective_root} (读该项目的文件请用绝对路径打到这个根下; 服务进程工作目录在 run\\ 下, 相对路径会落到别处)。\n"
+            f"{_ws_line}"
             f"⑨**分析/审查整个项目或代码库时**(不是单个文件): 不能只列目录名就照名字猜 —— "
             f"'application 可能是核心逻辑'这种是**猜**, 不是分析。要真正读代码再下结论, 按这个顺序: "
             f"(a) 先看结构: `dir /s /b <项目根>` 或读 AGENTS.md/README/CLAUDE.md; "

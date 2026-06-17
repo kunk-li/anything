@@ -46,9 +46,11 @@ class TestClassify(unittest.TestCase):
 class _FakeShell:
     def __init__(self):
         self.ran = []
+        self.cwds = []
 
-    def run(self, command, timeout):
+    def run(self, command, timeout, cwd=None):
         self.ran.append(command)
+        self.cwds.append(cwd)
         return 0, f"[ran] {command}"
 
 
