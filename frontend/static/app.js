@@ -26,6 +26,7 @@
         // Part B: 多项目 当前项目选择器
         projectSelect: $('project-select'),   // 设置抽屉里那个已删 → null; 引用处都有 if 守卫
         projectSelectMini: $('project-select-mini'),
+        projectDelMini: $('project-del-mini'),
         // 就地添加项目小框 (composer 上方弹出)
         projAddPop: $('project-add-pop'),
         projPopName: $('proj-pop-name'),
@@ -168,8 +169,10 @@
             sessionId: '',
             tenant: 'default',
             // Part B: 当前项目作用域 — **按会话**绑定 {sessionId: 项目根路径}。每个会话各自选项目,
-            // 切会话时选择器跟着变; 空/未绑定 = 本系统 Anything 默认。
+            // 切会话时选择器跟着变。会话**没显式选过** → 默认接着用 lastProjectRoot(最近用的项目);
+            // 显式选了 Anything 会记成 ''(区别于"没选过")。
             projectBySession: {},
+            lastProjectRoot: '',   // 最近一次选中的具体项目 → 新会话的默认
             useStream: false,
             theme: 'light',  // Task NNNN (#131): dark/light/auto — 默认暖奶油浅色
         },
@@ -1471,23 +1474,26 @@
         try { localStorage.setItem('anything_settings', JSON.stringify(state.settings)); } catch (_) {}
     }
 
-    // Part B: 当前**会话**绑定的项目根 (空 = Anything 默认)。每个会话各自一份。
+    // Part B: 当前**会话**的项目根 (空 = Anything)。会话显式选过 → 用它(含选了 Anything='');
+    // 没选过(新会话) → 默认接着用 lastProjectRoot(最近用的项目)。
     function getActiveProject() {
         const m = state.settings.projectBySession || {};
-        return m[state.settings.sessionId] || '';
+        const sid = state.settings.sessionId;
+        if (Object.prototype.hasOwnProperty.call(m, sid)) return m[sid] || '';
+        return state.settings.lastProjectRoot || '';
     }
-    // 把两个下拉 (顶栏 mini + 设置抽屉) 的选中值同步到"当前会话"绑定的项目 (切会话时调)。
+    // 同步选择器到当前项目, 并按"是否选了具体项目"显示/隐藏删除小按钮。
     function _syncProjectSelector() {
         const v = getActiveProject();
         if (els.projectSelect) els.projectSelect.value = v;
         if (els.projectSelectMini) els.projectSelectMini.value = v;
+        if (els.projectDelMini) els.projectDelMini.hidden = !v;  // 选了具体项目才给删除
     }
-    // 设**当前会话**的项目作用域 + 持久化 + 同步两个下拉。
+    // 设**当前会话**的项目作用域 + 持久化 + 同步。root='' = 显式选 Anything(也记下, 区别于"没选过")。
     function setActiveProject(root) {
         state.settings.projectBySession = state.settings.projectBySession || {};
-        const sid = state.settings.sessionId;
-        if (root) state.settings.projectBySession[sid] = root;
-        else delete state.settings.projectBySession[sid];
+        state.settings.projectBySession[state.settings.sessionId] = root || '';
+        if (root) state.settings.lastProjectRoot = root;   // 选了具体项目 → 更新"最近"(供新会话默认)
         _persistSettings();
         _syncProjectSelector();
     }
@@ -1572,22 +1578,17 @@
         toast('success', '已添加项目', name);
     }
 
-    // 下拉 change 统一入口: ➕ 添加 / 🗑 删除 当成动作(不当成选中); 否则按会话设作用域。
+    // 下拉 change 统一入口: ➕ 添加 当成动作(不当成选中); 否则按会话设作用域。删除走旁边的 🗑 按钮。
     function _onProjectSelectChange(value) {
         if (value === '__add_new__') {
             _syncProjectSelector();   // 还原下拉到当前项目, 不停在"添加项目"上
             _openProjectAdd();
             return;
         }
-        if (value === '__delete_current__') {
-            _syncProjectSelector();
-            _deleteCurrentProject();
-            return;
-        }
         setActiveProject(value);
     }
 
-    // 删除"当前选中的"项目 (从下拉的 🗑 删除「name」进来)。只删登记, 不动磁盘文件。
+    // 删除当前选中的项目 (下拉旁的 🗑 按钮)。只删登记, 不动磁盘文件。
     async function _deleteCurrentProject() {
         const root = getActiveProject();
         if (!root) return;
@@ -1605,14 +1606,14 @@
             toast('error', (payload && payload.code) || status, (payload && payload.message) || '删除失败');
             return;
         }
-        setActiveProject('');   // 回退默认 Anything
+        if (state.settings.lastProjectRoot === root) state.settings.lastProjectRoot = '';  // 删的是"最近" → 清掉
+        setActiveProject('');   // 当前会话回退 Anything
         await loadProjects();
         toast('success', '已删除项目', name);
     }
 
-    // 填充项目下拉。fullLabel: 带路径详情(已不用, 设置里那个已删); mini 只显项目名。
-    // curRoot: 当前选中的项目根 — 选中已注册项目时, 末尾追加"删除当前项目"入口。
-    function _fillProjectSelect(selectEl, items, fullLabel, curRoot) {
+    // 填充项目下拉: Anything(默认) + 各项目 + ➕添加项目…。删除走下拉旁的 🗑 小按钮, 不塞进下拉(免得名字显示两次)。
+    function _fillProjectSelect(selectEl, items, fullLabel) {
         if (!selectEl) return;
         selectEl.innerHTML = '';
         const optDefault = document.createElement('option');
@@ -1628,19 +1629,10 @@
                 : it.name;
             selectEl.appendChild(o);
         }
-        // 添加入口 (空下拉时也能加项目)
         const optAdd = document.createElement('option');
         optAdd.value = '__add_new__';
         optAdd.textContent = '➕ 添加项目…';
         selectEl.appendChild(optAdd);
-        // 删除入口: 仅当前选中的是个已注册项目时给 (不动 "Anything 默认")
-        const curItem = curRoot ? items.find(it => (it.root_path || '') === curRoot) : null;
-        if (curItem) {
-            const optDel = document.createElement('option');
-            optDel.value = '__delete_current__';
-            optDel.textContent = `🗑 删除「${curItem.name}」`;
-            selectEl.appendChild(optDel);
-        }
     }
 
     // Part B: 拉项目清单填充"当前项目"下拉 (顶栏 mini + 设置抽屉, 含默认 Anything 项)。
@@ -1654,15 +1646,17 @@
                 items = (payload.data && payload.data.items) || [];
             }
         } catch (_) {}
-        const cur = getActiveProject();
-        _fillProjectSelect(els.projectSelect, items, true, cur);
-        _fillProjectSelect(els.projectSelectMini, items, false, cur);
-        // 当前会话绑定的项目已不在列表 (被删) → 该会话回退默认
-        if (cur && !items.some(it => (it.root_path || '') === cur)) {
-            const m = state.settings.projectBySession || {};
-            delete m[state.settings.sessionId];
-            _persistSettings();
+        _fillProjectSelect(els.projectSelect, items, true);
+        _fillProjectSelect(els.projectSelectMini, items, false);
+        // 清理失效引用 (指向已删项目的): 当前会话的非空绑定 + lastProjectRoot。保留 '' (显式选了 Anything)。
+        const valid = new Set(items.map(it => it.root_path || ''));
+        const m = state.settings.projectBySession || {};
+        const sid = state.settings.sessionId;
+        if (m[sid] && !valid.has(m[sid])) delete m[sid];
+        if (state.settings.lastProjectRoot && !valid.has(state.settings.lastProjectRoot)) {
+            state.settings.lastProjectRoot = '';
         }
+        _persistSettings();
         _syncProjectSelector();
     }
 
@@ -1968,6 +1962,7 @@
         if (els.projectSelectMini) {
             els.projectSelectMini.addEventListener('change', () => _onProjectSelectChange(els.projectSelectMini.value));
         }
+        if (els.projectDelMini) els.projectDelMini.addEventListener('click', _deleteCurrentProject);
         // (设置抽屉里的项目添加/删除表单已移除: 添加走目录浏览器小框, 删除走下拉的 🗑 删除「name」)
         // 目录浏览器小框: 添加 / 取消 / ⬆上级 / 点文件夹进入 / 路径回车浏览 / 项目名
         if (els.projPopAdd) els.projPopAdd.addEventListener('click', _submitProjectAdd);

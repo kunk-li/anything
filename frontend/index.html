@@ -5,7 +5,7 @@
     <!-- Task XXXX-16 (#163): viewport-fit=cover 让 iPhone 刘海屏底部 safe-area 生效 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Anything · RAG & Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=196">
+    <link rel="stylesheet" href="/static/style.css?v=197">
 </head>
 <body>
     <!-- 内联 SVG 图标 sprite (替代 emoji chrome 图标; stroke=currentColor 跟随主题/hover) -->
@@ -275,15 +275,17 @@
                         <button class="mode-tab" data-mode="hybrid" role="tab" aria-selected="false">Hybrid</button>
                     </div>
                     <div class="composer-extras">
-                        <!-- Part B: 当前项目作用域 (按会话; 这条对话 Agent 读/分析哪个项目)。添加/管理在设置里。 -->
+                        <!-- Part B: 当前项目作用域 (按会话; 这条对话 Agent 读/分析哪个项目)。 -->
                         <label class="composer-project has-tip"
-                               data-tip="当前项目 (Agent 作用域): 这个对话让 Agent 读/分析哪个项目; 选 Anything = 改本系统自己。添加项目在设置里。">
+                               data-tip="当前项目 (Agent 作用域): 这个对话让 Agent 读/分析哪个项目; 选 Anything = 改本系统自己。新开会话默认接着用最近的项目。">
                             <span aria-hidden="true">📁</span>
                             <select id="project-select-mini" aria-label="当前项目"
                                     style="background:transparent;border:none;color:inherit;font:inherit;outline:none;cursor:pointer;max-width:150px;">
                                 <option value="">Anything (默认)</option>
                             </select>
                         </label>
+                        <button type="button" id="project-del-mini" class="composer-proj-del has-tip"
+                                data-tip="从列表删除当前项目 (只删登记, 不动磁盘文件)" hidden>🗑</button>
                         <!-- Task JJJJ (#127): 加 data-tip 自绘 tooltip, 解释每个 toggle 啥用 -->
                         <!-- 主行: 流式 (常用) + 高级折叠器 -->
                         <label class="stream-toggle has-tip"
@@ -814,6 +816,6 @@
     <!-- 执行计划⑦: 统一配置面板 -->
     <script src="/static/modules/config-panel.js?v=193"></script>
 
-    <script src="/static/app.js?v=202"></script>
+    <script src="/static/app.js?v=203"></script>
 </body>
 </html>

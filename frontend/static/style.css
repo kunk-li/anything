@@ -1387,6 +1387,13 @@ body.has-drag .chat-pane::before {
 .project-add-pop .pop-dirlist .mem-dot { color: var(--accent); margin-left: auto; }
 .project-add-pop .pop-namerow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
 .project-add-pop .pop-namerow input { flex: 1 1 auto; }
+/* Part B: composer 里项目下拉旁的删除小按钮 (选中已注册项目时才显示) */
+.composer-proj-del {
+    flex: 0 0 auto; background: transparent; border: none; color: var(--text-dim);
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 5px; border-radius: 6px;
+}
+.composer-proj-del:hover { color: var(--danger); background: var(--danger-soft); }
+.composer-proj-del[hidden] { display: none; }
 .slash-item {
     padding: 8px 12px;
     cursor: pointer;
