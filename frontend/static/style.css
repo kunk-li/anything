@@ -1385,15 +1385,6 @@ body.has-drag .chat-pane::before {
 .project-add-pop .pop-dirlist li.empty { color: var(--text-faint); cursor: default; }
 .project-add-pop .pop-dirlist li.empty:hover { background: transparent; }
 .project-add-pop .pop-dirlist .mem-dot { color: var(--accent); margin-left: auto; }
-.project-add-pop .pop-namerow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
-.project-add-pop .pop-namerow input { flex: 1 1 auto; }
-/* Part B: composer 里项目下拉旁的删除小按钮 (选中已注册项目时才显示) */
-.composer-proj-del {
-    flex: 0 0 auto; background: transparent; border: none; color: var(--text-dim);
-    cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 5px; border-radius: 6px;
-}
-.composer-proj-del:hover { color: var(--danger); background: var(--danger-soft); }
-.composer-proj-del[hidden] { display: none; }
 .slash-item {
     padding: 8px 12px;
     cursor: pointer;
@@ -1879,6 +1870,31 @@ body.share-readonly .msg-feedback {
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+/* 当前工作区小块: 一个对话一个目录, 点开弹目录浏览器换目录 */
+.composer-project {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 240px;
+    padding: 3px 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    background: var(--bg-elev2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+}
+.composer-project:hover { border-color: var(--border-strong); color: var(--text-strong); }
+.composer-project #project-chip-text {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .stream-toggle {

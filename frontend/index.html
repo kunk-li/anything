@@ -5,7 +5,7 @@
     <!-- Task XXXX-16 (#163): viewport-fit=cover 让 iPhone 刘海屏底部 safe-area 生效 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Anything · RAG & Agent</title>
-    <link rel="stylesheet" href="/static/style.css?v=197">
+    <link rel="stylesheet" href="/static/style.css?v=198">
 </head>
 <body>
     <!-- 内联 SVG 图标 sprite (替代 emoji chrome 图标; stroke=currentColor 跟随主题/hover) -->
@@ -253,19 +253,18 @@
             <div class="composer">
                 <!-- Part B: 就地添加项目小框 (从 📁 下拉的 ➕ 添加项目… 弹出, 不跳设置) -->
                 <div class="project-add-pop" id="project-add-pop" hidden>
-                    <div class="pop-title">选择项目目录 (Agent 作用域)</div>
+                    <div class="pop-title">选择工作区目录</div>
                     <div class="pop-curbar">
                         <button type="button" id="proj-pop-up" class="pop-up" title="上一级">⬆</button>
                         <input type="text" id="proj-pop-cur" spellcheck="false"
                                placeholder="当前目录 (点下面文件夹进入, 或直接粘绝对路径回车)" />
                     </div>
                     <ul class="pop-dirlist" id="proj-pop-list"></ul>
-                    <label class="pop-namerow"><span>项目名</span>
-                        <input type="text" id="proj-pop-name" placeholder="自动用文件夹名" maxlength="60" /></label>
-                    <div class="pop-hint">点文件夹进入; ● = 该目录有 AGENTS.md。"添加这个目录" 用当前目录作项目根。</div>
+                    <div class="pop-hint">点文件夹进入; ● = 有 AGENTS.md。Agent 在选中的目录下读源码、把产物写到它的 outputs/。</div>
                     <div class="pop-actions">
+                        <button type="button" id="proj-pop-anything">用本系统 Anything</button>
                         <button type="button" id="proj-pop-cancel">取消</button>
-                        <button type="button" id="proj-pop-add" class="pop-primary">添加这个目录</button>
+                        <button type="button" id="proj-pop-pick" class="pop-primary">选这个目录</button>
                     </div>
                 </div>
                 <div class="composer-row">
@@ -275,17 +274,13 @@
                         <button class="mode-tab" data-mode="hybrid" role="tab" aria-selected="false">Hybrid</button>
                     </div>
                     <div class="composer-extras">
-                        <!-- Part B: 当前项目作用域 (按会话; 这条对话 Agent 读/分析哪个项目)。 -->
-                        <label class="composer-project has-tip"
-                               data-tip="当前项目 (Agent 作用域): 这个对话让 Agent 读/分析哪个项目; 选 Anything = 改本系统自己。新开会话默认接着用最近的项目。">
+                        <!-- Part B: 当前工作区 (按会话; 这条对话 Agent 读源码+放产物的目录)。点击选/换目录。 -->
+                        <button type="button" id="project-chip" class="composer-project has-tip"
+                                data-tip="当前工作区: 这条对话 Agent 在哪个目录下读源码、把产物写到它的 outputs/。点击选/换目录。新开会话默认接着用最近的。">
                             <span aria-hidden="true">📁</span>
-                            <select id="project-select-mini" aria-label="当前项目"
-                                    style="background:transparent;border:none;color:inherit;font:inherit;outline:none;cursor:pointer;max-width:150px;">
-                                <option value="">Anything (默认)</option>
-                            </select>
-                        </label>
-                        <button type="button" id="project-del-mini" class="composer-proj-del has-tip"
-                                data-tip="从列表删除当前项目 (只删登记, 不动磁盘文件)" hidden>🗑</button>
+                            <span id="project-chip-text">Anything (默认)</span>
+                            <span aria-hidden="true" style="opacity:.6;">▾</span>
+                        </button>
                         <!-- Task JJJJ (#127): 加 data-tip 自绘 tooltip, 解释每个 toggle 啥用 -->
                         <!-- 主行: 流式 (常用) + 高级折叠器 -->
                         <label class="stream-toggle has-tip"

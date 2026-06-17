@@ -23,17 +23,15 @@
         tenantChipMini: $('tenant-chip-mini'),
         tenantValue: $('tenant-value'),
         tenantInputDrawer: $('tenant-input-drawer'),
-        // Part B: 多项目 当前项目选择器
-        projectSelect: $('project-select'),   // 设置抽屉里那个已删 → null; 引用处都有 if 守卫
-        projectSelectMini: $('project-select-mini'),
-        projectDelMini: $('project-del-mini'),
-        // 就地添加项目小框 (composer 上方弹出)
+        // Part B: 当前工作区小块 (composer) + 目录浏览器小框
+        projectChip: $('project-chip'),
+        projChipText: $('project-chip-text'),
         projAddPop: $('project-add-pop'),
-        projPopName: $('proj-pop-name'),
         projPopCur: $('proj-pop-cur'),
         projPopUp: $('proj-pop-up'),
         projPopList: $('proj-pop-list'),
-        projPopAdd: $('proj-pop-add'),
+        projPopPick: $('proj-pop-pick'),
+        projPopAnything: $('proj-pop-anything'),
         projPopCancel: $('proj-pop-cancel'),
         healthBadge: $('health-badge'),
         healthDot: $('health-dot'),
@@ -210,8 +208,8 @@
         // 显已注册的全部 Agent 工具 (用户能直观看到能干啥).
         setTimeout(_loadAgentTools, 600);
 
-        // Part B: 启动后拉项目清单填顶栏"当前项目"下拉 (随手可切作用域)。
-        setTimeout(loadProjects, 700);
+        // Part B: 启动后更新"当前工作区"小块文字。
+        setTimeout(_updateProjectChip, 100);
 
         // Task PM-7-5: 检测 ?share=<sid> → 进入 read-only 模式
         const shareParam = new URLSearchParams(location.search).get('share');
@@ -1482,25 +1480,26 @@
         if (Object.prototype.hasOwnProperty.call(m, sid)) return m[sid] || '';
         return state.settings.lastProjectRoot || '';
     }
-    // 同步选择器到当前项目, 并按"是否选了具体项目"显示/隐藏删除小按钮。
-    function _syncProjectSelector() {
+    // 更新 composer 里"当前工作区"小块文字 = 当前目录名 (或 Anything 默认)。
+    function _updateProjectChip() {
+        if (!els.projChipText) return;
         const v = getActiveProject();
-        if (els.projectSelect) els.projectSelect.value = v;
-        if (els.projectSelectMini) els.projectSelectMini.value = v;
-        if (els.projectDelMini) els.projectDelMini.hidden = !v;  // 选了具体项目才给删除
+        els.projChipText.textContent = v ? _basename(v) : 'Anything (默认)';
+        if (els.projectChip) els.projectChip.title = v
+            ? ('当前工作区: ' + v + ' (Agent 在这读源码、产物写它的 outputs/)。点击换目录。')
+            : '当前工作区: 本系统 Anything (默认)。点击选一个目录作工作区。';
     }
-    // 设**当前会话**的项目作用域 + 持久化 + 同步。root='' = 显式选 Anything(也记下, 区别于"没选过")。
+    function _syncProjectSelector() { _updateProjectChip(); }   // 兼容 refreshSessions/clearHistory 的旧调用名
+    // 设**当前会话**的工作区目录 (root='' = 用本系统 Anything)。持久化 + 更新小块。
     function setActiveProject(root) {
         state.settings.projectBySession = state.settings.projectBySession || {};
         state.settings.projectBySession[state.settings.sessionId] = root || '';
-        if (root) state.settings.lastProjectRoot = root;   // 选了具体项目 → 更新"最近"(供新会话默认)
+        if (root) state.settings.lastProjectRoot = root;   // 新会话默认接它
         _persistSettings();
-        _syncProjectSelector();
+        _updateProjectChip();
     }
 
-    // 目录浏览器状态
-    let _fsParent = null;     // 当前目录的上一级 (null/'' = 已到顶)
-    let _fsNameAuto = true;   // 项目名是否还自动跟文件夹名 (用户手敲过 → false)
+    let _fsParent = null;   // 目录浏览器: 当前目录的上一级 (''/null = 到顶)
 
     function _basename(p) {
         if (!p) return '';
@@ -1523,11 +1522,10 @@
         const cur = data.path || '';
         if (els.projPopCur) els.projPopCur.value = cur;
         try { localStorage.setItem('anything_fs_last', cur); } catch (_) {}
-        if (_fsNameAuto && els.projPopName && cur) els.projPopName.value = _basename(cur);
         els.projPopList.innerHTML = '';
         const dirs = data.dirs || [];
         if (!dirs.length) {
-            els.projPopList.innerHTML = '<li class="empty">(没有子文件夹 — 可直接"添加这个目录")</li>';
+            els.projPopList.innerHTML = '<li class="empty">(没有子文件夹 — 可直接"选这个目录")</li>';
             return;
         }
         for (const d of dirs) {
@@ -1545,119 +1543,24 @@
         }
     }
 
-    // 就地弹出"选择项目目录"小框 (浮在输入框上方, 不跳设置)。从下拉的 ➕ 添加项目… 进来。
+    // 点 📁 小块 → 弹出目录浏览器, 从上次浏览到的目录(或当前工作区)开始。
     function _openProjectAdd() {
-        if (!els.projAddPop) {  // 兜底: 万一没有小框, 退回设置抽屉
-            if (els.settingsBtn) els.settingsBtn.click();
-            setTimeout(() => els.projectNameInput && els.projectNameInput.focus(), 250);
-            return;
-        }
-        if (els.projPopName) els.projPopName.value = '';
-        _fsNameAuto = true;
+        if (!els.projAddPop) return;
         els.projAddPop.hidden = false;
         let start = '';
-        try { start = localStorage.getItem('anything_fs_last') || ''; } catch (_) {}
-        _browseFs(start);  // 上次浏览到的目录, 没有则盘符列表
+        try { start = localStorage.getItem('anything_fs_last') || getActiveProject() || ''; } catch (_) { start = getActiveProject() || ''; }
+        _browseFs(start);
     }
     function _closeProjectAdd() {
         if (els.projAddPop) els.projAddPop.hidden = true;
     }
-    async function _submitProjectAdd() {
+    // "选这个目录" → 把当前浏览到的目录设成本对话工作区。
+    function _pickWorkspace() {
         const root = (els.projPopCur && els.projPopCur.value || '').trim();
         if (!root) { toast('error', '没选目录', '点文件夹进到目标目录, 或在上面粘一个绝对路径'); return; }
-        const name = (els.projPopName && els.projPopName.value || '').trim() || _basename(root);
-        if (!name) { toast('error', '缺少项目名', '给这个项目起个名'); return; }
-        const { payload, status } = await ApiClient.createProject(name, root, state.settings.tenant || 'default');
-        if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
-            toast('error', (payload && payload.code) || status, (payload && payload.message) || '添加项目失败');
-            return;  // 失败保留小框, 让用户改 (路径不对最常见)
-        }
+        setActiveProject(root);
         _closeProjectAdd();
-        setActiveProject((payload.data && payload.data.root_path) || root);  // 新增即设为当前会话项目
-        await loadProjects();
-        toast('success', '已添加项目', name);
-    }
-
-    // 下拉 change 统一入口: ➕ 添加 当成动作(不当成选中); 否则按会话设作用域。删除走旁边的 🗑 按钮。
-    function _onProjectSelectChange(value) {
-        if (value === '__add_new__') {
-            _syncProjectSelector();   // 还原下拉到当前项目, 不停在"添加项目"上
-            _openProjectAdd();
-            return;
-        }
-        setActiveProject(value);
-    }
-
-    // 删除当前选中的项目 (下拉旁的 🗑 按钮)。只删登记, 不动磁盘文件。
-    async function _deleteCurrentProject() {
-        const root = getActiveProject();
-        if (!root) return;
-        const tenant = state.settings.tenant || 'default';
-        let pid = null, name = root;
-        try {
-            const { payload } = await ApiClient.listProjects(tenant);
-            const it = ((payload && payload.data && payload.data.items) || []).find(x => (x.root_path || '') === root);
-            if (it) { pid = it.id; name = it.name; }
-        } catch (_) {}
-        if (!pid) { toast('error', '删不了', '没找到这个项目'); return; }
-        if (!window.confirm(`从列表删除项目「${name}」?\n(只删登记, 不动磁盘上的文件)`)) return;
-        const { payload, status } = await ApiClient.deleteProject(pid);
-        if (status !== 200 || !payload || payload.code !== 'SUCCESS') {
-            toast('error', (payload && payload.code) || status, (payload && payload.message) || '删除失败');
-            return;
-        }
-        if (state.settings.lastProjectRoot === root) state.settings.lastProjectRoot = '';  // 删的是"最近" → 清掉
-        setActiveProject('');   // 当前会话回退 Anything
-        await loadProjects();
-        toast('success', '已删除项目', name);
-    }
-
-    // 填充项目下拉: Anything(默认) + 各项目 + ➕添加项目…。删除走下拉旁的 🗑 小按钮, 不塞进下拉(免得名字显示两次)。
-    function _fillProjectSelect(selectEl, items, fullLabel) {
-        if (!selectEl) return;
-        selectEl.innerHTML = '';
-        const optDefault = document.createElement('option');
-        optDefault.value = '';
-        optDefault.textContent = fullLabel ? '本系统 Anything (默认)' : 'Anything (默认)';
-        selectEl.appendChild(optDefault);
-        for (const it of items) {
-            const o = document.createElement('option');
-            o.value = it.root_path || '';
-            if (it.id) o.dataset.projId = it.id;
-            o.textContent = fullLabel
-                ? `${it.name} — ${it.root_path}${it.has_project_memory ? '' : ' (无 AGENTS.md)'}`
-                : it.name;
-            selectEl.appendChild(o);
-        }
-        const optAdd = document.createElement('option');
-        optAdd.value = '__add_new__';
-        optAdd.textContent = '➕ 添加项目…';
-        selectEl.appendChild(optAdd);
-    }
-
-    // Part B: 拉项目清单填充"当前项目"下拉 (顶栏 mini + 设置抽屉, 含默认 Anything 项)。
-    async function loadProjects() {
-        if (!els.projectSelect && !els.projectSelectMini) return;
-        const tenant = state.settings.tenant || 'default';
-        let items = [];
-        try {
-            const { payload, status } = await ApiClient.listProjects(tenant);
-            if (status === 200 && payload && payload.code === 'SUCCESS') {
-                items = (payload.data && payload.data.items) || [];
-            }
-        } catch (_) {}
-        _fillProjectSelect(els.projectSelect, items, true);
-        _fillProjectSelect(els.projectSelectMini, items, false);
-        // 清理失效引用 (指向已删项目的): 当前会话的非空绑定 + lastProjectRoot。保留 '' (显式选了 Anything)。
-        const valid = new Set(items.map(it => it.root_path || ''));
-        const m = state.settings.projectBySession || {};
-        const sid = state.settings.sessionId;
-        if (m[sid] && !valid.has(m[sid])) delete m[sid];
-        if (state.settings.lastProjectRoot && !valid.has(state.settings.lastProjectRoot)) {
-            state.settings.lastProjectRoot = '';
-        }
-        _persistSettings();
-        _syncProjectSelector();
+        toast('success', '工作区已设为', _basename(root));
     }
 
     function persistHistory() {
@@ -1955,17 +1858,11 @@
             });
         }
 
-        // Part B: 当前项目选择器 — 选中即生效并持久化 (作用域立刻切, 不必点保存); 顶栏 mini 与设置抽屉双向同步
-        if (els.projectSelect) {
-            els.projectSelect.addEventListener('change', () => _onProjectSelectChange(els.projectSelect.value));
-        }
-        if (els.projectSelectMini) {
-            els.projectSelectMini.addEventListener('change', () => _onProjectSelectChange(els.projectSelectMini.value));
-        }
-        if (els.projectDelMini) els.projectDelMini.addEventListener('click', _deleteCurrentProject);
-        // (设置抽屉里的项目添加/删除表单已移除: 添加走目录浏览器小框, 删除走下拉的 🗑 删除「name」)
-        // 目录浏览器小框: 添加 / 取消 / ⬆上级 / 点文件夹进入 / 路径回车浏览 / 项目名
-        if (els.projPopAdd) els.projPopAdd.addEventListener('click', _submitProjectAdd);
+        // Part B: 当前工作区 — 点 📁 小块弹目录浏览器; 选目录即生效(按会话)。一个对话一个工作区。
+        if (els.projectChip) els.projectChip.addEventListener('click', _openProjectAdd);
+        // 目录浏览器小框: 选这个目录 / 用 Anything / 取消 / ⬆上级 / 点文件夹进入 / 路径回车浏览
+        if (els.projPopPick) els.projPopPick.addEventListener('click', _pickWorkspace);
+        if (els.projPopAnything) els.projPopAnything.addEventListener('click', () => { setActiveProject(''); _closeProjectAdd(); });
         if (els.projPopCancel) els.projPopCancel.addEventListener('click', _closeProjectAdd);
         if (els.projPopUp) els.projPopUp.addEventListener('click', () => _browseFs(_fsParent || ''));
         if (els.projPopList) els.projPopList.addEventListener('click', (e) => {
@@ -1976,13 +1873,6 @@
             if (e.key === 'Enter') { e.preventDefault(); _browseFs((els.projPopCur.value || '').trim()); }
             else if (e.key === 'Escape') _closeProjectAdd();
         });
-        if (els.projPopName) {
-            els.projPopName.addEventListener('input', () => { _fsNameAuto = false; });
-            els.projPopName.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') { e.preventDefault(); _submitProjectAdd(); }
-                else if (e.key === 'Escape') _closeProjectAdd();
-            });
-        }
 
         // 流式开关持久化
         if (els.streamToggle) {
@@ -2048,8 +1938,8 @@
             loadModels();
             // Task XXXX-20 (#164): 同时刷 chat 模型 picker
             _loadChatModelPicker();
-            // Part B: 刷新当前项目下拉
-            loadProjects();
+            // Part B: 同步"当前工作区"小块文字
+            _updateProjectChip();
         });
         // Task XXXX-20 (#164): chat 模型 picker change
         const chatModelSelect = document.getElementById('chat-model-select');
