@@ -103,9 +103,10 @@ def chunk_document(
     chunks: List[Dict[str, Any]] = []
     buffer_text = ""
     chunk_index = 0
+    search_cursor = 0  # 顺序游标: 从上一块末尾往后找, 防重复段落 find 回到首次出现
 
     def flush_buffer(text_piece: str):
-        nonlocal chunk_index
+        nonlocal chunk_index, search_cursor
         text_piece = normalize_text(text_piece)
         if not text_piece:
             return
@@ -119,9 +120,15 @@ def chunk_document(
             return
 
         chunk_index += 1
-        start_char = content.find(text_piece)
-        if start_char < 0:
+        # 从游标往后找: 重复段落不再都定位到首次出现; 命中才推进游标 (start_char 单调不回退)。
+        # 注: offset 仍是相对 normalize 后的 content; 与 doc_store 原文的 normalize 差异是另一更深的
+        # 课题 (需带偏移映射重做切分契约), 这里只治"重复段落 find 回退"这一明确子问题。
+        pos = content.find(text_piece, search_cursor)
+        if pos < 0:
             start_char = 0 if not chunks else chunks[-1]["meta"]["end_char"]
+        else:
+            start_char = pos
+            search_cursor = pos + len(text_piece)
         end_char = start_char + len(text_piece)
 
         chunk_id = f"{doc_id}#c{chunk_index:06d}"

@@ -182,5 +182,33 @@ class TestChunkSchemaCompliance(unittest.TestCase):
             self.assertGreaterEqual(schema_obj.meta.end_char, schema_obj.meta.start_char)
 
 
+class TestChunkOffsets(unittest.TestCase):
+    def test_repeated_paragraph_offsets_do_not_snap_back(self):
+        """回归: 重复出现的段落, 各 chunk 的 start_char 不再都定位到首次出现 (顺序游标)。"""
+        para = "这是一段会重复出现的内容用于触发问题。"  # 单段, 无换行
+        content = "\n\n".join([para, "中间夹一段不同的内容。", para])
+        # min_chunk_size_tokens=1 防短块合并, 让两个 para 各自成块
+        chunks = chunk_document("doc1", content, "f.md", chunk_size_tokens=5, min_chunk_size_tokens=1)
+
+        para_chunks = [c for c in chunks if c["content"] == normalize_text(para)]
+        self.assertEqual(len(para_chunks), 2)  # para 出现两次, 各成一块
+        s0 = para_chunks[0]["meta"]["start_char"]
+        s1 = para_chunks[1]["meta"]["start_char"]
+        # 旧实现 content.find(para) 两块都拿到首次出现 → s0 == s1; 修后第二块定位到真实(更后)位置
+        self.assertLess(s0, s1)
+
+    def test_offsets_are_valid_ranges(self):
+        """所有 chunk 的 start/end_char 落在 normalize 后内容范围内且 start<=end (不变量)。"""
+        content = "段落一。\n\n\n\n段落二有点长" + "啊" * 50 + "。\n\n段落三。"
+        norm = normalize_text(content)
+        chunks = chunk_document("doc2", content, "f.md", chunk_size_tokens=8, min_chunk_size_tokens=1)
+        last_start = -1
+        for c in chunks:
+            s, e = c["meta"]["start_char"], c["meta"]["end_char"]
+            self.assertTrue(0 <= s <= e <= len(norm), f"bad offset {s},{e} vs {len(norm)}")
+            self.assertGreaterEqual(s, last_start)  # start_char 单调非递减
+            last_start = s
+
+
 if __name__ == "__main__":
     unittest.main()
