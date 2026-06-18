@@ -396,7 +396,9 @@ class LocalDocumentStore(BaseDocumentStore):
                     "file_type": info.get("file_type"),
                     "content_hash": info.get("content_hash"),
                     "content_length": info.get("content_length") or info.get("content_size"),
-                    "created_time": info.get("created_time") or info.get("upload_time"),
+                    # 持久化字段是 create_time (见 write_info_file); 旧代码读 created_time/
+                    # upload_time 两个都没落盘的 key, 导致下面 sort 永远拿到 "" → 不按时间排。
+                    "created_time": info.get("create_time") or info.get("created_time") or info.get("upload_time"),
                     "last_access_time": info.get("last_access_time"),
                     "source": (info.get("meta") or {}).get("source") if isinstance(info.get("meta"), dict) else None,
                     # 原始上传文件路径 (uploads 清理器判定"已索引原件"用)

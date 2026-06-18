@@ -80,14 +80,14 @@ class JsonFormatter(logging.Formatter):
                 obj[k] = str(v)
 
         # 自动注入 observability context (best-effort, 失败静默)
+        # 注意: observability_module 只导出 get_current_tenant; 没有 get_current_trace_id。
+        # 旧代码一并 import 了不存在的 get_current_trace_id, 整个 try 块 ImportError 被吞,
+        # 导致 tenant_id 也从未注入 — 故这里只取确实存在的 tenant getter。
         try:
-            from observability_module import get_current_tenant, get_current_trace_id  # type: ignore
+            from observability_module import get_current_tenant  # type: ignore
             tenant = get_current_tenant() if callable(get_current_tenant) else None
             if tenant:
                 obj.setdefault("tenant_id", tenant)
-            trace = get_current_trace_id() if callable(get_current_trace_id) else None
-            if trace:
-                obj.setdefault("trace_id", trace)
         except Exception:
             pass
 

@@ -164,11 +164,17 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
 
         last_err: Optional[Exception] = None
         for attempt in range(self.max_retry):
+            yielded = False
             try:
-                yield from self._post_stream_anthropic(url, headers, payload, timeout=self.timeout)
+                for chunk in self._post_stream_anthropic(url, headers, payload, timeout=self.timeout):
+                    yielded = True
+                    yield chunk
                 return
             except Exception as e:
                 last_err = e
+                # 已吐出 token 后不能重试: HTTP 流无法从中途续传, 重试会把前缀再吐一遍 → 输出重复错乱
+                if yielded:
+                    raise
                 self.logger.warning(
                     f"[llm_adapter] Anthropic chat_stream attempt {attempt+1} failed: {e}",
                     logger_name="llm_adapter",

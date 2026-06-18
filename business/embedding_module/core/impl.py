@@ -213,7 +213,8 @@ class STEmbedding(_BaseEmbeddingImpl):
             if input_type == "SINGLE":
                 if not request.single_text:
                     raise RAGException("PARAM_MISSING", "single_text 不能为空")
-                vector = self.embed_text(request.single_text)
+                # normalize=False 时直接走原始 encode, 不再先 embed_text() 编码一遍又丢弃
+                # (旧代码两条路径都 encode, 白跑一次模型推理)。
                 if normalize is False:
                     cleaned = clean_text(request.single_text)
                     raw_vector = self.model.encode(
@@ -222,6 +223,8 @@ class STEmbedding(_BaseEmbeddingImpl):
                         convert_to_numpy=False,
                     )
                     vector = [float(v) for v in raw_vector]
+                else:
+                    vector = self.embed_text(request.single_text)
                 return self._build_success_response([vector], start_time, trace_id)
 
             if input_type == "BATCH":
@@ -229,7 +232,7 @@ class STEmbedding(_BaseEmbeddingImpl):
                     raise RAGException("PARAM_MISSING", "batch_texts 不能为空")
                 if request.batch_size:
                     self.default_batch_size = int(request.batch_size)
-                vectors = self.embed_texts(request.batch_texts)
+                # 同 SINGLE: normalize=False 不再先 embed_texts() 编码又丢弃
                 if normalize is False:
                     cleaned = clean_texts(request.batch_texts)
                     raw_vectors = self.model.encode(
@@ -239,6 +242,8 @@ class STEmbedding(_BaseEmbeddingImpl):
                         convert_to_numpy=False,
                     )
                     vectors = [[float(v) for v in vector] for vector in raw_vectors]
+                else:
+                    vectors = self.embed_texts(request.batch_texts)
                 return self._build_success_response(vectors, start_time, trace_id)
 
             raise RAGException("PARAM_INVALID", "input_type 仅支持 SINGLE 或 BATCH")
