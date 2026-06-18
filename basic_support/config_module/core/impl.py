@@ -101,13 +101,8 @@ class ConfigManager(BaseConfigManager):
     def get_config(self, key: str, default: Any = None) -> Any:
         self._check_hot_reload()
 
-        if key.endswith(".") or (key and key.endswith(".")):
-            try:
-                return collect_by_prefix(self.config, key)
-            except KeyError:
-                return default
-
-        # 支持按前缀批量获取：如果 key 本身以 "." 结尾或明确要求前缀
+        # key 以 "." 结尾 → 按前缀批量取该层所有项 (collect_by_prefix)。
+        # (旧代码此处有重复分支 + KeyError 后再 get_nested 一次的死逻辑, 净效果恒为 default, 已收敛。)
         if key.endswith("."):
             try:
                 return collect_by_prefix(self.config, key)
@@ -117,13 +112,6 @@ class ConfigManager(BaseConfigManager):
         try:
             return get_nested(self.config, key)
         except KeyError:
-            # 额外支持：若传入 "vector_db." 以外的前缀读取（例如用户传入 "vector_db" 想要整个块）
-            if has_nested(self.config, key) is False:
-                try:
-                    node = get_nested(self.config, key)
-                    return node
-                except Exception:
-                    return default
             return default
 
     def get_effective_value(
@@ -184,11 +172,9 @@ class ConfigManager(BaseConfigManager):
                     return raw_str in ("1", "true", "yes", "on")
                 return value_type(raw)
             except (ValueError, TypeError):
-                # 类型转换失败 -> 回退到 default 而非崩 (生产更安全)
-                if from_env:
-                    self.logger.warning(
-                        f"[config] env_var={env_var} 值 '{raw}' 无法转为 {value_type.__name__}, 回退到 default"
-                    ) if hasattr(self, "logger") else None
+                # 类型转换失败 -> 回退到 default 而非崩 (生产更安全)。
+                # (本模块未注入 self.logger, 原 if from_env 里的 warning 因 hasattr 恒 False 从不触发
+                #  — 删掉死分支, 行为不变。)
                 return default
 
         return raw
@@ -276,11 +262,9 @@ class ConfigManager(BaseConfigManager):
                 set_nested(self.config, cfg_key, coerced)
                 val = coerced
 
-            # 范围校验
+            # 范围校验 (数值用 [lo, hi] 两元列表; 字符串用枚举列表)
+            # 旧代码此处有个运算符优先级写错、body 仅 pass 的死 if, 已删。
             if range_rule is not None:
-                if not isinstance(range_rule, list) or len(range_rule) != 2 and len(range_rule) == 0:
-                    # 允许字符串枚举列表：["development","test","production"]
-                    pass
                 if isinstance(val, (int, float)) and isinstance(range_rule, list) and len(range_rule) == 2:
                     lo, hi = range_rule
                     if val < lo or val > hi:
