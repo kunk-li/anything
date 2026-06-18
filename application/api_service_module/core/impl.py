@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request, HTTPException, UploadFile, File, WebSocket
 from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from deps_module import BasicDeps, build_basic_deps, StartupError
+from deps_module import BasicDeps, build_basic_deps
 from observability_module import (
     trace_span,
     set_current_tenant,

@@ -166,7 +166,10 @@ class ProjectsRoutesMixin:
                     status_code=400,
                 )
             abs_root = norm  # 用规范化后的根做去重/存储
-            tenant_id = (body.get("tenant_id") or "default").strip() or "default"
+            # 三端 (create/list/delete) tenant 来源对齐: 鉴权开时以认证产物为准 (忽略 body 声明,
+            # 防越权 + 保证 create 落库 tenant 与 delete 限定 tenant 一致, 否则 owner 删不掉自己建的项目);
+            # 鉴权关 (dev/单租户) 时回落 body/default, 行为不变。
+            tenant_id = self._resolve_tenant_from_auth(request) or (body.get("tenant_id") or "default").strip() or "default"
             proj_id = "proj_" + uuid.uuid4().hex[:12]
             now = int(time.time())
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
@@ -206,7 +209,8 @@ class ProjectsRoutesMixin:
         @self.app.get("/projects")
         async def project_list(request: Request):
             trace_id = request.state.trace_id
-            tenant = (request.query_params.get("tenant") or "default").strip()
+            # 同 create: 鉴权开时按认证租户列 (防 ?tenant=B 越权读他人项目); 关时回落 query/default。
+            tenant = self._resolve_tenant_from_auth(request) or (request.query_params.get("tenant") or "default").strip()
             try:
                 with closing(_get_conn()) as conn:
                     cur = conn.execute(
