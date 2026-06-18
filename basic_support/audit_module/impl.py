@@ -59,12 +59,27 @@ class AuditLogger:
         self.backup_count = max(0, int(backup_count))
         self._lock = threading.Lock()
         self._count = 0  # 进程内累计写入次数 (调试 / snapshot 用)
+        self._fh = None  # 持久 append 句柄 (懒开); 避免每条记录 open/close 一次。轮转/lifecycle 时关
         try:
             if self.path.parent and str(self.path.parent) not in ("", "."):
                 self.path.parent.mkdir(parents=True, exist_ok=True)
         except (OSError, ValueError):
             # 路径不合法 (e.g. 含 \x00) 也吞 — audit 不能拖垮主链路
             pass
+
+    def _ensure_open(self) -> None:
+        """懒开持久 append 句柄。调用方须持 _lock。"""
+        if self._fh is None:
+            self._fh = self.path.open("a", encoding="utf-8")
+
+    def _close_fh(self) -> None:
+        """关闭持久句柄 (轮转前 / lifecycle)。调用方须持 _lock。"""
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
 
     def write(self, record: Dict[str, Any]) -> bool:
         """append 一条记录, 返回是否成功. 失败不抛."""
@@ -77,12 +92,33 @@ class AuditLogger:
         with self._lock:
             try:
                 self._rotate_if_needed(extra_size=len(line.encode("utf-8")))
-                with self.path.open("a", encoding="utf-8") as f:
-                    f.write(line)
+                self._ensure_open()
+                self._fh.write(line)
+                self._fh.flush()  # 落盘: 保证 snapshot 的 stat / 崩溃可见, 不丢记录
                 self._count += 1
                 return True
             except (OSError, ValueError):
+                self._close_fh()  # 句柄可能已坏, 下次 write 重开
                 return False
+
+    def close(self) -> None:
+        """关持久句柄。reset/reconfigure 单例或显式回收时调 (Windows 下不关会占着文件)。"""
+        with self._lock:
+            self._close_fh()
+
+    def __enter__(self) -> "AuditLogger":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # GC 兜底关句柄 (不持锁: 对象已无其它引用)。失败静默, 别在析构期抛。
+        try:
+            if self._fh is not None:
+                self._fh.close()
+        except Exception:
+            pass
 
     def _rotate_if_needed(self, extra_size: int = 0) -> None:
         """如果当前文件 + 新行 > max_bytes, 把 audit.log.jsonl → .1 → .2 → ..."""
@@ -94,6 +130,8 @@ class AuditLogger:
             return
         if cur_size + extra_size <= self.max_bytes:
             return
+        # 关持久句柄再轮转: Windows 不能 rename 打开的文件; 关后下次 write 的 _ensure_open 重开新文件。
+        self._close_fh()
         # 轮转: .2 → .3, .1 → .2, current → .1
         if self.backup_count > 0:
             for i in range(self.backup_count - 1, 0, -1):
@@ -147,6 +185,8 @@ def get_audit_logger() -> AuditLogger:
 def reset_audit_logger() -> None:
     global _default
     with _default_lock:
+        if _default is not None:
+            _default.close()  # 关旧句柄, 防 Windows 下占着文件 / 句柄泄漏
         _default = None
 
 
@@ -157,6 +197,8 @@ def configure_audit_logger(
 ) -> AuditLogger:
     global _default
     with _default_lock:
+        if _default is not None:
+            _default.close()  # 关旧句柄再换新单例
         _default = AuditLogger(path=path, max_bytes=max_bytes, backup_count=backup_count)
         return _default
 

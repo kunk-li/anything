@@ -27,9 +27,10 @@ class TestAuditLogger(unittest.TestCase):
         reset_hook_registry()
 
     def tearDown(self):
-        self.tmp.cleanup()
+        # 先关单例句柄 (持久 append handle), 再删临时目录 —— Windows 不能删还开着的文件
         reset_audit_logger()
         reset_hook_registry()
+        self.tmp.cleanup()
 
     def test_write_appends_jsonl(self):
         f = self.tmp_path / "audit.jsonl"
@@ -87,6 +88,17 @@ class TestAuditLogger(unittest.TestCase):
         self.assertEqual(snap["writes_this_process"], 2)
         self.assertGreater(snap["current_size_bytes"], 0)
 
+    def test_close_then_write_reopens(self):
+        """持久句柄: close() 后再 write 自动重开, 不丢记录 (lifecycle)。"""
+        f = self.tmp_path / "audit.jsonl"
+        logger = AuditLogger(path=str(f))
+        self.assertTrue(logger.write({"event": "a"}))
+        logger.close()
+        self.assertTrue(logger.write({"event": "b"}))  # 句柄已关 → 自动重开
+        lines = f.read_text(encoding="utf-8").strip().split("\n")
+        self.assertEqual(len(lines), 2)
+        logger.close()
+
 
 class TestInstallAuditHooks(unittest.TestCase):
     def setUp(self):
@@ -96,9 +108,10 @@ class TestInstallAuditHooks(unittest.TestCase):
         reset_hook_registry()
 
     def tearDown(self):
-        self.tmp.cleanup()
+        # 先关单例句柄 (持久 append handle), 再删临时目录 —— Windows 不能删还开着的文件
         reset_audit_logger()
         reset_hook_registry()
+        self.tmp.cleanup()
 
     def test_install_registers_4_hooks(self):
         install_audit_hooks(path=str(self.tmp_path / "audit.jsonl"))
