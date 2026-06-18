@@ -51,6 +51,27 @@ class TestLocalStateStore(unittest.TestCase):
         get_result2 = self.state_store.get_state(self.test_session_id)
         self.assertEqual(get_result2["task"], "新任务")
 
+    def test_concurrent_append_no_lost_events(self):
+        """回归: 并发 append_event 不丢事件 (per-session 锁修 lost-update race)。
+        无锁时多线程各读旧 state 各写回 → 后写覆盖先写, 最终事件数 < N*M。"""
+        import threading
+        sid = "concurrent_session"
+        n_threads, per_thread = 8, 25
+
+        def worker(tid):
+            for i in range(per_thread):
+                self.state_store.append_event(sid, {"type": "ev", "tid": tid, "i": i})
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        state = self.state_store.get_state(sid)
+        self.assertIsNotNone(state)
+        self.assertEqual(len(state.get("events", [])), n_threads * per_thread)
+
     def test_append_event(self):
         self.state_store.save_state(self.test_session_id, self.test_state)
         append_result = self.state_store.append_event(self.test_session_id, self.test_event)

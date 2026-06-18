@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -22,6 +23,11 @@ from deps_module import BasicDeps
 class StateStoreException(SystemBaseException):
     """状态存储模块异常（建议在全局错误码表中补充 STATE_STORE_* 系列编码）。"""
     pass
+
+
+# 固定锁池大小: 同 session_id 哈希到同一把锁(串行化其读-改-写), 不同 session 偶尔同桶(轻微误串,
+# 不影响正确性)。固定池避免 per-session 锁字典无界增长 + 创建竞态。
+_SESSION_LOCK_POOL_SIZE = 64
 
 
 class LocalStateStore(BaseStateStore):
@@ -77,6 +83,11 @@ class LocalStateStore(BaseStateStore):
 
         os.makedirs(self.store_dir, exist_ok=True)
 
+        # per-session 写锁池: 串行化同一 session 的 append/save/clear, 防并发 append 读-改-写丢事件。
+        # 仅 per-process —— 本地 JSON 后端不为多进程/多 worker 并发设计, 跨进程同一 session 仍会竞争
+        # (真要并发请换 SQL/Redis 后端)。
+        self._session_lock_pool = [threading.Lock() for _ in range(_SESSION_LOCK_POOL_SIZE)]
+
         # 启动时做一次过期清理（best-effort）
         try:
             self._cleanup_expired_states()
@@ -103,6 +114,10 @@ class LocalStateStore(BaseStateStore):
     def _now_iso(self) -> str:
         # 使用UTC时间，避免跨时区问题
         return datetime.now(timezone.utc).isoformat()
+
+    def _lock_for(self, session_id: str) -> threading.Lock:
+        """取该 session 的写锁 (固定池哈希分桶)。同 session 必同锁 → 串行化其 append/save/clear。"""
+        return self._session_lock_pool[hash(session_id) % len(self._session_lock_pool)]
 
     def _enforce_capacity(self) -> None:
         if self.max_size is None:
@@ -157,7 +172,9 @@ class LocalStateStore(BaseStateStore):
                 "updated_at": self._now_iso(),
             }
 
-            safe_atomic_write_json(path, state_to_save)
+            # 持 per-session 锁写, 与 append_event 的读-改-写互斥 (整存 vs 追加不交错)
+            with self._lock_for(session_id):
+                safe_atomic_write_json(path, state_to_save)
             self.logger.info(f"状态保存成功：{session_id}", logger_name="state_store_module")
             return True
         except StateStoreException:
@@ -195,29 +212,32 @@ class LocalStateStore(BaseStateStore):
             event_to_add = dict(event)
             event_to_add.setdefault("timestamp", self._now_iso())
 
-            # 若会话不存在，则创建基础状态
-            state = self.get_state(session_id)
-            if state is None:
-                state = {"events": []}
+            # get→append→write 整段必须串行 (持 per-session 锁), 否则两并发 append 各读旧 state、
+            # 各写回 → 后写覆盖先写丢事件 (lost update)。
+            with self._lock_for(session_id):
+                # 若会话不存在，则创建基础状态
+                state = self.get_state(session_id)
+                if state is None:
+                    state = {"events": []}
 
-            if not isinstance(state, dict):
-                raise StateStoreException("STATE_STORE_INVALID_STATE", "会话状态格式非法，必须为Dict")
+                if not isinstance(state, dict):
+                    raise StateStoreException("STATE_STORE_INVALID_STATE", "会话状态格式非法，必须为Dict")
 
-            events = state.get("events")
-            if events is None:
-                events = []
-                state["events"] = events
-            if not isinstance(events, list):
-                raise StateStoreException("STATE_STORE_INVALID_EVENTS", "会话events字段必须为List")
+                events = state.get("events")
+                if events is None:
+                    events = []
+                    state["events"] = events
+                if not isinstance(events, list):
+                    raise StateStoreException("STATE_STORE_INVALID_EVENTS", "会话events字段必须为List")
 
-            events.append(event_to_add)
-            # 更新元信息
-            meta = state.get("_meta") if isinstance(state.get("_meta"), dict) else {}
-            meta.update({"session_id": session_id, "updated_at": self._now_iso()})
-            state["_meta"] = meta
+                events.append(event_to_add)
+                # 更新元信息
+                meta = state.get("_meta") if isinstance(state.get("_meta"), dict) else {}
+                meta.update({"session_id": session_id, "updated_at": self._now_iso()})
+                state["_meta"] = meta
 
-            path = self._get_state_path(session_id)
-            safe_atomic_write_json(path, state)
+                path = self._get_state_path(session_id)
+                safe_atomic_write_json(path, state)
 
             self.logger.info(f"事件追加成功：{session_id}", logger_name="state_store_module")
             return True
@@ -230,9 +250,11 @@ class LocalStateStore(BaseStateStore):
     def clear_state(self, session_id: str) -> bool:
         try:
             path = self._get_state_path(session_id)
-            if not os.path.exists(path):
-                return True
-            os.remove(path)
+            # 持 per-session 锁删, 与并发 append/save 互斥
+            with self._lock_for(session_id):
+                if not os.path.exists(path):
+                    return True
+                os.remove(path)
             self.logger.info(f"状态清理成功：{session_id}", logger_name="state_store_module")
             return True
         except StateStoreException:
