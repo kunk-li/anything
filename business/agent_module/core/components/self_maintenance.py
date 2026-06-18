@@ -427,10 +427,12 @@ class SelfMaintenanceMixin:
         n = getattr(self, "user_analysis_every_n", 0) or 0
         if not (getattr(self, "enable_user_analysis", False) and n > 0):
             return
-        self._user_analysis_counter = getattr(self, "_user_analysis_counter", 0) + 1
-        if self._user_analysis_counter < n:
-            return
-        self._user_analysis_counter = 0
+        # 计数器读-改-写持锁 (并发 execute 下非原子自增会丢更新/误触发); 锁在 SimpleAgent.__init__ 建
+        with self._user_analysis_counter_lock:
+            self._user_analysis_counter = getattr(self, "_user_analysis_counter", 0) + 1
+            if self._user_analysis_counter < n:
+                return
+            self._user_analysis_counter = 0
 
         import threading
 

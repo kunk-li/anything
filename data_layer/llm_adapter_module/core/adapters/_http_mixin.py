@@ -142,6 +142,14 @@ def _assert_clean_url(url: str) -> None:
 class _BaseHTTPAdapterMixin:
     """给需要HTTP调用的适配器提供通用requests能力（超时、重试 + SSE 流式）"""
 
+    def _mock_stream(self, messages, request, chunk_size: int = 10):
+        """未配 api_key 时的流式降级: 取完整回复后按 chunk_size 切片 yield, 保证 generator 协议。
+        openai/anthropic/ollama 三个 adapter 的 mock 分支共用此实现 (原来各 copy 一份)。
+        self.chat_with_context 由具体 adapter 提供。"""
+        full = self.chat_with_context(messages, request)
+        for i in range(0, len(full), chunk_size):
+            yield full[i:i + chunk_size]
+
     def _heal_url_or_die(self, url: str) -> str:
         """Task XXXX-19 续续: 即使 self.api_base 在内存里被污染过 (服务没重启,
         旧 adapter 对象拿着脏字符串), 这里运行期再 sanitize 一次, 自动修自身.

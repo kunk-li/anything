@@ -146,11 +146,14 @@ def _run_query(
         ) from e
 
     engine = create_engine(conn_str, future=True)
-    with engine.connect() as conn:
-        result = conn.execute(text(query), params or {})
-        cols = list(result.keys())
-        rows = [list(r) for r in result.fetchall()]
-    return rows, cols, None
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(query), params or {})
+            cols = list(result.keys())
+            rows = [list(r) for r in result.fetchall()]
+        return rows, cols, None
+    finally:
+        engine.dispose()  # 释放该 engine 的连接池, 防反复调用累积悬挂物理连接
 
 
 def _run_demo_sqlite(

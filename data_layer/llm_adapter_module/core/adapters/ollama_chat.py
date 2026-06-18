@@ -116,9 +116,8 @@ class OllamaChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         Ollama /api/chat 用 NDJSON 而非 SSE, payload stream=true (默认行为)。
         """
         if not self.check_config():
-            full = self.chat_with_context(messages, request)
-            for i in range(0, len(full), 10):
-                yield full[i:i + 10]
+            # mock 降级 (共用 _BaseHTTPAdapterMixin._mock_stream)
+            yield from self._mock_stream(messages, request)
             return
 
         url = f"{self.api_base}/api/chat"

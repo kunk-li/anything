@@ -127,10 +127,8 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
           - SSE 事件 content_block_delta 含 delta.text 增量
         """
         if not self.check_config():
-            # mock 降级: chat_with_context + 切片
-            full = self.chat_with_context(messages, request)
-            for i in range(0, len(full), 10):
-                yield full[i:i + 10]
+            # mock 降级: chat_with_context + 切片 (共用 _BaseHTTPAdapterMixin._mock_stream)
+            yield from self._mock_stream(messages, request)
             return
 
         # Anthropic 把 system 拆出来

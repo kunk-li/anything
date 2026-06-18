@@ -306,6 +306,8 @@ class SimpleAgent(
         self._tool_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._tool_cache_lock = threading.Lock()
         self._tool_cache_stats = {"hits": 0, "misses": 0}
+        # 串行化 _maybe_auto_user_analysis 的计数器读-改-写 (并发 execute 防丢更新/误计数)
+        self._user_analysis_counter_lock = threading.Lock()
 
         self.logger.info(
             f"Agent 模块初始化完成 (需审批工具: {sorted(self.tool_approval_required)}; "

@@ -121,11 +121,8 @@ class OpenAIChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
         - 异常时 retry max_retry 次, 仍失败 raise
         """
         if not self.check_config():
-            # mock 降级: 拿完整回复后切片 yield
-            full = self.chat_with_context(messages, request)
-            chunk_size = 10
-            for i in range(0, len(full), chunk_size):
-                yield full[i:i + chunk_size]
+            # mock 降级: 拿完整回复后切片 yield (共用 _BaseHTTPAdapterMixin._mock_stream)
+            yield from self._mock_stream(messages, request)
             return
 
         url = f"{self.api_base}/chat/completions"

@@ -301,6 +301,9 @@ class LLMService(BaseLLMService):
         # adapter 已经填了就尊重它
         prompt_t = resp.prompt_tokens
         completion_t = resp.completion_tokens
+        # 记下哪个是估算来的 (原 resp 为 None), 下面回填 total 时用
+        prompt_estimated = prompt_t is None
+        completion_estimated = completion_t is None
         if prompt_t is None:
             input_chars = 0
             if request.input_text:
@@ -323,7 +326,9 @@ class LLMService(BaseLLMService):
             resp.prompt_tokens = prompt_t
         if resp.completion_tokens is None:
             resp.completion_tokens = completion_t
-        if resp.total_tokens is None:
+        # total: 仅当 prompt/completion 都是 adapter 给的真实值时才信任已有 total; 任一为估算则按
+        # prompt_t+completion_t 重算, 避免 "估算的分项 + 真实 total" 三者自相矛盾 (与 tracker 口径一致)。
+        if resp.total_tokens is None or prompt_estimated or completion_estimated:
             resp.total_tokens = prompt_t + completion_t
 
         tracker = get_usage_tracker()
