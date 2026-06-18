@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import multiprocessing
+import threading
 from typing import Dict, Optional
 
 from .base import BaseLogger
@@ -51,6 +52,9 @@ class SystemLogger(BaseLogger):
 
         self._base_logger_name = self._config.logger_name
         self._logger_cache: Dict[str, logging.Logger] = {}
+        # 串行化 logger 构建 (cache 读写 + handler 挂载)。RLock: get_logger 持锁会再调 _build_logger。
+        # 无锁时两线程并发首次取同名 logger 会各挂一遍 handler → 日志重复行。
+        self._build_lock = threading.RLock()
 
         # 初始化默认 logger（当前进程独立句柄）
         self._default_logger = self._build_logger(self._base_logger_name)
@@ -78,31 +82,32 @@ class SystemLogger(BaseLogger):
         logger.setLevel(self.log_level)
         logger.propagate = False
 
-        # 避免重复添加 handler（同一进程内）
-        if logger.handlers:
-            return logger
+        # 持锁 + double-check 避免重复添加 handler（并发首次取同名 logger 时）
+        with self._build_lock:
+            if logger.handlers:
+                return logger
 
-        # Task UU (#81): env var driven JSON vs plain formatter
-        # ANYTHING_LOG_FORMAT=json  → 单行 JSON, 适合 ELK / Datadog / Loki ingest
-        # 缺省 / =plain               → 老的 "asctime - pid - name - level - msg" 格式
-        if use_json_format():
-            formatter: logging.Formatter = JsonFormatter()
-        else:
-            formatter = logging.Formatter(LOG_FORMAT)
+            # Task UU (#81): env var driven JSON vs plain formatter
+            # ANYTHING_LOG_FORMAT=json  → 单行 JSON, 适合 ELK / Datadog / Loki ingest
+            # 缺省 / =plain               → 老的 "asctime - pid - name - level - msg" 格式
+            if use_json_format():
+                formatter: logging.Formatter = JsonFormatter()
+            else:
+                formatter = logging.Formatter(LOG_FORMAT)
 
-        # 控制台 handler
-        ch = logging.StreamHandler()
-        ch.setLevel(self.log_level)
-        ch.setFormatter(formatter)
+            # 控制台 handler
+            ch = logging.StreamHandler()
+            ch.setLevel(self.log_level)
+            ch.setFormatter(formatter)
 
-        # 文件 handler（每进程独立句柄；同文件名，锁保证安全）
-        log_file = os.path.join(self.log_dir, get_log_file_name())
-        fh = logging.FileHandler(log_file, encoding="utf-8")
-        fh.setLevel(self.log_level)
-        fh.setFormatter(formatter)
+            # 文件 handler（每进程独立句柄；同文件名，锁保证安全）
+            log_file = os.path.join(self.log_dir, get_log_file_name())
+            fh = logging.FileHandler(log_file, encoding="utf-8")
+            fh.setLevel(self.log_level)
+            fh.setFormatter(formatter)
 
-        logger.addHandler(ch)
-        logger.addHandler(fh)
+            logger.addHandler(ch)
+            logger.addHandler(fh)
         return logger
 
     def get_logger(self, logger_name: str = "rag_agent_system") -> logging.Logger:
@@ -112,8 +117,11 @@ class SystemLogger(BaseLogger):
 
         lg = self._logger_cache.get(logger_name)
         if lg is None:
-            lg = self._build_logger(logger_name)
-            self._logger_cache[logger_name] = lg
+            with self._build_lock:
+                lg = self._logger_cache.get(logger_name)  # double-check
+                if lg is None:
+                    lg = self._build_logger(logger_name)
+                    self._logger_cache[logger_name] = lg
         return lg
 
     def _log(self, level: int, message: str, logger_name: str = "rag_agent_system") -> None:

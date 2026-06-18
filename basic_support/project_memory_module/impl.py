@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import os
 import threading
+from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 # 默认查找路径列表 (按优先级)
@@ -237,9 +238,11 @@ def reset_project_memory() -> None:
 # 多项目支持: 按"项目根"加载 ProjectMemory。全局单例只认 CWD/CWD.parent 的一份 AGENTS.md
 # (默认作用域, 通常是本平台自身); 当请求带了 active_project_root (用户选的"当前项目")时, 要读
 # 那个根下的 AGENTS.md/CLAUDE.md。按 root 缓存 + mtime 热刷新; root 为空 -> 回退全局单例。
-_root_memory_cache: Dict[str, Tuple[Path, float, str]] = {}
+# LRU: 按 root 路径缓存项目记忆。OrderedDict + 上界, 防长跑多项目服务无界增长。
+_root_memory_cache: "OrderedDict[str, Tuple[Path, float, str]]" = OrderedDict()
 _root_memory_lock = threading.Lock()
 _ROOT_MEMORY_MAX_CHARS = 8000
+_ROOT_MEMORY_MAX_ENTRIES = 128
 
 
 def load_project_memory_for_root(root: Optional[str]) -> str:
@@ -274,6 +277,7 @@ def load_project_memory_for_root(root: Optional[str]) -> str:
             return cached[2] if cached else ""
         cached = _root_memory_cache.get(key)
         if cached and cached[0] == path and cached[1] == mtime:
+            _root_memory_cache.move_to_end(key)  # LRU: 命中即置最近
             return cached[2]
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
@@ -283,4 +287,7 @@ def load_project_memory_for_root(root: Optional[str]) -> str:
         if len(content) > _ROOT_MEMORY_MAX_CHARS:
             content = content[:_ROOT_MEMORY_MAX_CHARS] + "\n\n... [truncated]"
         _root_memory_cache[key] = (path, mtime, content)
+        _root_memory_cache.move_to_end(key)
+        while len(_root_memory_cache) > _ROOT_MEMORY_MAX_ENTRIES:
+            _root_memory_cache.popitem(last=False)  # 逐出最久未用
         return content

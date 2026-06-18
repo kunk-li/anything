@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import time
@@ -147,13 +148,11 @@ class ConfigManager(BaseConfigManager):
         参考 docs/configuration-priority.md 第 2 节"5 个配置源 + 优先级"。
         """
         raw: Any = None
-        from_env = False
 
         if env_var:
             env_val = os.environ.get(env_var)
             if env_val is not None and env_val != "":
                 raw = env_val
-                from_env = True
 
         if raw is None:
             raw = self.get_config(key, None)
@@ -422,6 +421,13 @@ class ConfigManager(BaseConfigManager):
                 try:
                     return decrypt_value(v, secret_key)
                 except Exception:
+                    # 明文已在 decrypt_value 内提前原样返回, 走到这里只可能是真正 ENC:: 串解密失败
+                    # (密钥错/已轮换/token 损坏)。静默会让 operator 把密文当明文用 — 补一条 warning。
+                    if v.startswith("ENC::"):
+                        logging.getLogger(__name__).warning(
+                            "敏感配置解密失败, 按原文返回 (检查 secret_key 是否正确/已轮换): %s…",
+                            v[:16],
+                        )
                     return v
             return v
 
