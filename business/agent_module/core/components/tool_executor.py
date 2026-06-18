@@ -212,9 +212,41 @@ class ToolExecutorMixin:
         timeout = float(getattr(self, "tool_timeout_seconds", 0) or 0)
         if timeout <= 0 or tool_name in getattr(self, "tool_timeout_exempt", set()):
             return tool(payload)
+
+        # 安全阀: 在飞(含已超时仍在跑)工具线程达上界时 fail-fast, 不再 spawn — 防卡死工具堆爆线程。
+        # cap<=0 关闭 (回退旧的无界行为)。计数在工具真正结束(done callback)时减, 故反映"还没退场的线程数"。
+        cap = int(getattr(self, "tool_max_inflight_threads", 0) or 0)
+        lock = getattr(self, "_inflight_tool_lock", None)
+        if cap > 0 and lock is not None:
+            with lock:
+                if self._inflight_tool_count >= cap:
+                    raise ToolTimeoutError(
+                        f"工具执行线程数已达上界 {cap} (多个工具超时后仍未结束), "
+                        f"{tool_name} 暂拒执行 (agent.tool_max_inflight_threads)"
+                    ) from None
+                self._inflight_tool_count += 1
+            counted = True
+        else:
+            counted = False
+
+        _released = [False]
+
+        def _release(_f=None):
+            # 只减一次 (done callback 正常路径; submit 异常的兜底路径二选一)
+            if counted and not _released[0]:
+                _released[0] = True
+                with lock:
+                    self._inflight_tool_count -= 1
+
         ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"tool-{tool_name}")
         try:
-            fut = ex.submit(tool, payload)
+            try:
+                fut = ex.submit(tool, payload)
+            except Exception:
+                _release()  # 没 spawn 成功, 立即还计数, 不泄漏
+                raise
+            if counted:
+                fut.add_done_callback(_release)  # 工具真正返回时(无论是否已超时)才减计数
             try:
                 return fut.result(timeout=timeout)
             except FuturesTimeoutError:

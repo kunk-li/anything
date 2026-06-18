@@ -303,6 +303,15 @@ class SimpleAgent(
             self.tool_timeout_exempt = set(str(t) for t in cfg_exempt if t)
         else:
             self.tool_timeout_exempt = set(default_timeout_exempt)
+        # 工具超时后工作线程无法强杀, 会泄漏到工具自然结束。设一个"在飞(含已超时仍在跑)工具线程"
+        # 上界做安全阀: 达到后新工具调用 fail-fast 而非再 spawn, 防卡死工具把线程数顶爆。
+        # 默认 64 = 病态状态才会触达(工具本是串行执行), 正常运行无感; 设 0 = 不限(回退旧行为)。
+        self.tool_max_inflight_threads = self.config.get_effective_value(
+            "agent.tool_max_inflight_threads", env_var="ANYTHING_AGENT_TOOL_MAX_INFLIGHT",
+            default=64, value_type=int,
+        )
+        self._inflight_tool_lock = threading.Lock()
+        self._inflight_tool_count = 0
         self._tool_cache: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
         self._tool_cache_lock = threading.Lock()
         self._tool_cache_stats = {"hits": 0, "misses": 0}

@@ -9,6 +9,7 @@ import time
 import unittest
 
 from agent_module.core.impl import SimpleAgent
+from agent_module.core.components.tool_executor import ToolTimeoutError
 
 
 class _Reg:
@@ -122,6 +123,34 @@ class TestAgentTimeoutEnforce(unittest.TestCase):
         })
         self.assertEqual(result["code"], "AGENT_TIMEOUT")
         self.assertEqual(calls["n"], 1)  # 只执行了第一步, 第二步被超时中止
+
+    def test_inflight_tool_thread_cap_fail_fast(self):
+        """工具超时后工作线程泄漏: 在飞线程达上界时第 N+1 个调用立即 fail-fast, 不再 spawn。"""
+        import threading
+        agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None)
+        agent.tool_timeout_seconds = 0.1          # 快速超时
+        agent.tool_max_inflight_threads = 2       # 上界设 2 便于测
+
+        release = threading.Event()
+
+        def _stuck(payload):
+            release.wait(timeout=10)              # 阻塞直到放行 (模拟卡死工具)
+            return {"code": "SUCCESS"}
+
+        try:
+            # 前 2 次各 0.1s 后超时, 工作线程仍阻塞 → in-flight 计数累到 2
+            for _ in range(2):
+                with self.assertRaises(ToolTimeoutError):
+                    agent._invoke_tool_with_timeout(_stuck, "stuck", {})
+
+            # 第 3 次: 计数已达上界 → 立即 fail-fast (不等 0.1s timeout, 不 spawn 第 3 个线程)
+            t0 = time.time()
+            with self.assertRaises(ToolTimeoutError) as ctx:
+                agent._invoke_tool_with_timeout(_stuck, "stuck", {})
+            self.assertLess(time.time() - t0, 0.05)
+            self.assertIn("上界", str(ctx.exception))
+        finally:
+            release.set()                         # 放行阻塞线程, 避免退出时挂住
 
 
 if __name__ == "__main__":
