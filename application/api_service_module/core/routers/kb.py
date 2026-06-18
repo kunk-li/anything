@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 _SCHEMA = """
@@ -109,12 +110,8 @@ class KbRoutesMixin:
                     (kb_id, name, description, tenant_id, now, iso),
                 )
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"id": kb_id, "name": name, "description": description,
-                             "tenant_id": tenant_id, "created_at_iso": iso},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"id": kb_id, "name": name, "description": description,
+                             "tenant_id": tenant_id, "created_at_iso": iso})
             except Exception as e:
                 return _err(trace_id, "KB_CREATE_FAILED", str(e))
 
@@ -137,11 +134,7 @@ class KbRoutesMixin:
                     item["doc_count"] = row[6]
                     items.append(item)
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(items), "items": items},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"count": len(items), "items": items})
             except Exception as e:
                 return _err(trace_id, "KB_LIST_FAILED", str(e))
 
@@ -157,12 +150,7 @@ class KbRoutesMixin:
                 row = cur.fetchone()
                 if not row:
                     conn.close()
-                    return JSONResponse(
-                        {"code": "NOT_FOUND", "message": f"kb {kb_id!r} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
+                    return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
                 kb = _kb_row(row)
                 # 拉 doc 列表
                 cur = conn.execute(
@@ -173,10 +161,7 @@ class KbRoutesMixin:
                 kb["docs"] = docs
                 kb["doc_count"] = len(docs)
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok", "data": kb,
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=kb)
             except Exception as e:
                 return _err(trace_id, "KB_GET_FAILED", str(e))
 
@@ -187,11 +172,7 @@ class KbRoutesMixin:
                 conn = _get_conn()
                 conn.execute("DELETE FROM kb WHERE id = ?", (kb_id,))
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "deleted",
-                    "data": {"id": kb_id},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, message="deleted", data={"id": kb_id})
             except Exception as e:
                 return _err(trace_id, "KB_DELETE_FAILED", str(e))
 
@@ -211,12 +192,7 @@ class KbRoutesMixin:
                 cur = conn.execute("SELECT 1 FROM kb WHERE id = ?", (kb_id,))
                 if not cur.fetchone():
                     conn.close()
-                    return JSONResponse(
-                        {"code": "NOT_FOUND", "message": f"kb {kb_id!r} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
+                    return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
                 now = int(time.time())
                 added = 0
                 for doc_id in doc_ids:
@@ -229,11 +205,7 @@ class KbRoutesMixin:
                     except Exception:
                         pass
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"kb_id": kb_id, "added": added, "requested": len(doc_ids)},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"kb_id": kb_id, "added": added, "requested": len(doc_ids)})
             except Exception as e:
                 return _err(trace_id, "KB_ADD_DOCS_FAILED", str(e))
 
@@ -247,28 +219,14 @@ class KbRoutesMixin:
                     (kb_id, doc_id),
                 )
                 conn.close()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"kb_id": kb_id, "doc_id": doc_id},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"kb_id": kb_id, "doc_id": doc_id})
             except Exception as e:
                 return _err(trace_id, "KB_REMOVE_DOC_FAILED", str(e))
 
 
 def _bad(trace_id: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"code": "BAD_REQUEST", "message": message,
-         "data": None, "trace_id": trace_id,
-         "retryable": False, "details": None},
-        status_code=400,
-    )
+    return envelope(trace_id, code="BAD_REQUEST", message=message, status_code=400)
 
 
 def _err(trace_id: str, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"code": code, "message": message,
-         "data": None, "trace_id": trace_id,
-         "retryable": True, "details": None},
-        status_code=500,
-    )
+    return envelope(trace_id, code=code, message=message, status_code=500, retryable=True)

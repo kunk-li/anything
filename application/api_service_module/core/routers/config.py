@@ -15,7 +15,7 @@ from __future__ import annotations
 import traceback
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class ConfigRoutesMixin:
@@ -28,17 +28,7 @@ class ConfigRoutesMixin:
 
         def _need_llm_service():
             if self.llm_service is None:
-                return JSONResponse(
-                    status_code=501,
-                    content={
-                        "code": "SERVICE_UNAVAILABLE",
-                        "message": "llm_service 未注入, 模型管理端点不可用",
-                        "data": None,
-                        "trace_id": None,
-                        "retryable": False,
-                        "details": None,
-                    },
-                )
+                return envelope(None, code="SERVICE_UNAVAILABLE", message="llm_service 未注入, 模型管理端点不可用", status_code=501)
             return None
 
         @self.app.get("/config/models")
@@ -51,30 +41,8 @@ class ConfigRoutesMixin:
                 models = self.llm_service.list_models(mask_keys=True)
             except Exception as e:
                 self.logger.error(f"list_models failed: {e}\n{traceback.format_exc()}")
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "UNKNOWN_ERROR",
-                        "message": str(e),
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": {"models": models},
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                return envelope(trace_id, code="UNKNOWN_ERROR", message=str(e), status_code=500, request_id=True)
+            return envelope(trace_id, data={"models": models}, request_id=True)
 
         @self.app.post("/config/models")
         async def register_model(request: Request):
@@ -88,18 +56,7 @@ class ConfigRoutesMixin:
             try:
                 body = await request.json()
             except Exception:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "BAD_REQUEST",
-                        "message": "请求体不是合法 JSON",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="BAD_REQUEST", message="请求体不是合法 JSON", status_code=400, request_id=True)
 
             name = (body.get("name") or "").strip()
             request_type = (body.get("request_type") or "").upper()
@@ -109,22 +66,11 @@ class ConfigRoutesMixin:
             set_as_default = bool(body.get("set_as_default", False))
 
             if not name or not request_type or not adapter_class:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_MISSING",
-                        "message": "name / request_type / adapter_class 必填",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": {
+                return envelope(trace_id, code="PARAM_MISSING", message="name / request_type / adapter_class 必填", status_code=400, details={
                             "name": bool(name),
                             "request_type": bool(request_type),
                             "adapter_class": bool(adapter_class),
-                        },
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                        }, request_id=True)
             # 防御 (host=undefined 超时根因): 前端误把 JS undefined/null 序列化成字符串串进来,
             # 或漏填又拼了非法值。非空但是脏字面量 (undefined/null/none) 或缺 http(s):// scheme →
             # 400 拒绝, 不静默落库等到调用时 host=undefined 慢慢超时 (留空则放行, 适配器走默认 endpoint)。
@@ -132,18 +78,7 @@ class ConfigRoutesMixin:
                 api_base.lower() in ("undefined", "null", "none", "nan")
                 or not api_base.lower().startswith(("http://", "https://"))
             ):
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": f"api_base 非法: {api_base!r}; 请填完整 http(s):// 地址, 或留空用该适配器默认 endpoint。",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message=f"api_base 非法: {api_base!r}; 请填完整 http(s):// 地址, 或留空用该适配器默认 endpoint。", status_code=400, request_id=True)
             try:
                 entry = self.llm_service.register_or_update_model(
                     name=name,
@@ -154,44 +89,11 @@ class ConfigRoutesMixin:
                     set_as_default=set_as_default,
                 )
             except ValueError as ve:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": str(ve),
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message=str(ve), status_code=400, request_id=True)
             except Exception as e:
                 self.logger.error(f"register_model failed: {e}\n{traceback.format_exc()}")
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "UNKNOWN_ERROR",
-                        "message": str(e),
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "model registered",
-                    "data": entry,
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                return envelope(trace_id, code="UNKNOWN_ERROR", message=str(e), status_code=500, request_id=True)
+            return envelope(trace_id, message="model registered", data=entry, request_id=True)
 
         @self.app.delete("/config/models/{name}")
         async def delete_model(name: str, request: Request):
@@ -203,18 +105,7 @@ class ConfigRoutesMixin:
             if denied is not None:
                 return denied
             existed = self.llm_service.unregister_model(name)
-            return JSONResponse(
-                status_code=200 if existed else 404,
-                content={
-                    "code": "SUCCESS" if existed else "MODEL_NOT_FOUND",
-                    "message": "removed" if existed else "model 不存在",
-                    "data": {"name": name, "existed": existed},
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+            return envelope(trace_id, code="SUCCESS" if existed else "MODEL_NOT_FOUND", message="removed" if existed else "model 不存在", data={"name": name, "existed": existed}, status_code=200 if existed else 404, request_id=True)
 
         @self.app.post("/config/models/{name}/set-default")
         async def set_default_model(name: str, request: Request):
@@ -233,28 +124,6 @@ class ConfigRoutesMixin:
             try:
                 result = self.llm_service.set_default_model(name=name, request_type=request_type)
             except ValueError as ve:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": str(ve),
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "default updated",
-                    "data": result,
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                return envelope(trace_id, code="PARAM_INVALID", message=str(ve), status_code=400, request_id=True)
+            return envelope(trace_id, message="default updated", data=result, request_id=True)
 

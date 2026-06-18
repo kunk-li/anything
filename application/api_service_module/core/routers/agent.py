@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 # 工具分类映射 — 让前端能分组展示. 没列到的工具归 "其他".
@@ -64,12 +64,7 @@ class AgentRoutesMixin:
             trace_id = request.state.trace_id
             registry = getattr(self, "tool_registry", None)
             if registry is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "tool_registry 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="tool_registry 未注入", status_code=501)
 
             try:
                 # DictToolRegistry: tools 内部是 dict[name -> (fn, description)]
@@ -112,22 +107,13 @@ class AgentRoutesMixin:
                 for it in items:
                     by_category.setdefault(it["category"], []).append(it)
 
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {
+                return envelope(trace_id, data={
                         "count": len(items),
                         "tools": items,
                         "by_category": by_category,
-                    },
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    })
             except Exception as e:
-                return JSONResponse(
-                    {"code": "AGENT_TOOLS_LIST_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="AGENT_TOOLS_LIST_FAILED", message=str(e), status_code=500)
 
         # 执行计划⑥ (可见性面板): 自维护提议 (默认关, 需 agent.enable_self_reflection) + 人审批执行。
         # 给"待审批维护提议"面板当数据源 + 一键 approve 出口 (方向4 提议终于有消费方)。
@@ -136,37 +122,22 @@ class AgentRoutesMixin:
             trace_id = request.state.trace_id
             agent = getattr(self, "agent", None)
             if agent is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="agent 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             scope_raw = request.query_params.get("scope") or "memory"
             scope = tuple(s.strip() for s in scope_raw.split(",") if s.strip()) or ("memory",)
             try:
                 result = agent.run_maintenance_scan(tenant_id=tenant, trace_id=trace_id, scope=scope)
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok", "data": result,
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=result)
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MAINTENANCE_SCAN_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MAINTENANCE_SCAN_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/agent/maintenance/apply")
         async def agent_maintenance_apply(request: Request):
             trace_id = request.state.trace_id
             agent = getattr(self, "agent", None)
             if agent is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="agent 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 body = await request.json()
@@ -177,16 +148,9 @@ class AgentRoutesMixin:
             try:
                 result = agent.apply_memory_maintenance(
                     proposals, approved_ids, tenant_id=tenant, trace_id=trace_id)
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok", "data": result,
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=result)
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MAINTENANCE_APPLY_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MAINTENANCE_APPLY_FAILED", message=str(e), status_code=500)
 
         # 用户分析流程 (analyze_user, 方向1 深化): 主动分析使用者 → 洞察(只读) + 画像增强提议(审批反哺)。
         # 默认需 agent.enable_user_analysis。给可见性面板"用户洞察"区当数据源 + 反哺出口。
@@ -195,32 +159,19 @@ class AgentRoutesMixin:
             trace_id = request.state.trace_id
             agent = getattr(self, "agent", None)
             if agent is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501)
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="agent 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": agent.analyze_user(tenant_id=tenant, trace_id=trace_id),
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=agent.analyze_user(tenant_id=tenant, trace_id=trace_id))
             except Exception as e:
-                return JSONResponse(
-                    {"code": "USER_ANALYSIS_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=500)
+                return envelope(trace_id, code="USER_ANALYSIS_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/agent/user-analysis/apply")
         async def agent_user_analysis_apply(request: Request):
             trace_id = request.state.trace_id
             agent = getattr(self, "agent", None)
             if agent is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501)
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="agent 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 body = await request.json()
@@ -230,25 +181,16 @@ class AgentRoutesMixin:
                 result = agent.apply_user_insights(
                     body.get("proposals") or [], body.get("approved_ids") or [],
                     tenant_id=tenant, trace_id=trace_id)
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok", "data": result,
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=result)
             except Exception as e:
-                return JSONResponse(
-                    {"code": "USER_ANALYSIS_APPLY_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=500)
+                return envelope(trace_id, code="USER_ANALYSIS_APPLY_FAILED", message=str(e), status_code=500)
 
         # 执行计划⑦ (统一配置界面 + 能力档位): 读/改 agent 开关 (运行期 live) + 一键档位。
         # 消费②的配置 schema 当数据源。⚠️ 能改自主能力开关, 生产应在网关加 admin 鉴权 (同 /config/models)。
         def _agent_or_503(trace_id):
             agent = getattr(self, "agent", None)
             if agent is None:
-                return None, JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "agent 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501)
+                return None, envelope(trace_id, code="SERVICE_UNAVAILABLE", message="agent 未注入", status_code=501)
             return agent, None
 
         @self.app.get("/config/agent")
@@ -258,11 +200,7 @@ class AgentRoutesMixin:
             if err:
                 return err
             from agent_module.config.schema import dump_agent_config
-            return JSONResponse({
-                "code": "SUCCESS", "message": "ok",
-                "data": {"fields": dump_agent_config(self.config, agent)},
-                "trace_id": trace_id, "retryable": False, "details": None,
-            })
+            return envelope(trace_id, data={"fields": dump_agent_config(self.config, agent)})
 
         @self.app.post("/config/agent")
         async def config_agent_set(request: Request):
@@ -285,20 +223,13 @@ class AgentRoutesMixin:
                 updates = body if isinstance(body, dict) else {}
             result = apply_agent_config(agent, updates)
             result["fields"] = dump_agent_config(self.config, agent)
-            return JSONResponse({
-                "code": "SUCCESS", "message": "ok", "data": result,
-                "trace_id": trace_id, "retryable": False, "details": None,
-            })
+            return envelope(trace_id, data=result)
 
         @self.app.get("/config/agent/presets")
         async def config_agent_presets(request: Request):
             trace_id = request.state.trace_id
             from agent_module.config.schema import AGENT_CONFIG_PRESETS
-            return JSONResponse({
-                "code": "SUCCESS", "message": "ok",
-                "data": {"presets": AGENT_CONFIG_PRESETS},
-                "trace_id": trace_id, "retryable": False, "details": None,
-            })
+            return envelope(trace_id, data={"presets": AGENT_CONFIG_PRESETS})
 
         @self.app.post("/config/agent/preset")
         async def config_agent_apply_preset(request: Request):
@@ -318,7 +249,4 @@ class AgentRoutesMixin:
             name = (body or {}).get("name") or (body or {}).get("preset")
             result = apply_preset(agent, name)
             result["fields"] = dump_agent_config(self.config, agent)
-            return JSONResponse({
-                "code": "SUCCESS", "message": "ok", "data": result,
-                "trace_id": trace_id, "retryable": False, "details": None,
-            })
+            return envelope(trace_id, data=result)

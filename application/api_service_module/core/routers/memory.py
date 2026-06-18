@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class MemoryRoutesMixin:
@@ -30,12 +30,7 @@ class MemoryRoutesMixin:
         async def memory_list(request: Request):
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 limit = int(request.query_params.get("limit", "50"))
@@ -63,22 +58,13 @@ class MemoryRoutesMixin:
                         "last_accessed": f.last_accessed,
                         "session_id": f.session_id,
                     })
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {
+                return envelope(trace_id, data={
                         "tenant_id": tenant, "count": len(items),
                         "limit": limit, "offset": offset, "facts": items,
-                    },
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    })
             except Exception as e:
                 self.logger.error(f"[memory] list 失败 trace_id={trace_id}: {e}")
-                return JSONResponse(
-                    {"code": "MEMORY_LIST_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_LIST_FAILED", message=str(e), status_code=500)
 
         # 执行计划⑥ (可见性面板): 用户画像 5 维度 — 把"Agent 眼中的你"从黑盒变可见。
         # 注: 必须注册在 /memory/{fact_id} 之前, 否则 "profile" 会被当 fact_id 捕获。
@@ -86,105 +72,50 @@ class MemoryRoutesMixin:
         async def memory_profile(request: Request):
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 profile = self.long_term_memory.get_user_profile(tenant) or {}
                 dims = {str(k): list(v) for k, v in profile.items()}
                 total = sum(len(v) for v in dims.values())
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"tenant_id": tenant, "total": total, "profile": dims},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"tenant_id": tenant, "total": total, "profile": dims})
             except Exception as e:
                 self.logger.error(f"[memory] profile 失败 trace_id={trace_id}: {e}")
-                return JSONResponse(
-                    {"code": "MEMORY_PROFILE_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_PROFILE_FAILED", message=str(e), status_code=500)
 
         @self.app.get("/memory/{fact_id}")
         async def memory_get(fact_id: str, request: Request):
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 f = self.long_term_memory._load_fact(tenant, fact_id)
                 if f is None:
-                    return JSONResponse(
-                        {"code": "MEMORY_NOT_FOUND", "message": f"fact {fact_id} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": f.model_dump(mode="json"),
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="MEMORY_NOT_FOUND", message=f"fact {fact_id} 不存在", status_code=404)
+                return envelope(trace_id, data=f.model_dump(mode="json"))
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MEMORY_GET_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_GET_FAILED", message=str(e), status_code=500)
 
         @self.app.delete("/memory/{fact_id}")
         async def memory_delete(fact_id: str, request: Request):
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 ok = self.long_term_memory.delete_fact_in_tenant(fact_id, tenant)
                 if not ok:
-                    return JSONResponse(
-                        {"code": "MEMORY_NOT_FOUND", "message": f"fact {fact_id} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"deleted": True, "fact_id": fact_id},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="MEMORY_NOT_FOUND", message=f"fact {fact_id} 不存在", status_code=404)
+                return envelope(trace_id, data={"deleted": True, "fact_id": fact_id})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MEMORY_DELETE_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_DELETE_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/memory/{fact_id}/pin")
         async def memory_pin(fact_id: str, request: Request):
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
@@ -194,56 +125,27 @@ class MemoryRoutesMixin:
             try:
                 f = self.long_term_memory._load_fact(tenant, fact_id)
                 if f is None:
-                    return JSONResponse(
-                        {"code": "MEMORY_NOT_FOUND", "message": f"fact {fact_id} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
+                    return envelope(trace_id, code="MEMORY_NOT_FOUND", message=f"fact {fact_id} 不存在", status_code=404)
                 f.pinned = new_pin
                 self.long_term_memory._save_fact(f)
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"fact_id": fact_id, "pinned": f.pinned},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"fact_id": fact_id, "pinned": f.pinned})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MEMORY_PIN_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_PIN_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/memory/search")
         async def memory_search(request: Request):
             """Agent 视角的 search_facts, debug 用. body: {query, top_k?, tags_filter?}"""
             trace_id = request.state.trace_id
             if self.long_term_memory is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "long_term_memory 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="long_term_memory 未注入", status_code=501)
             tenant = self._memory_tenant_from_request(request)
             try:
                 body = await request.json()
             except Exception:
-                return JSONResponse(
-                    {"code": "BAD_REQUEST", "message": "body 非合法 JSON",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=400,
-                )
+                return envelope(trace_id, code="BAD_REQUEST", message="body 非合法 JSON", status_code=400)
             query_str = str(body.get("query") or "").strip()
             if not query_str:
-                return JSONResponse(
-                    {"code": "PARAM_MISSING", "message": "query 不能为空",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=400,
-                )
+                return envelope(trace_id, code="PARAM_MISSING", message="query 不能为空", status_code=400)
             try:
                 from long_term_memory_module import MemoryQuery
                 q = MemoryQuery(
@@ -262,21 +164,12 @@ class MemoryRoutesMixin:
                     }
                     for h in hits
                 ]
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {
+                return envelope(trace_id, data={
                         "tenant_id": tenant, "query": query_str,
                         "count": len(items), "hits": items,
-                    },
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    })
             except Exception as e:
-                return JSONResponse(
-                    {"code": "MEMORY_SEARCH_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="MEMORY_SEARCH_FAILED", message=str(e), status_code=500)
 
     # ------------------------------------------------------------------
     # helper: tenant 解析 (跟 documents/admin 一致的优先级)

@@ -17,7 +17,7 @@ import traceback
 import uuid
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class IndexRoutesMixin:
@@ -33,16 +33,7 @@ class IndexRoutesMixin:
         async def build_index(request: Request):
             trace_id = request.state.trace_id
             if getattr(self, "rebuild_runner", None) is None:
-                return JSONResponse(
-                    status_code=501,
-                    content={
-                        "code": "SERVICE_UNAVAILABLE",
-                        "message": "rebuild_runner 未注入, 索引重建不可用 (需 data_layer 完整装配)",
-                        "data": None,
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="rebuild_runner 未注入, 索引重建不可用 (需 data_layer 完整装配)", status_code=501, request_id=True)
             denied = self._check_admin(request, trace_id)
             if denied is not None:
                 return denied
@@ -50,16 +41,7 @@ class IndexRoutesMixin:
             with self._index_jobs_lock:
                 running = [jid for jid, j in self._index_jobs.items() if j.get("status") == "RUNNING"]
                 if running:
-                    return JSONResponse(
-                        status_code=409,
-                        content={
-                            "code": "INDEX_REBUILD_RUNNING",
-                            "message": "已有重建任务在执行, 请等它完成",
-                            "data": {"job_id": running[0]},
-                            "trace_id": trace_id, "retryable": True, "details": None,
-                        },
-                        headers={"X-Request-Id": trace_id},
-                    )
+                    return envelope(trace_id, code="INDEX_REBUILD_RUNNING", message="已有重建任务在执行, 请等它完成", data={"job_id": running[0]}, status_code=409, retryable=True, request_id=True)
                 job_id = f"job_{uuid.uuid4().hex[:12]}"
                 job = {
                     "job_id": job_id,
@@ -89,16 +71,7 @@ class IndexRoutesMixin:
 
             threading.Thread(target=_run, name=f"index-rebuild-{job_id}", daemon=True).start()
             self.logger.info(f"[index] rebuild job started: {job_id}")
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "index rebuild started",
-                    "data": {"job_id": job_id, "status": "RUNNING"},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+            return envelope(trace_id, message="index rebuild started", data={"job_id": job_id, "status": "RUNNING"}, request_id=True)
 
         @self.app.get("/index/job/{job_id}")
         async def get_index_job(job_id: str, request: Request):
@@ -106,23 +79,5 @@ class IndexRoutesMixin:
             with self._index_jobs_lock:
                 job = self._index_jobs.get(job_id)
             if job is None:
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "code": "JOB_NOT_FOUND",
-                        "message": f"job 不存在: {job_id} (进程重启后 job 记录不保留)",
-                        "data": None,
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": dict(job),
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                return envelope(trace_id, code="JOB_NOT_FOUND", message=f"job 不存在: {job_id} (进程重启后 job 记录不保留)", status_code=404, request_id=True)
+            return envelope(trace_id, data=dict(job), request_id=True)

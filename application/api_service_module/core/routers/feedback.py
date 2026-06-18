@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 # 表 schema. 加字段时只加 column, 不破坏老行.
@@ -77,21 +77,11 @@ class FeedbackRoutesMixin:
             try:
                 body = await request.json()
             except Exception:
-                return JSONResponse(
-                    {"code": "BAD_REQUEST", "message": "请求体非合法 JSON",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=400,
-                )
+                return envelope(trace_id, code="BAD_REQUEST", message="请求体非合法 JSON", status_code=400)
 
             rating = body.get("rating")
             if rating not in (1, -1, "1", "-1"):
-                return JSONResponse(
-                    {"code": "PARAM_INVALID", "message": "rating 必须是 +1 或 -1",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=400,
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message="rating 必须是 +1 或 -1", status_code=400)
 
             target_trace = (body.get("trace_id") or "").strip() or trace_id
             session_id = (body.get("session_id") or "").strip() or None
@@ -123,18 +113,9 @@ class FeedbackRoutesMixin:
                             now, iso,
                         ),
                     )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "thanks",
-                    "data": {"trace_id": target_trace, "rating": int(rating)},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, message="thanks", data={"trace_id": target_trace, "rating": int(rating)})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "FEEDBACK_WRITE_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": True, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="FEEDBACK_WRITE_FAILED", message=str(e), status_code=500, retryable=True)
 
         @self.app.get("/feedback/stats")
         async def feedback_stats(request: Request):
@@ -176,23 +157,14 @@ class FeedbackRoutesMixin:
                     by_mode.setdefault(mode, {"up": 0, "down": 0})
                     key = "up" if rating == 1 else "down"
                     by_mode[mode][key] = cnt
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {
+                return envelope(trace_id, data={
                         "total": total, "up": up, "down": down,
                         "up_ratio": round(ratio, 3),
                         "down_by_tools": down_by_tools,
                         "by_mode": by_mode,
-                    },
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    })
             except Exception as e:
-                return JSONResponse(
-                    {"code": "FEEDBACK_STATS_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": True, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="FEEDBACK_STATS_FAILED", message=str(e), status_code=500, retryable=True)
 
         @self.app.get("/feedback/recent")
         async def feedback_recent(request: Request):
@@ -236,15 +208,6 @@ class FeedbackRoutesMixin:
                         "mode": row[7], "model_name": row[8], "tools_used": row[9],
                         "created_at_iso": row[10],
                     })
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(items), "items": items},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"count": len(items), "items": items})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "FEEDBACK_RECENT_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": True, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="FEEDBACK_RECENT_FAILED", message=str(e), status_code=500, retryable=True)

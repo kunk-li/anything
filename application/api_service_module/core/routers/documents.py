@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List
 
 from fastapi import Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class DocumentsRoutesMixin:
@@ -45,29 +45,11 @@ class DocumentsRoutesMixin:
             raw_name = (file.filename or "").replace("\\", "/")
             safe_name = Path(raw_name).name.strip()
             if not safe_name or safe_name in (".", ".."):
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": f"非法文件名: {file.filename!r}",
-                        "data": None,
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message=f"非法文件名: {file.filename!r}", status_code=400, request_id=True)
             upload_root = Path(upload_dir).resolve()
             file_path = upload_root / safe_name
             if file_path.resolve().parent != upload_root:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": "文件名解析后越出上传目录, 已拒绝",
-                        "data": None,
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message="文件名解析后越出上传目录, 已拒绝", status_code=400, request_id=True)
             # 同名不再静默覆盖: 加 -N 后缀 (重复内容会在索引层被 content-hash 查重跳过)
             if file_path.exists():
                 stem, suffix = file_path.stem, file_path.suffix
@@ -148,26 +130,13 @@ class DocumentsRoutesMixin:
                     )
                     response_data["index_error"] = str(e)
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": (
-                        "duplicate, 复用已有文档"
+            return envelope(trace_id, message="duplicate, 复用已有文档"
                         if response_data.get("duplicate_of")
                         else "uploaded" + (
                             " + indexed" if response_data["indexed"]
                             else (" + stored (chat)" if scope == "chat"
                                   and response_data.get("index_summary") else "")
-                        )
-                    ),
-                    "data": response_data,
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                        ), data=response_data, request_id=True)
 
         # Task JJ (#70): 文档管理 — list / delete
         @self.app.get("/documents")
@@ -178,34 +147,12 @@ class DocumentsRoutesMixin:
             文档面板; ?scope=chat / ?scope=all 留给调试与会话清理用。"""
             trace_id = request.state.trace_id
             if self.document_store_factory is None:
-                return JSONResponse(
-                    status_code=501,
-                    content={
-                        "code": "SERVICE_UNAVAILABLE",
-                        "message": "document_store_factory 未注入",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="document_store_factory 未注入", status_code=501, request_id=True)
             tid = self._resolve_tenant_from_auth(request) or "default"
             try:
                 store = self.document_store_factory(tid)
                 if not hasattr(store, "list_documents"):
-                    return JSONResponse(
-                        status_code=501,
-                        content={
-                            "code": "SERVICE_UNAVAILABLE",
-                            "message": "doc_store 不支持 list_documents",
-                            "data": None,
-                            "trace_id": trace_id,
-                            "retryable": False,
-                            "details": None,
-                        },
-                        headers={"X-Request-Id": trace_id},
-                    )
+                    return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="doc_store 不支持 list_documents", status_code=501, request_id=True)
                 docs = store.list_documents()
                 scope_q = str(request.query_params.get("scope") or "kb").strip().lower()
                 if scope_q != "all":
@@ -213,34 +160,12 @@ class DocumentsRoutesMixin:
                     docs = [d for d in docs if (d.get("scope") or "kb") == scope_q]
             except Exception as e:
                 self.logger.error(f"[documents.list] tenant={tid} err={e}")
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "UNKNOWN_ERROR",
-                        "message": str(e),
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": {
+                return envelope(trace_id, code="UNKNOWN_ERROR", message=str(e), status_code=500, request_id=True)
+            return envelope(trace_id, data={
                         "tenant_id": tid,
                         "count": len(docs),
                         "documents": docs,
-                    },
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                    }, request_id=True)
 
         @self.app.delete("/documents/{doc_id}")
         async def delete_document(doc_id: str, request: Request):
@@ -254,16 +179,7 @@ class DocumentsRoutesMixin:
             """
             trace_id = request.state.trace_id
             if self.document_store_factory is None:
-                return JSONResponse(
-                    status_code=501,
-                    content={
-                        "code": "SERVICE_UNAVAILABLE",
-                        "message": "document_store_factory 未注入",
-                        "data": None,
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="document_store_factory 未注入", status_code=501, request_id=True)
             tid = self._resolve_tenant_from_auth(request) or "default"
 
             deleted_doc = False
@@ -331,12 +247,7 @@ class DocumentsRoutesMixin:
             except Exception as e:
                 warnings.append(f"kb: {e}")
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS" if deleted_doc else "NOT_FOUND",
-                    "message": "deleted" if deleted_doc else "doc_id not found in document_store",
-                    "data": {
+            return envelope(trace_id, code="SUCCESS" if deleted_doc else "NOT_FOUND", message="deleted" if deleted_doc else "doc_id not found in document_store", data={
                         "doc_id": doc_id,
                         "tenant_id": tid,
                         "deleted_from_document_store": deleted_doc,
@@ -345,11 +256,7 @@ class DocumentsRoutesMixin:
                         "deleted_upload_file": deleted_upload_file,
                         "kb_links_removed": kb_links_removed,
                         "warnings": warnings,
-                    },
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                    }, request_id=True)
 
         @self.app.get("/documents/{doc_id}/preview")
         async def get_document_preview(
@@ -378,18 +285,7 @@ class DocumentsRoutesMixin:
 
             if self.document_store_factory is None:
                 # 工厂未注入 -> 该功能不可用 (纯 API 部署没装上文档预览)
-                return JSONResponse(
-                    status_code=501,
-                    content={
-                        "code": "PREVIEW_NOT_SUPPORTED",
-                        "message": "文档预览未启用 (document_store_factory 未注入)",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PREVIEW_NOT_SUPPORTED", message="文档预览未启用 (document_store_factory 未注入)", status_code=501, request_id=True)
 
             # tenant 解析: auth 优先, 否则 query 参数 tenant_id (仅 internal IP), 否则 default
             tid = self._resolve_tenant_from_auth(request)
@@ -401,67 +297,23 @@ class DocumentsRoutesMixin:
                     tid = "default"
 
             if not self._is_known_tenant(tid):
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "code": "TENANT_NOT_FOUND",
-                        "message": "tenant 不存在或无权访问",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="TENANT_NOT_FOUND", message="tenant 不存在或无权访问", status_code=404, request_id=True)
 
             try:
                 store = self.document_store_factory(tid)
             except Exception as e:
                 self.logger.error(f"document_store_factory 失败: tenant={tid} err={e}")
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "code": "UNKNOWN_ERROR",
-                        "message": "文档存储初始化失败",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="UNKNOWN_ERROR", message="文档存储初始化失败", status_code=500, request_id=True)
 
             # get_document 自动隔离到 <storage>/<tid>/ 子目录
             try:
                 doc = store.get_document(doc_id)
             except ValueError:
                 # 非法 doc_id (非 uuid4)
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "PARAM_INVALID",
-                        "message": "doc_id 格式非法",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": {"field": "doc_id"},
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message="doc_id 格式非法", status_code=400, details={"field": "doc_id"}, request_id=True)
             if not doc:
                 # §9.3 防枚举: 跨租户 / 不存在统一 DOCUMENT_NOT_FOUND
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "code": "DOCUMENT_NOT_FOUND",
-                        "message": "文档不存在",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": {"doc_id": doc_id},
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="DOCUMENT_NOT_FOUND", message="文档不存在", status_code=404, details={"doc_id": doc_id}, request_id=True)
 
             content_str = str(doc.get("content") or "")
             total = len(content_str)
@@ -476,12 +328,7 @@ class DocumentsRoutesMixin:
             snippet_end = min(total, e + ctx)
             snippet = content_str[snippet_start:snippet_end]
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": {
+            return envelope(trace_id, data={
                         "doc_id": doc_id,
                         "file_name": doc.get("file_name"),
                         "file_type": doc.get("file_type"),
@@ -491,10 +338,4 @@ class DocumentsRoutesMixin:
                         "snippet_end": snippet_end,
                         "highlight_start": s - snippet_start,
                         "highlight_end": e - snippet_start,
-                    },
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+                    }, request_id=True)

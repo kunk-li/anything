@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class SchedulerRoutesMixin:
@@ -28,87 +28,35 @@ class SchedulerRoutesMixin:
         async def scheduler_list(request: Request):
             trace_id = request.state.trace_id
             if self.scheduler is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "scheduler 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="scheduler 未注入", status_code=501)
             try:
                 tasks = self.scheduler.list_tasks()
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(tasks), "tasks": tasks},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"count": len(tasks), "tasks": tasks})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SCHEDULER_LIST_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SCHEDULER_LIST_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/scheduler/{task_id}/trigger")
         async def scheduler_trigger(task_id: str, request: Request):
             trace_id = request.state.trace_id
             if self.scheduler is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "scheduler 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="scheduler 未注入", status_code=501)
             try:
                 result = self.scheduler.trigger_once(task_id)
                 if result is None:
-                    return JSONResponse(
-                        {"code": "TASK_NOT_FOUND", "message": f"task {task_id} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"task_id": task_id, "result": result},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="TASK_NOT_FOUND", message=f"task {task_id} 不存在", status_code=404)
+                return envelope(trace_id, data={"task_id": task_id, "result": result})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SCHEDULER_TRIGGER_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SCHEDULER_TRIGGER_FAILED", message=str(e), status_code=500)
 
         @self.app.delete("/scheduler/{task_id}")
         async def scheduler_cancel(task_id: str, request: Request):
             trace_id = request.state.trace_id
             if self.scheduler is None:
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "scheduler 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="scheduler 未注入", status_code=501)
             try:
                 ok = self.scheduler.cancel_task(task_id)
                 if not ok:
-                    return JSONResponse(
-                        {"code": "TASK_NOT_FOUND", "message": f"task {task_id} 不存在",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"cancelled": True, "task_id": task_id},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="TASK_NOT_FOUND", message=f"task {task_id} 不存在", status_code=404)
+                return envelope(trace_id, data={"cancelled": True, "task_id": task_id})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SCHEDULER_CANCEL_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SCHEDULER_CANCEL_FAILED", message=str(e), status_code=500)

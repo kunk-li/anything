@@ -13,6 +13,7 @@ import traceback
 
 from fastapi import Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 from observability_module import (
     trace_span,
@@ -40,22 +41,11 @@ class InvokeRoutesMixin:
             if content_length:
                 try:
                     if int(content_length) > self.max_body_size:
-                        return JSONResponse(
-                            status_code=413,
-                            content={
-                                "code": "PARAM_INVALID",
-                                "message": f"请求体过大，超过限制 {self.max_body_size} 字节",
-                                "data": None,
-                                "trace_id": trace_id,
-                                "retryable": False,
-                                "details": {
+                        return envelope(trace_id, code="PARAM_INVALID", message=f"请求体过大，超过限制 {self.max_body_size} 字节", status_code=413, details={
                                     "field": "content-length",
                                     "expected": f"<= {self.max_body_size}",
                                     "actual": content_length,
-                                },
-                            },
-                            headers={"X-Request-Id": trace_id},
-                        )
+                                }, request_id=True)
                 except ValueError:
                     pass
 
@@ -63,40 +53,18 @@ class InvokeRoutesMixin:
             try:
                 body = await request.json()
             except json.JSONDecodeError:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "BAD_REQUEST",
-                        "message": "请求体不是合法 JSON",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": {
+                return envelope(trace_id, code="BAD_REQUEST", message="请求体不是合法 JSON", status_code=400, details={
                             "field": "body",
                             "expected": "application/json",
                             "actual": "invalid json",
-                        },
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                        }, request_id=True)
 
             if not isinstance(body, dict):
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "code": "BAD_REQUEST",
-                        "message": "请求体必须是 JSON 对象",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": {
+                return envelope(trace_id, code="BAD_REQUEST", message="请求体必须是 JSON 对象", status_code=400, details={
                             "field": "body",
                             "expected": "json object",
                             "actual": str(type(body).__name__),
-                        },
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                        }, request_id=True)
 
             # 3.5 tenant_id 冲突处理 (Task #33 PR2, 见 docs/multi-tenancy-design.md §4.3)
             #     auth_tenant_id (认证产物) 优先于 body tenant_id (声明)
@@ -118,18 +86,7 @@ class InvokeRoutesMixin:
                     duration=duration,
                     tenant_id=effective_tid,
                 )
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "code": "TENANT_NOT_FOUND",
-                        "message": "tenant 不存在或无权访问",
-                        "data": None,
-                        "trace_id": trace_id,
-                        "retryable": False,
-                        "details": None,  # §9.3: 不暴露存在性
-                    },
-                    headers={"X-Request-Id": trace_id},
-                )
+                return envelope(trace_id, code="TENANT_NOT_FOUND", message="tenant 不存在或无权访问", status_code=404, request_id=True)
 
             # PR4b: per-tenant QPS 滑窗限流 (§8 沿用 API_RATE_LIMITED 429)
             if not self._check_qps_quota(effective_tid):

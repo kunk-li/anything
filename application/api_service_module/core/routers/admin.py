@@ -13,7 +13,8 @@ from pathlib import Path  # /admin/status 用 Path(upload_dir); 缺它会 NameEr
 from typing import Any, Dict
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
+from ._envelope import envelope
 
 
 class AdminRoutesMixin:
@@ -29,34 +30,12 @@ class AdminRoutesMixin:
                     "handler": "UP" if self.handler is not None else "DOWN"
                 }
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": data,
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+            return envelope(trace_id, data=data, request_id=True)
 
         @self.app.get("/healthz")
         async def healthz(request: Request):
             trace_id = request.state.trace_id
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": {"status": "UP"},
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+            return envelope(trace_id, data={"status": "UP"}, request_id=True)
 
         @self.app.get("/metrics")
         async def metrics(request: Request):
@@ -250,15 +229,4 @@ class AdminRoutesMixin:
             else:
                 data["scheduler"] = None
 
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "code": "SUCCESS",
-                    "message": "ok",
-                    "data": data,
-                    "trace_id": trace_id,
-                    "retryable": False,
-                    "details": None,
-                },
-                headers={"X-Request-Id": trace_id},
-            )
+            return envelope(trace_id, data=data, request_id=True)

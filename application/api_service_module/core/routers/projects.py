@@ -28,6 +28,7 @@ from typing import Any, Dict
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 from project_memory_module.impl import validate_workspace_root, get_fs_root
 
@@ -159,12 +160,7 @@ class ProjectsRoutesMixin:
                     "drive_root": f"不能把盘符根/系统根目录设为工作区: {abs_root}",
                     "outside_jail": f"该目录不在允许的工作区范围 (ANYTHING_FS_ROOT) 内: {abs_root}",
                 }.get(why, f"root_path 无效: {abs_root}")
-                return JSONResponse(
-                    {"code": "PARAM_INVALID", "message": msg,
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": {"root_path": abs_root, "reason": why}},
-                    status_code=400,
-                )
+                return envelope(trace_id, code="PARAM_INVALID", message=msg, status_code=400, details={"root_path": abs_root, "reason": why})
             abs_root = norm  # 用规范化后的根做去重/存储
             # 三端 (create/list/delete) tenant 来源对齐: 鉴权开时以认证产物为准 (忽略 body 声明,
             # 防越权 + 保证 create 落库 tenant 与 delete 限定 tenant 一致, 否则 owner 删不掉自己建的项目);
@@ -184,25 +180,17 @@ class ProjectsRoutesMixin:
                     )
                     ex = cur.fetchone()
                     if ex:
-                        return JSONResponse({
-                            "code": "SUCCESS", "message": "already exists",
-                            "data": {"id": ex[0], "name": ex[1], "root_path": ex[2],
+                        return envelope(trace_id, message="already exists", data={"id": ex[0], "name": ex[1], "root_path": ex[2],
                                      "tenant_id": ex[3], "created_at_iso": ex[4],
-                                     "has_project_memory": _has_memory_file(ex[2])},
-                            "trace_id": trace_id, "retryable": False, "details": None,
-                        })
+                                     "has_project_memory": _has_memory_file(ex[2])})
                     conn.execute(
                         "INSERT INTO projects (id, name, root_path, tenant_id, created_at, created_at_iso) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (proj_id, name, abs_root, tenant_id, now, iso),
                     )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"id": proj_id, "name": name, "root_path": abs_root,
+                return envelope(trace_id, data={"id": proj_id, "name": name, "root_path": abs_root,
                              "tenant_id": tenant_id, "created_at_iso": iso,
-                             "has_project_memory": _has_memory_file(abs_root)},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                             "has_project_memory": _has_memory_file(abs_root)})
             except Exception as e:
                 return _err(trace_id, "PROJECT_CREATE_FAILED", str(e))
 
@@ -219,11 +207,7 @@ class ProjectsRoutesMixin:
                         (tenant,),
                     )
                     items = [_project_row(row) for row in cur.fetchall()]
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(items), "items": items},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"count": len(items), "items": items})
             except Exception as e:
                 return _err(trace_id, "PROJECT_LIST_FAILED", str(e))
 
@@ -245,17 +229,8 @@ class ProjectsRoutesMixin:
                     deleted = cur.rowcount
                 if deleted == 0:
                     # 旧代码无论 id 是否存在都回 SUCCESS; 现按实际删除行数报 NOT_FOUND
-                    return JSONResponse(
-                        {"code": "NOT_FOUND", "message": f"项目不存在: {proj_id}",
-                         "data": {"id": proj_id}, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "deleted",
-                    "data": {"id": proj_id},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="NOT_FOUND", message=f"项目不存在: {proj_id}", data={"id": proj_id}, status_code=404)
+                return envelope(trace_id, message="deleted", data={"id": proj_id})
             except Exception as e:
                 return _err(trace_id, "PROJECT_DELETE_FAILED", str(e))
 
@@ -267,40 +242,18 @@ class ProjectsRoutesMixin:
             trace_id = request.state.trace_id
             raw = request.query_params.get("path", "") or ""
             try:
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": _browse_dir(raw),
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data=_browse_dir(raw))
             except PermissionError:
-                return JSONResponse(
-                    {"code": "PERMISSION_DENIED", "message": f"无权访问该目录: {raw}",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=403,
-                )
+                return envelope(trace_id, code="PERMISSION_DENIED", message=f"无权访问该目录: {raw}", status_code=403)
             except (FileNotFoundError, NotADirectoryError):
-                return JSONResponse(
-                    {"code": "NOT_FOUND", "message": f"目录不存在: {raw}",
-                     "data": None, "trace_id": trace_id, "retryable": False, "details": None},
-                    status_code=404,
-                )
+                return envelope(trace_id, code="NOT_FOUND", message=f"目录不存在: {raw}", status_code=404)
             except Exception as e:
                 return _err(trace_id, "PROJECT_FS_FAILED", str(e))
 
 
 def _bad(trace_id: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"code": "BAD_REQUEST", "message": message,
-         "data": None, "trace_id": trace_id,
-         "retryable": False, "details": None},
-        status_code=400,
-    )
+    return envelope(trace_id, code="BAD_REQUEST", message=message, status_code=400)
 
 
 def _err(trace_id: str, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        {"code": code, "message": message,
-         "data": None, "trace_id": trace_id,
-         "retryable": True, "details": None},
-        status_code=500,
-    )
+    return envelope(trace_id, code=code, message=message, status_code=500, retryable=True)

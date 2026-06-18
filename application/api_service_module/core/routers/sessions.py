@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from ._envelope import envelope
 
 
 class SessionsRoutesMixin:
@@ -70,12 +70,7 @@ class SessionsRoutesMixin:
         async def sessions_list(request: Request):
             trace_id = request.state.trace_id
             if not getattr(self, "state_store", None):
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "state_store 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="state_store 未注入", status_code=501)
             try:
                 limit = int(request.query_params.get("limit", "50"))
             except ValueError:
@@ -92,82 +87,40 @@ class SessionsRoutesMixin:
                 if sessions and len(sessions) >= limit:
                     last = sessions[-1]
                     next_cursor = f"{last['last_modified']}:{last['session_id']}"
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"count": len(sessions), "sessions": sessions,
-                             "next_cursor": next_cursor},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                return envelope(trace_id, data={"count": len(sessions), "sessions": sessions,
+                             "next_cursor": next_cursor})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SESSIONS_LIST_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SESSIONS_LIST_FAILED", message=str(e), status_code=500)
 
         # Task ZZZZ (#117): 读取 session state — 切换会话时拉历史用
         @self.app.get("/sessions/{session_id}")
         async def sessions_get(session_id: str, request: Request):
             trace_id = request.state.trace_id
             if not getattr(self, "state_store", None):
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "state_store 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="state_store 未注入", status_code=501)
             try:
                 state = self.state_store.get_state(session_id)
                 if state is None:
-                    return JSONResponse(
-                        {"code": "SESSION_NOT_FOUND", "message": f"session 不存在: {session_id}",
-                         "data": None, "trace_id": trace_id,
-                         "retryable": False, "details": None},
-                        status_code=404,
-                    )
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": state,  # 直接返完整 state, 前端按 events 数组里 role=user/assistant 重建
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                    return envelope(trace_id, code="SESSION_NOT_FOUND", message=f"session 不存在: {session_id}", status_code=404)
+                return envelope(trace_id, data=state)
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SESSIONS_GET_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SESSIONS_GET_FAILED", message=str(e), status_code=500)
 
         @self.app.delete("/sessions/{session_id}")
         async def sessions_delete(session_id: str, request: Request):
             trace_id = request.state.trace_id
             if not getattr(self, "state_store", None):
-                return JSONResponse(
-                    {"code": "SERVICE_UNAVAILABLE", "message": "state_store 未注入",
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=501,
-                )
+                return envelope(trace_id, code="SERVICE_UNAVAILABLE", message="state_store 未注入", status_code=501)
             try:
                 ok = self.state_store.clear_state(session_id)
                 # 会话附件联动清理: scope=chat 的文档与 session 绑定 (不在向量库/
                 # BM25/kb_doc 里, 只需清 document_store 正文 + uploads/ 原件)
                 docs_removed, files_removed = self._delete_chat_docs_for_session(session_id)
-                return JSONResponse({
-                    "code": "SUCCESS", "message": "ok",
-                    "data": {"deleted": True, "session_id": session_id, "result": ok,
+                return envelope(trace_id, data={"deleted": True, "session_id": session_id, "result": ok,
                              "chat_docs_removed": docs_removed,
-                             "chat_files_removed": files_removed},
-                    "trace_id": trace_id, "retryable": False, "details": None,
-                })
+                             "chat_files_removed": files_removed})
             except Exception as e:
-                return JSONResponse(
-                    {"code": "SESSIONS_DELETE_FAILED", "message": str(e),
-                     "data": None, "trace_id": trace_id,
-                     "retryable": False, "details": None},
-                    status_code=500,
-                )
+                return envelope(trace_id, code="SESSIONS_DELETE_FAILED", message=str(e), status_code=500)
 
         @self.app.post("/sessions")
         async def sessions_create(request: Request):
@@ -190,8 +143,4 @@ class SessionsRoutesMixin:
                     self.logger.warning(
                         f"[sessions] POST 写 stub state 失败 (仍返 id, 上游可重试): {e}"
                     )
-            return JSONResponse({
-                "code": "SUCCESS", "message": "ok",
-                "data": {"session_id": new_id},
-                "trace_id": trace_id, "retryable": False, "details": None,
-            })
+            return envelope(trace_id, data={"session_id": new_id})
