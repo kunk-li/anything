@@ -147,8 +147,10 @@ class LocalStateStore(BaseStateStore):
             self._enforce_capacity()
             path = self._get_state_path(session_id)
 
-            # 规范化：补充元信息
-            state_to_save = dict(state) if isinstance(state, dict) else {}
+            # 规范化：补充元信息。非 dict 入参直接抛错(与 append_event 同款), 不再静默吞成 {} 丢数据
+            if not isinstance(state, dict):
+                raise StateStoreException("STATE_STORE_INVALID_STATE", "会话状态格式非法，必须为Dict")
+            state_to_save = dict(state)
             state_to_save.setdefault("events", [])
             state_to_save["_meta"] = {
                 "session_id": session_id,

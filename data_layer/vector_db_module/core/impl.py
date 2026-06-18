@@ -432,7 +432,9 @@ class FaissVectorDB(BaseVectorDB):
             raise ValueError(f"query vector dimension mismatch: expected {self.dim}, got {q.shape[0]}")
         q = normalize_embeddings(q).astype("float32", copy=False).reshape(1, -1)
 
-        oversample = min(max(top_k * 10, top_k), ntotal)
+        # filters=None 时收集满 top_k 即 break 且永不重查, 无需放大 10 倍多搜(纯算力浪费);
+        # 仅带过滤时才 oversample 留出被过滤掉的余量。
+        oversample = min(top_k, ntotal) if not filters else min(max(top_k * 10, top_k), ntotal)
         while True:
             scores, idxs = self.index.search(q, oversample)
             results: List[Dict] = []

@@ -400,7 +400,6 @@ class LocalDocumentStore(BaseDocumentStore):
                     # upload_time 两个都没落盘的 key, 导致下面 sort 永远拿到 "" → 不按时间排。
                     "created_time": info.get("create_time") or info.get("created_time") or info.get("upload_time"),
                     "last_access_time": info.get("last_access_time"),
-                    "source": (info.get("meta") or {}).get("source") if isinstance(info.get("meta"), dict) else None,
                     # 原始上传文件路径 (uploads 清理器判定"已索引原件"用)
                     "stored_path": info.get("stored_path"),
                     # 会话附件标记 (scope=chat 不进检索索引, 列表/删除按此过滤)
@@ -436,12 +435,17 @@ class LocalDocumentStore(BaseDocumentStore):
             info["file_size"] = str(get_file_size(doc_path))
             info["storage_type"] = storage_type
             info["info_file_path"] = get_info_file_path(self.storage_dir, doc_id).replace("\\", "/")
-
-            self.write_info_file(info)
-            return info
         except Exception as e:
             self.logger.error(f"get_document failed: {e}", exc_info=True)
             return None
+
+        # last_access 回写降级为 best-effort: 内容已读到, 满盘/只读盘下回写失败不该让"读"也失败
+        # (下次成功再刷新 last_access, 不影响 zombie 保活判定)。
+        try:
+            self.write_info_file(info)
+        except Exception as e:
+            self.logger.warning(f"get_document: 回写 last_access 失败 (忽略, 仍返回内容): doc_id={doc_id}, err={e}")
+        return info
 
     def update_document(self, doc_id: str, new_content: str, new_content_hash: str) -> bool:
         if not is_uuid4(doc_id):
