@@ -25,9 +25,13 @@ from .components import (
     SelfMaintenanceMixin,
     MemoryMixin,
     TaskPreprocessMixin,
+    StateHistoryMixin,
+    SelfVerifyMixin,
+    SkillDistillMixin,
+    PlannerMixin,
+    ReflectionMixin,
 )
 from .components.task_preprocess import TaskPreContext
-from .components.verifier import collect_specs, make_registry, run_verifiers
 from .model_routing import begin_routing, end_routing
 
 from deps_module import BasicDeps, build_basic_deps, handle_exception_to_envelope
@@ -43,6 +47,11 @@ class SimpleAgent(
     SelfMaintenanceMixin,
     MemoryMixin,
     TaskPreprocessMixin,
+    StateHistoryMixin,
+    SelfVerifyMixin,
+    SkillDistillMixin,
+    PlannerMixin,
+    ReflectionMixin,
 ):
     """标准 Agent 实现: 任务解析 -> 工具调用 -> 状态记录 -> 结果聚合.
 
@@ -616,241 +625,15 @@ class SimpleAgent(
             end_routing(_routing_tok)
 
     # ============================================================
-    # 方向3: 自我验证闭环 (验证 + 自纠正)
+    # 以下三组已抽到 components/ (零行为变更):
+    #   方向3 自我验证 (_build_verify_runner/_collect_compliance_rules/_post_verify)
+    #     -> self_verify.py (SelfVerifyMixin)
+    #   #1 技能沉淀 (_distill_skill_async/_extract_memory_async/_distill_skill)
+    #     -> skill_distill.py (SkillDistillMixin)
+    #   任务规划 helper (_llm_plan_task/_rule_based_plan_task) -> planning.py (PlannerMixin)
     # ============================================================
-    def _build_verify_runner(self):
-        """ExecutionVerifier 的执行器: 按 spec.type 跑确定性验证命令。
-        pytest/lint/shell 走 subprocess, sql 走 sqlite。验证命令应来自可信调用方
-        (extra_params.verify); 默认 enable_self_verify=off, 不主动执行任何东西。"""
-        import subprocess
-        import shlex
-        import sys
-
-        def runner(spec):
-            t = spec.type
-            target = (spec.target or "").strip()
-            timeout_s = int((spec.args or {}).get("timeout", 60))
-            try:
-                if t == "pytest":
-                    cmd = [sys.executable, "-m", "pytest", "-q"] + (shlex.split(target) if target else [])
-                    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-                elif t == "lint":
-                    cmd = [sys.executable, "-m", "pyflakes"] + (shlex.split(target) if target else ["."])
-                    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-                elif t == "shell":
-                    p = subprocess.run(target, shell=True, capture_output=True, text=True, timeout=timeout_s)
-                elif t == "sql":
-                    import sqlite3
-                    con = sqlite3.connect((spec.args or {}).get("db") or ":memory:")
-                    try:
-                        con.executescript(target)
-                        con.commit()
-                        return {"exit_code": 0, "stdout": "ok", "stderr": ""}
-                    except Exception as e:
-                        return {"exit_code": 1, "stdout": "", "stderr": str(e)}
-                    finally:
-                        con.close()
-                else:
-                    return {"exit_code": 0, "stdout": "", "stderr": ""}
-                return {"exit_code": p.returncode, "stdout": p.stdout or "", "stderr": p.stderr or ""}
-            except subprocess.TimeoutExpired:
-                return {"exit_code": 124, "stdout": "", "stderr": f"验证超时 (>{timeout_s}s)"}
-            except FileNotFoundError as e:
-                return {"exit_code": 127, "stdout": "", "stderr": f"验证命令不可用: {e}"}
-
-        return runner
-
-    def _collect_compliance_rules(self, extra) -> str:
-        """合规检查的规范来源: 优先 extra_params.compliance_rules; 否则尽力取项目级
-        记忆 (AGENTS.md / ProjectMemory)。取不到返回空串 → compliance 自动放行。"""
-        explicit = (extra or {}).get("compliance_rules")
-        if explicit:
-            return str(explicit)
-        pm = getattr(self, "project_memory", None)
-        if pm is None:
-            pm = getattr(getattr(self, "deps", None), "project_memory", None)
-        if pm is not None:
-            for meth in ("get_memory_text", "as_text", "get_content", "render", "load"):
-                fn = getattr(pm, meth, None)
-                if callable(fn):
-                    try:
-                        txt = fn()
-                        if txt:
-                            return str(txt)
-                    except Exception:
-                        pass
-        return ""
-
-    def _post_verify(self, request, response, original_task, start_time):
-        """对执行结果跑验证; auto 模式失败时带 feedback 递归纠正 (预算护栏)。
-        enable_self_verify=off / verify_mode=off 时原样返回 (零影响)。"""
-        if not getattr(self, "enable_self_verify", False) or self.verify_mode == "off":
-            return response
-        if not isinstance(response, dict):
-            return response
-
-        extra = dict(request.get("extra_params") or {})
-        attempt = int(extra.get("_verify_attempt", 0))
-        specs = collect_specs(extra)
-        if not specs:
-            return response
-
-        trace_id = request.get("trace_id")
-        session_id = request.get("session_id") or self._fallback_session_id()
-        llm_call = self._resolve_llm_planner(trace_id=trace_id)
-        if llm_call is None:
-            # 无 LLM 通道: 终态确认无法判, 退化为放行 (只让 execution 验证生效)
-            llm_call = lambda _p: '{"completed": true}'
-        registry = make_registry(
-            runner=self._build_verify_runner(), llm_call=llm_call,
-            rules_provider=lambda: self._collect_compliance_rules(extra),
-        )
-
-        vresults = run_verifiers(
-            goal=original_task, result=response.get("data") or response,
-            specs=specs, registry=registry,
-        )
-        if response.get("details") is None:
-            response["details"] = {}
-        response["details"]["verification"] = [
-            {"verifier": r.verifier, "passed": r.passed, "feedback": (r.feedback or "")[:500]}
-            for r in vresults
-        ]
-        failed = [r for r in vresults if not r.passed]
-        response["details"]["verify_passed"] = (len(failed) == 0)
-        if not failed:
-            return response
-
-        fixable_fb = [r.feedback for r in failed if r.fixable and r.feedback]
-        self._append_state_event(
-            session_id=session_id, event_type="verify_failed", trace_id=trace_id,
-            payload={"attempt": attempt, "failed": [r.verifier for r in failed]},
-        )
-
-        # ask 模式: 不自动纠正, 标记需用户确认 + 缺口
-        if self.verify_mode == "ask":
-            response["details"]["needs_user_confirm"] = True
-            response["details"]["verify_gaps"] = fixable_fb
-            return response
-
-        # auto 模式: 预算内 + 可修 + 未超时 → 带 feedback 递归纠正
-        within_budget = attempt < self.max_correction
-        within_time = (time.time() - start_time) < self.timeout
-        if fixable_fb and within_budget and within_time:
-            self._append_state_event(
-                session_id=session_id, event_type="self_correct", trace_id=trace_id,
-                payload={"attempt": attempt + 1},
-            )
-            new_extra = dict(extra)
-            new_extra["_verify_attempt"] = attempt + 1
-            new_extra["_correction_feedback"] = "\n".join(fixable_fb)[:3000]
-            new_extra["_skip_history_prefix"] = True
-            new_request = dict(request)
-            new_request["extra_params"] = new_extra
-            return self.execute(new_request)
-
-        # 预算耗尽 / 不可修 → 返回 + 标记缺口
-        response["details"]["verify_gaps"] = fixable_fb
-        return response
-
-    # ============================================================
-    # #1 技能自动沉淀 (借鉴 Hermes 学习闭环): 成功复杂任务 → 提炼可复用 skill
-    # ============================================================
-    def _distill_skill_async(self, task, tool_results, final_answer, trace_id=None):
-        """成功复杂任务收尾时, 后台线程沉淀 skill (不阻塞主流程 / 不延迟 done)。默认关。"""
-        try:
-            if not getattr(self, "enable_skill_distill", False):
-                return
-            n_tools = len([tr for tr in (tool_results or []) if tr and tr.get("tool_name")])
-            if n_tools < int(getattr(self, "skill_distill_min_tools", 2)):
-                return  # 简单任务不沉淀
-            if not (final_answer and str(final_answer).strip()):
-                return
-            import threading
-            threading.Thread(
-                target=self._distill_skill,
-                args=(task, tool_results, final_answer, trace_id),
-                daemon=True,
-            ).start()
-        except Exception:
-            pass  # fail-open: 沉淀永不影响主流程
-
-    def _extract_memory_async(self, task, final_answer, session_id, tenant_id, trace_id=None):
-        """流式收尾后台抽 fact 入长期记忆 (不阻塞 done)。同步 execute 是 inline 抽 (impl.py:571);
-        流式路径此前完全不抽 → "越用越懂你/使用者画像" 在网页(流式)路径不生效, 这里补齐。
-        async (daemon 线程) 跑, 与 _distill_skill_async 同样不增 done 延迟。全程 fail-open。"""
-        try:
-            if not (getattr(self, "memory_enabled", False)
-                    and getattr(self, "long_term_memory", None) is not None):
-                return
-            if not (task and final_answer and str(final_answer).strip()):
-                return
-            import threading
-            threading.Thread(
-                target=self._extract_and_store_memory,
-                args=(task, final_answer, session_id, tenant_id, trace_id),
-                daemon=True,
-            ).start()
-        except Exception:
-            pass  # fail-open: 抽取永不影响主流程
-
-    def _distill_skill(self, task, tool_results, final_answer, trace_id=None):
-        """LLM 从一次成功任务提炼一条可复用 skill 并写入 skill 库。去重 + 全程 fail-open。"""
-        try:
-            llm_call = self._resolve_llm_planner(trace_id=trace_id)
-            if llm_call is None:
-                return None
-            tools_used = [tr.get("tool_name") for tr in (tool_results or [])
-                          if tr and tr.get("tool_name")]
-            prompt = (
-                "下面是一次已成功完成的任务。请把它提炼成一条【可复用技能(skill)】, 供以后遇到\n"
-                "同类任务时直接复用 (作为提示注入)。要通用、可迁移, 不要带这次的具体数据。\n"
-                f"【任务】{str(task)[:500]}\n"
-                f"【用到的工具】{tools_used}\n"
-                f"【最终结果(节选)】{str(final_answer)[:500]}\n\n"
-                "只输出 JSON, 不要任何其他文字:\n"
-                '{"name": "蛇形小写英文名", "description": "一句话描述", '
-                '"triggers": ["会触发这类任务的关键词(3-6个,中英文皆可)"], '
-                '"tools": ["用到的工具名"], '
-                '"body": "遇到这类任务用什么步骤/工具/注意点去做的简明指南(中文,100-300字)"}'
-            )
-            raw = llm_call(prompt) or ""
-            import json as _json
-            import re as _re
-            m = _re.search(r"\{[\s\S]*\}", raw)
-            if not m:
-                return None
-            data = _json.loads(m.group(0))
-            name = str(data.get("name") or "").strip()
-            triggers = [str(t).strip() for t in (data.get("triggers") or []) if str(t).strip()]
-            body = str(data.get("body") or "").strip()
-            if not (name and triggers and body):
-                return None
-            from skills_module.impl import Skill, get_skill_registry
-            reg = get_skill_registry()
-            if reg.find_by_triggers(triggers) is not None:
-                self.logger.info(f"[skill-distill] 已有同类 skill, 跳过: name={name}")
-                return None  # 去重: 已有高度重叠的 skill (v1 不合并)
-            skill = Skill(
-                name=name,
-                description=str(data.get("description") or task)[:120],
-                triggers=triggers,
-                tools=[str(t) for t in (data.get("tools") or tools_used) if t],
-                priority=1,
-                body=body,
-            )
-            path = reg.save_skill(skill, source="auto")
-            if path:
-                self.logger.info(
-                    f"[skill-distill] 沉淀新技能: name={name} triggers={triggers} → {path}")
-            return path
-        except Exception as e:
-            self.logger.warning(f"[skill-distill] 沉淀失败 (忽略): {e}")
-            return None
-
-    # ============================================================
-    # 任务规划 (single_shot 路径)
-    # ============================================================
+    # parse_task 留在 impl: 它是 BaseAgent 的 @abstractmethod 实现, 必须直接挂在 SimpleAgent
+    # 上才能解析掉抽象方法 (mixin 排在 BaseAgent 之后会被抽象版先解析到 → 无法实例化)。
     def parse_task(
             self,
             task: str,
@@ -886,97 +669,6 @@ class SimpleAgent(
             "session_id": session_id, "task": task,
             "steps": steps, "plan_source": "rule_based",
         }
-
-    def _llm_plan_task(
-            self,
-            task: str,
-            trace_id: Optional[str],
-            extra_params: Dict[str, Any],
-    ) -> Optional[List[Dict[str, Any]]]:
-        """让 LLM 输出 JSON 格式的执行计划; 任一环节失败返回 None 触发 fallback."""
-        llm_call = self._resolve_llm_planner(trace_id=trace_id)
-        if llm_call is None:
-            return None
-
-        available_tools = self._available_tool_names()
-        if not available_tools:
-            return None
-
-        prompt = self._build_planner_prompt(
-            task=task, available_tools=available_tools,
-            tool_descriptions=self._tool_descriptions(),
-            project_root=extra_params.get("active_project_root"),
-        )
-
-        try:
-            raw = llm_call(prompt)
-        except Exception as e:
-            self.logger.warning(f"[planner] LLM 规划调用异常, fallback 规则式: {e}")
-            return None
-
-        plan_steps = self._parse_planner_response(raw=raw, available_tools=available_tools)
-        if not plan_steps:
-            return None
-
-        # 补全 step 字段
-        steps: List[Dict[str, Any]] = []
-        for i, step in enumerate(plan_steps[: self.max_planner_steps], start=1):
-            input_data = step.get("input_data") or {}
-            input_data.setdefault("trace_id", trace_id)
-            input_data.setdefault("extra_params", extra_params)
-            if step.get("tool_name") == "rag_search":
-                input_data.setdefault("top_k", extra_params.get("top_k", 5))
-                input_data.setdefault("query", task)
-            if step.get("tool_name") == "llm_generate":
-                input_data.setdefault("prompt", task)
-            steps.append({
-                "step_id": step.get("step_id") or f"s{i}",
-                "tool_name": step["tool_name"],
-                "description": step.get("description", ""),
-                "input_data": input_data,
-            })
-
-        self.logger.info(
-            f"[planner] LLM 规划成功: trace_id={trace_id}, steps={len(steps)}, "
-            f"tools={[s['tool_name'] for s in steps]}"
-        )
-        return steps
-
-    def _rule_based_plan_task(
-            self,
-            task: str,
-            execution_mode: str,
-            trace_id: Optional[str],
-            extra_params: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """规则式规划 (LLM 不可用时的 fallback)."""
-        steps: List[Dict[str, Any]] = []
-
-        if execution_mode == "hybrid":
-            steps.append({
-                "step_id": "s1", "tool_name": "rag_search",
-                "description": "先做知识库检索",
-                "input_data": {
-                    "query": task, "top_k": extra_params.get("top_k", 5),
-                    "trace_id": trace_id, "extra_params": extra_params,
-                },
-            })
-            steps.append({
-                "step_id": "s2", "tool_name": "llm_generate",
-                "description": "基于检索结果生成总结",
-                "input_data": {
-                    "prompt": task, "trace_id": trace_id, "extra_params": extra_params,
-                },
-            })
-        else:
-            steps.append({
-                "step_id": "s1", "tool_name": "llm_generate",
-                "description": "执行通用文本生成",
-                "input_data": {
-                    "prompt": task, "trace_id": trace_id, "extra_params": extra_params,
-                },
-            })
-        return steps
 
     # ============================================================
     # 结果聚合
@@ -1255,144 +947,10 @@ class SimpleAgent(
     # ============================================================
     # 状态事件 / 异常 / fallback
     # ============================================================
-    def _append_state_event(
-            self,
-            session_id: str,
-            event_type: str,
-            trace_id: Optional[str],
-            payload: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """安全写入状态事件: 失败不阻断主任务."""
-        if self.state_store is None:
-            return
-        event = {
-            "session_id": session_id, "event_type": event_type,
-            "trace_id": trace_id, "payload": payload or {},
-            "created_at": time.time(),
-        }
-        try:
-            if hasattr(self.state_store, "append_event"):
-                self.state_store.append_event(session_id, event)
-        except Exception as e:
-            self.logger.warning(
-                f"状态事件写入失败(已忽略): session_id={session_id}, "
-                f"event_type={event_type}, error={str(e)}"
-            )
-
-    def _load_history(self, session_id, max_turns: int = 6):
-        """从 state_store 读最近 N 轮对话, 返回 [{role, content}, ...].
-
-        修 Agent "金鱼记忆": 之前 Agent 完全不读会话历史 (只有 long_term_memory
-        facts), 多轮对话不连贯. 现在跟 RAG 一样从 state.events 读最近 N 轮注入 prompt.
-        读的是历史 (不含当前轮, 当前轮流式完成后才持久化).
-        """
-        if not session_id or not self.state_store:
-            return []
-        try:
-            state = self.state_store.get_state(session_id)
-        except Exception:
-            return []
-        if not isinstance(state, dict):
-            return []
-        events = state.get("events") or []
-        max_msgs = max(1, max_turns) * 2
-        if len(events) > max_msgs:
-            events = events[-max_msgs:]
-        msgs = []
-        for ev in events:
-            if isinstance(ev, dict):
-                role = ev.get("role")
-                content = ev.get("content")
-                if role in ("user", "assistant") and isinstance(content, str) and content:
-                    msgs.append({"role": role, "content": content})
-        return msgs
-
-    def _history_prefix(self, session_id, max_turns: int = 6) -> str:
-        """ZZ-5: 把最近 N 轮对话拼成可注入 prompt 顶部的 [对话历史] 块. 无/失败返回 ''.
-
-        ZZ-1 只给默认流式 (_run_stream_direct) 注入了历史; ReAct / plan / 非流式 execute
-        / single_shot 仍是金鱼记忆. 这个 helper 给那几条路径统一补多轮上下文.
-        """
-        try:
-            history = self._load_history(session_id, max_turns=max_turns)
-        except Exception:
-            return ""
-        lines = []
-        for h in history:
-            who = "用户" if h.get("role") == "user" else "助手"
-            c = (h.get("content") or "").strip()
-            if c:
-                lines.append(f"{who}: {c}")
-        if not lines:
-            return ""
-        return "[对话历史]\n" + "\n".join(lines) + "\n\n---\n\n"
-
-    def _save_state_safe(
-            self,
-            session_id: str,
-            state: Dict[str, Any],
-            trace_id: Optional[str],
-    ) -> None:
-        """安全保存聚合状态 + append 本轮 user/assistant 到 events 历史链.
-
-        之前 bug: save_state 是 full-replace, 每轮覆盖前轮, 切回历史只看到最后一条.
-        现在 merge:
-          1. 读老 state 拿到 events list
-          2. 把本轮 user_task + assistant_answer 各 append 一个 role event
-          3. 顶层 task/answer 仍存 (向后兼容; 也方便 list_sessions 抽 title)
-          4. save_state 写回, events 保留了完整对话历史
-        失败不阻断主任务.
-        """
-        if self.state_store is None:
-            return
-        try:
-            new_state = dict(state) if isinstance(state, dict) else {}
-            # 1. 读老 events, 兼容首次 (无文件) 情况
-            old_events: list = []
-            if hasattr(self.state_store, "get_state"):
-                try:
-                    old = self.state_store.get_state(session_id) or {}
-                    if isinstance(old, dict):
-                        old_events = list(old.get("events") or [])
-                except Exception:
-                    old_events = []
-
-            # 2. 本轮 task / answer → 追加 2 个 role event
-            #    task 用 state.task (已经是 original_task, 不含长期记忆 prefix)
-            now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
-            user_task = new_state.get("task")
-            asst_answer = new_state.get("answer")
-            if user_task:
-                old_events.append({
-                    "role": "user",
-                    "content": str(user_task),
-                    "timestamp": now_iso,
-                    "trace_id": trace_id,
-                    "type": new_state.get("execution_mode") or "agent",
-                })
-            if asst_answer:
-                old_events.append({
-                    "role": "assistant",
-                    "content": str(asst_answer),
-                    "timestamp": now_iso,
-                    "trace_id": trace_id,
-                    "type": new_state.get("execution_mode") or "agent",
-                })
-            new_state["events"] = old_events
-
-            if hasattr(self.state_store, "save_state"):
-                self.state_store.save_state(session_id, new_state)
-        except Exception as e:
-            self.logger.warning(
-                f"状态保存失败(已忽略): session_id={session_id}, "
-                f"trace_id={trace_id}, error={str(e)}"
-            )
-
-    def _fallback_session_id(self) -> str:
-        """仅兼容兜底使用, 不作为主路径."""
-        return f"{self.session_prefix}_{uuid.uuid4().hex[:12]}"
-
     # ============================================================
+    # 会话状态/历史持久化 (_append_state_event / _load_history / _history_prefix /
+    #   _save_state_safe / _fallback_session_id) 已抽到 components/state_history.py
+    #   (StateHistoryMixin)。
     # 长期记忆/画像注入已抽到 components/memory_injection.py (MemoryMixin, 优化③);
     # 方向4 自维护抽到 self_maintenance.py。_resolve_project_root 留在 impl —
     # 靠 __file__ 上溯定位项目根, 位置相关 (移到 components/ 会算错层级)。
@@ -1425,110 +983,9 @@ class SimpleAgent(
             return {"enabled": True, "gate_passed": False, "note": f"异常: {e}"}
 
     # ============================================================
-    # Task III (#95): Reflection 反思环 (Reflexion / Self-critique)
+    # Reflection 反思环 (_reflect_revise/_parse_reflection_json) 已抽到
+    #   components/reflection.py (ReflectionMixin)。
     # ============================================================
-
-    def _reflect_revise(
-        self, task: str, initial_answer: str, trace_id: Optional[str],
-    ) -> tuple:
-        """对初步答案做 critique → revise. 类 Reflexion 论文 / OpenAI o1 思路.
-
-        2 步 LLM 调用:
-          1. critique: "Given the task and initial answer, identify any flaws,
-             missing info, or improvements."
-          2. revise: "Given the critique, produce an improved answer."
-
-        失败 (LLM 不可用 / critique 解析失败) → 返 (None, meta), 主路径保留原答案.
-        meta: {critique_text, n_issues, llm_calls, cost_ms}.
-        """
-        llm = self._resolve_llm_planner(trace_id=trace_id)
-        if llm is None:
-            return None, {"skipped": "no_llm"}
-
-        meta: Dict[str, Any] = {"llm_calls": 0}
-        t0 = time.time()
-
-        # ----- 1. Critique -----
-        critique_prompt = (
-            "你是严格的答案评审. 给定任务和初步答案, 找出缺陷 / 缺失 / 模糊点 / 可改进处.\n\n"
-            f"[任务]\n{task}\n\n"
-            f"[初步答案]\n{initial_answer}\n\n"
-            "请返回 JSON: {\n"
-            '  "issues": ["缺陷1", "缺陷2", ...],\n'
-            '  "missing_info": ["缺哪些上下文", ...],\n'
-            '  "overall_quality": 1-5,\n'
-            '  "should_revise": true|false\n'
-            "}\n"
-            "只返回 JSON, 别加任何解释."
-        )
-        try:
-            critique_raw = llm(critique_prompt)
-            meta["llm_calls"] += 1
-        except Exception as e:
-            return None, {"skipped": "critique_llm_failed", "err": str(e)}
-
-        critique = self._parse_reflection_json(critique_raw or "")
-        if not critique:
-            return None, {"skipped": "critique_json_parse_failed", "raw": (critique_raw or "")[:200]}
-
-        meta["critique"] = critique
-        meta["n_issues"] = len(critique.get("issues") or [])
-        meta["overall_quality"] = critique.get("overall_quality")
-
-        # 自评分高 + LLM 自己说不用 revise → 跳过, 节省一轮调用
-        if not critique.get("should_revise", True) and int(critique.get("overall_quality") or 0) >= 4:
-            meta["skipped_revise"] = "self_eval_good"
-            meta["cost_ms"] = int((time.time() - t0) * 1000)
-            return None, meta
-
-        # ----- 2. Revise -----
-        issues_str = "\n".join(f"- {x}" for x in (critique.get("issues") or [])[:5])
-        missing_str = "\n".join(f"- {x}" for x in (critique.get("missing_info") or [])[:5])
-        revise_prompt = (
-            "你需要根据评审意见把答案修订得更好.\n\n"
-            f"[任务]\n{task}\n\n"
-            f"[初步答案]\n{initial_answer}\n\n"
-            f"[发现的问题]\n{issues_str or '(无)'}\n\n"
-            f"[缺失信息]\n{missing_str or '(无)'}\n\n"
-            "请直接返回修订后的最终答案 (不要解释为什么修订, 不加 '修订后:' 等前缀)."
-        )
-        try:
-            revised = llm(revise_prompt)
-            meta["llm_calls"] += 1
-        except Exception as e:
-            return None, {**meta, "skipped": "revise_llm_failed", "err": str(e)}
-
-        if not revised or not str(revised).strip():
-            return None, {**meta, "skipped": "revise_empty"}
-
-        meta["cost_ms"] = int((time.time() - t0) * 1000)
-        return str(revised).strip(), meta
-
-    @staticmethod
-    def _parse_reflection_json(raw: str) -> Optional[Dict[str, Any]]:
-        """LLM 返 JSON dict, 同 long_term_memory 的 _parse_extracted_json 兼容
-        markdown 围栏 / 前后解释文字."""
-        import json as _json
-        import re as _re
-
-        raw = (raw or "").strip()
-        if raw.startswith("```"):
-            raw = _re.sub(r"^```[a-zA-Z]*\n", "", raw)
-            raw = _re.sub(r"\n```\s*$", "", raw)
-            raw = raw.strip()
-        try:
-            obj = _json.loads(raw)
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            pass
-        m = _re.search(r"\{[\s\S]*\}", raw)
-        if not m:
-            return None
-        try:
-            obj = _json.loads(m.group(0))
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            return None
 
     @staticmethod
     def _extract_image_urls(output: Any) -> list:

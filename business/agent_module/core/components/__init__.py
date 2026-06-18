@@ -25,6 +25,11 @@ from .prompt_builder import PromptBuilderMixin
 from .self_maintenance import SelfMaintenanceMixin
 from .memory_injection import MemoryMixin
 from .task_preprocess import TaskPreprocessMixin, TaskPreContext
+from .state_history import StateHistoryMixin
+from .self_verify import SelfVerifyMixin
+from .skill_distill import SkillDistillMixin
+from .planning import PlannerMixin
+from .reflection import ReflectionMixin
 
 __all__ = [
     "ReActEngineMixin",
@@ -35,4 +40,9 @@ __all__ = [
     "MemoryMixin",
     "TaskPreprocessMixin",
     "TaskPreContext",
+    "StateHistoryMixin",
+    "SelfVerifyMixin",
+    "SkillDistillMixin",
+    "PlannerMixin",
+    "ReflectionMixin",
 ]
