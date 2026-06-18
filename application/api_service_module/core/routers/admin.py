@@ -9,6 +9,7 @@ GET /admin/status   运行期状态总览 (Task S #53)
 
 from __future__ import annotations
 
+from pathlib import Path  # /admin/status 用 Path(upload_dir); 缺它会 NameError 被吞→上传数永远空
 from typing import Any, Dict
 
 from fastapi import Request

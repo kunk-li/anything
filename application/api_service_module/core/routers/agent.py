@@ -270,6 +270,11 @@ class AgentRoutesMixin:
             agent, err = _agent_or_503(trace_id)
             if err:
                 return err
+            # 改 agent 自主能力/自省/自动批准等开关, 与 /config/models 同级敏感, 加 admin 闸
+            # (未配 admin_api_keys 时 _check_admin 返回 None, 维持旧行为)。
+            denied = self._check_admin(request, trace_id)
+            if denied is not None:
+                return denied
             from agent_module.config.schema import apply_agent_config, dump_agent_config
             try:
                 body = await request.json()
@@ -301,6 +306,10 @@ class AgentRoutesMixin:
             agent, err = _agent_or_503(trace_id)
             if err:
                 return err
+            # 同 /config/agent: 整组切换 preset 也是写敏感, 加 admin 闸
+            denied = self._check_admin(request, trace_id)
+            if denied is not None:
+                return denied
             from agent_module.config.schema import apply_preset, dump_agent_config
             try:
                 body = await request.json()

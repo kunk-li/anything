@@ -22,6 +22,7 @@ import sqlite3
 import string
 import time
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict
 
@@ -170,29 +171,28 @@ class ProjectsRoutesMixin:
             now = int(time.time())
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
             try:
-                conn = _get_conn()
-                # 幂等去重: 同 tenant 下同一根路径已注册 → 直接返回那个, 不再建重复项。
-                cur = conn.execute(
-                    "SELECT id, name, root_path, tenant_id, created_at_iso "
-                    "FROM projects WHERE tenant_id = ? AND root_path = ?",
-                    (tenant_id, abs_root),
-                )
-                ex = cur.fetchone()
-                if ex:
-                    conn.close()
-                    return JSONResponse({
-                        "code": "SUCCESS", "message": "already exists",
-                        "data": {"id": ex[0], "name": ex[1], "root_path": ex[2],
-                                 "tenant_id": ex[3], "created_at_iso": ex[4],
-                                 "has_project_memory": _has_memory_file(ex[2])},
-                        "trace_id": trace_id, "retryable": False, "details": None,
-                    })
-                conn.execute(
-                    "INSERT INTO projects (id, name, root_path, tenant_id, created_at, created_at_iso) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (proj_id, name, abs_root, tenant_id, now, iso),
-                )
-                conn.close()
+                # closing(): 任一 execute 抛错时旧代码跳过 conn.close() → WAL 句柄泄漏
+                with closing(_get_conn()) as conn:
+                    # 幂等去重: 同 tenant 下同一根路径已注册 → 直接返回那个, 不再建重复项。
+                    cur = conn.execute(
+                        "SELECT id, name, root_path, tenant_id, created_at_iso "
+                        "FROM projects WHERE tenant_id = ? AND root_path = ?",
+                        (tenant_id, abs_root),
+                    )
+                    ex = cur.fetchone()
+                    if ex:
+                        return JSONResponse({
+                            "code": "SUCCESS", "message": "already exists",
+                            "data": {"id": ex[0], "name": ex[1], "root_path": ex[2],
+                                     "tenant_id": ex[3], "created_at_iso": ex[4],
+                                     "has_project_memory": _has_memory_file(ex[2])},
+                            "trace_id": trace_id, "retryable": False, "details": None,
+                        })
+                    conn.execute(
+                        "INSERT INTO projects (id, name, root_path, tenant_id, created_at, created_at_iso) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (proj_id, name, abs_root, tenant_id, now, iso),
+                    )
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
                     "data": {"id": proj_id, "name": name, "root_path": abs_root,
@@ -208,14 +208,13 @@ class ProjectsRoutesMixin:
             trace_id = request.state.trace_id
             tenant = (request.query_params.get("tenant") or "default").strip()
             try:
-                conn = _get_conn()
-                cur = conn.execute(
-                    "SELECT id, name, root_path, tenant_id, created_at, created_at_iso "
-                    "FROM projects WHERE tenant_id = ? ORDER BY created_at DESC",
-                    (tenant,),
-                )
-                items = [_project_row(row) for row in cur.fetchall()]
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    cur = conn.execute(
+                        "SELECT id, name, root_path, tenant_id, created_at, created_at_iso "
+                        "FROM projects WHERE tenant_id = ? ORDER BY created_at DESC",
+                        (tenant,),
+                    )
+                    items = [_project_row(row) for row in cur.fetchall()]
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
                     "data": {"count": len(items), "items": items},
@@ -227,10 +226,27 @@ class ProjectsRoutesMixin:
         @self.app.delete("/projects/{proj_id}")
         async def project_delete(proj_id: str, request: Request):
             trace_id = request.state.trace_id
+            # 认证开启时只允许删本租户的项目: 否则泄漏/猜到的 id 可被跨租户删除
+            # (create/list 都按 tenant 隔离, 唯独 delete 漏了)。未认证维持旧行为。
+            tid = self._resolve_tenant_from_auth(request)
             try:
-                conn = _get_conn()
-                conn.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    if tid:
+                        cur = conn.execute(
+                            "DELETE FROM projects WHERE id = ? AND tenant_id = ?",
+                            (proj_id, tid),
+                        )
+                    else:
+                        cur = conn.execute("DELETE FROM projects WHERE id = ?", (proj_id,))
+                    deleted = cur.rowcount
+                if deleted == 0:
+                    # 旧代码无论 id 是否存在都回 SUCCESS; 现按实际删除行数报 NOT_FOUND
+                    return JSONResponse(
+                        {"code": "NOT_FOUND", "message": f"项目不存在: {proj_id}",
+                         "data": {"id": proj_id}, "trace_id": trace_id,
+                         "retryable": False, "details": None},
+                        status_code=404,
+                    )
                 return JSONResponse({
                     "code": "SUCCESS", "message": "deleted",
                     "data": {"id": proj_id},

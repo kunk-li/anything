@@ -283,11 +283,14 @@ class MemoryRoutesMixin:
     # ------------------------------------------------------------------
 
     def _memory_tenant_from_request(self, request: Request) -> str:
-        # 1. auth context (从 X-API-Key 反查的)
-        tenant = getattr(request.state, "auth_tenant_id", None)
+        # 1. 认证产物优先 (从 X-API-Key/JWT 反查的 tenant)。
+        #    旧代码读 request.state.auth_tenant_id —— 这个属性全仓没有任何地方 set, 故永远 miss,
+        #    落到下面 query string: 持 A 租户 key 的请求只要带 ?tenant_id=B 就能越权读 B 的 fact,
+        #    破坏模块承诺的租户隔离。改用与 documents/invoke 一致的 _resolve_tenant_from_auth。
+        tenant = self._resolve_tenant_from_auth(request)
         if tenant:
             return str(tenant)
-        # 2. query string
+        # 2. query string (无认证的 dev / 单租户场景)
         q_tenant = request.query_params.get("tenant_id")
         if q_tenant:
             return str(q_tenant)

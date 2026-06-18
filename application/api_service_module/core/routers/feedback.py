@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -105,23 +106,23 @@ class FeedbackRoutesMixin:
                 tools_used = ",".join(str(t) for t in tools_used)
 
             try:
-                conn = _get_conn()
                 now = int(time.time())
                 iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
-                conn.execute(
-                    "INSERT INTO feedback (trace_id, session_id, tenant_id, rating, "
-                    "comment, user_msg_preview, assistant_msg_preview, mode, model_name, "
-                    "tools_used, created_at, created_at_iso) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        target_trace, session_id, tenant_id, int(rating),
-                        (comment or "")[:2000] or None,
-                        user_preview, assistant_preview,
-                        mode, model_name, tools_used,
-                        now, iso,
-                    ),
-                )
-                conn.close()
+                # closing(): execute 抛错时旧代码跳过 conn.close() → WAL 句柄泄漏
+                with closing(_get_conn()) as conn:
+                    conn.execute(
+                        "INSERT INTO feedback (trace_id, session_id, tenant_id, rating, "
+                        "comment, user_msg_preview, assistant_msg_preview, mode, model_name, "
+                        "tools_used, created_at, created_at_iso) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            target_trace, session_id, tenant_id, int(rating),
+                            (comment or "")[:2000] or None,
+                            user_preview, assistant_preview,
+                            mode, model_name, tools_used,
+                            now, iso,
+                        ),
+                    )
                 return JSONResponse({
                     "code": "SUCCESS", "message": "thanks",
                     "data": {"trace_id": target_trace, "rating": int(rating)},
@@ -138,35 +139,43 @@ class FeedbackRoutesMixin:
         @self.app.get("/feedback/stats")
         async def feedback_stats(request: Request):
             trace_id = request.state.trace_id
+            # 认证开启时按调用方租户过滤: 否则任一租户都能读到全体租户的反馈汇总。
+            # 未认证(dev/单租户)时 tid=None, 不加过滤, 维持旧行为。
+            tid = self._resolve_tenant_from_auth(request)
+            t_where = " WHERE tenant_id=?" if tid else ""
+            t_and = " AND tenant_id=?" if tid else ""
+            t_p: tuple = (tid,) if tid else ()
             try:
-                conn = _get_conn()
-                cur = conn.execute(
-                    "SELECT rating, COUNT(*) FROM feedback GROUP BY rating"
-                )
-                rows = dict(cur.fetchall())
-                up = int(rows.get(1, 0))
-                down = int(rows.get(-1, 0))
-                total = up + down
-                ratio = (up / total) if total else 0.0
-                # 按 tool 拆分 down: 哪个 tool 最常被否
-                cur = conn.execute(
-                    "SELECT tools_used, COUNT(*) FROM feedback WHERE rating=-1 "
-                    "AND tools_used IS NOT NULL GROUP BY tools_used "
-                    "ORDER BY 2 DESC LIMIT 10"
-                )
-                down_by_tools = [{"tools": r[0], "count": r[1]} for r in cur.fetchall()]
-                # 按 mode
-                cur = conn.execute(
-                    "SELECT mode, rating, COUNT(*) FROM feedback "
-                    "WHERE mode IS NOT NULL GROUP BY mode, rating"
-                )
-                by_mode_raw = cur.fetchall()
+                with closing(_get_conn()) as conn:
+                    cur = conn.execute(
+                        "SELECT rating, COUNT(*) FROM feedback" + t_where + " GROUP BY rating",
+                        t_p,
+                    )
+                    rows = dict(cur.fetchall())
+                    up = int(rows.get(1, 0))
+                    down = int(rows.get(-1, 0))
+                    total = up + down
+                    ratio = (up / total) if total else 0.0
+                    # 按 tool 拆分 down: 哪个 tool 最常被否
+                    cur = conn.execute(
+                        "SELECT tools_used, COUNT(*) FROM feedback WHERE rating=-1 "
+                        "AND tools_used IS NOT NULL" + t_and + " GROUP BY tools_used "
+                        "ORDER BY 2 DESC LIMIT 10",
+                        t_p,
+                    )
+                    down_by_tools = [{"tools": r[0], "count": r[1]} for r in cur.fetchall()]
+                    # 按 mode
+                    cur = conn.execute(
+                        "SELECT mode, rating, COUNT(*) FROM feedback "
+                        "WHERE mode IS NOT NULL" + t_and + " GROUP BY mode, rating",
+                        t_p,
+                    )
+                    by_mode_raw = cur.fetchall()
                 by_mode: Dict[str, Dict[str, int]] = {}
                 for mode, rating, cnt in by_mode_raw:
                     by_mode.setdefault(mode, {"up": 0, "down": 0})
                     key = "up" if rating == 1 else "down"
                     by_mode[mode][key] = cnt
-                conn.close()
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
                     "data": {
@@ -194,26 +203,32 @@ class FeedbackRoutesMixin:
                 limit = 50
             limit = min(500, max(1, limit))
             rating_filter = request.query_params.get("rating")  # +1 / -1 / 都返
+            # 认证开启时按调用方租户过滤: 否则任一租户都能读到全体租户的会话预览(内容泄漏)。
+            tid = self._resolve_tenant_from_auth(request)
+            t_and = " AND tenant_id=?" if tid else ""
+            t_where = " WHERE tenant_id=?" if tid else ""
+            t_p: tuple = (tid,) if tid else ()
+            cols = (
+                "SELECT trace_id, session_id, tenant_id, rating, comment, "
+                "user_msg_preview, assistant_msg_preview, mode, model_name, "
+                "tools_used, created_at_iso FROM feedback"
+            )
             try:
-                conn = _get_conn()
-                if rating_filter in ("1", "-1"):
-                    cur = conn.execute(
-                        "SELECT trace_id, session_id, tenant_id, rating, comment, "
-                        "user_msg_preview, assistant_msg_preview, mode, model_name, "
-                        "tools_used, created_at_iso FROM feedback WHERE rating=? "
-                        "ORDER BY created_at DESC LIMIT ?",
-                        (int(rating_filter), limit),
-                    )
-                else:
-                    cur = conn.execute(
-                        "SELECT trace_id, session_id, tenant_id, rating, comment, "
-                        "user_msg_preview, assistant_msg_preview, mode, model_name, "
-                        "tools_used, created_at_iso FROM feedback "
-                        "ORDER BY created_at DESC LIMIT ?",
-                        (limit,),
-                    )
+                with closing(_get_conn()) as conn:
+                    if rating_filter in ("1", "-1"):
+                        cur = conn.execute(
+                            cols + " WHERE rating=?" + t_and
+                            + " ORDER BY created_at DESC LIMIT ?",
+                            (int(rating_filter), *t_p, limit),
+                        )
+                    else:
+                        cur = conn.execute(
+                            cols + t_where + " ORDER BY created_at DESC LIMIT ?",
+                            (*t_p, limit),
+                        )
+                    rows = cur.fetchall()
                 items = []
-                for row in cur.fetchall():
+                for row in rows:
                     items.append({
                         "trace_id": row[0], "session_id": row[1], "tenant_id": row[2],
                         "rating": row[3], "comment": row[4],
@@ -221,7 +236,6 @@ class FeedbackRoutesMixin:
                         "mode": row[7], "model_name": row[8], "tools_used": row[9],
                         "created_at_iso": row[10],
                     })
-                conn.close()
                 return JSONResponse({
                     "code": "SUCCESS", "message": "ok",
                     "data": {"count": len(items), "items": items},
