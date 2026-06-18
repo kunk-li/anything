@@ -42,3 +42,19 @@ def test_run_batch_file(tmp_path: Path) -> None:
     app = ConsoleApp(handler=DummyHandler())
     results = app.run_batch_file(str(batch_file))
     assert len(results) == 2
+
+
+def test_run_once_and_execute_share_consoleitem_history(tmp_path: Path) -> None:
+    """回归: run_once 旧路径(预构造 {type} 请求)与 execute_request 新路径混存同一 store,
+    现在两路统一产 ConsoleHistoryItem(此前旧路径存的是 plain dict, 与新路径记录类型不一)。
+    保证记录类型一致, 任何依赖 .to_dict() 的读取方(export 等)对两路记录行为相同。"""
+    app = ConsoleApp(handler=DummyHandler())
+    app.run_once({"type": "rag", "query": "hello"})          # 旧路径
+    app.run_batch([{"mode": "agent", "text": "world"}])      # 新路径 (execute_request)
+
+    items = app.history_store.list_items()
+    assert len(items) == 2
+    # 关键: 两条都是 ConsoleHistoryItem(有 to_dict), 旧代码 run_once 那条会是 dict → 此断言会 fail
+    assert all(hasattr(it, "to_dict") for it in items)
+    out = app.export_history(str(tmp_path / "h.json"), fmt="json")
+    assert len(json.loads(Path(out).read_text(encoding="utf-8"))) == 2

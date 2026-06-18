@@ -111,9 +111,6 @@ class ConsoleApp(BaseConsoleApp):
             "console_app.default_render_mode", "friendly"
         )
         self.enable_history = bool(self.config.get_config("console_app.enable_history", True))
-        self.history_file = self.config.get_config(
-            "console_app.history_file", "./console_history.jsonl"
-        )
         self.batch_fail_fast = bool(self.config.get_config("console_app.batch_fail_fast", False))
 
         self.logger.info("控制台交互模块初始化完成")
@@ -369,21 +366,10 @@ class ConsoleApp(BaseConsoleApp):
             response = self._handle_exception(e, trace_id=trace_id, request=request)
         duration_ms = int((time.time() - start) * 1000)
 
-        item = ConsoleHistoryItem(
-            timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            session_id=self.session.session_id or "default",
-            request=request,
-            response=response,
-            duration_ms=duration_ms,
-            source="interactive",
+        self._save_history_item(
+            request=request, response=response,
+            duration_ms=duration_ms, source="interactive",
         )
-        try:
-            if hasattr(self.history_store, "save"):
-                self.history_store.save(item)
-            elif hasattr(self.history_store, "append"):
-                self.history_store.append(item)
-        except Exception as e:
-            self.logger.warning(f"[console.execute] 写 history 失败 (忽略): {e}")
         return response
 
     def _call_handler(self, request: Dict[str, Any], trace_id: Optional[str] = None) -> Dict[str, Any]:
@@ -445,12 +431,10 @@ class ConsoleApp(BaseConsoleApp):
             if render_text:
                 print(render_text)
 
-            if self.enable_history:
-                self._save_history_safe(
-                    trace_id=trace_id,
-                    request=standardized,
-                    response=result,
-                )
+            self._save_history_item(
+                request=standardized, response=result,
+                duration_ms=int((time.time() - start_time) * 1000), source="batch",
+            )
 
             self.logger.info(
                 f"控制台单次执行完成：code={result.get('code')}, trace_id={trace_id}, "
@@ -708,52 +692,32 @@ class ConsoleApp(BaseConsoleApp):
             items.append(self._parse_interactive_input(line))
         return items
 
-    def _save_history_safe(self, trace_id: str, request: Dict[str, Any], response: Dict[str, Any]) -> None:
-        """安全保存本地历史，不阻断主流程"""
-        if not self.enable_history:
+    def _save_history_item(self, *, request: Dict[str, Any], response: Dict[str, Any],
+                           duration_ms: int, source: str) -> None:
+        """统一记一条 ConsoleHistoryItem 到 history_store (两条执行路径共用)。
+
+        修旧 bug: run_once 旧路径曾存 plain dict, 与 execute_request 存的 ConsoleHistoryItem
+        混进同一个 store; 之后 export()/list_items(session_id) 调 .to_dict()/.session_id
+        会在 dict 上 AttributeError 直接崩。现在两路统一产 ConsoleHistoryItem。
+        失败不阻断主流程。history_store 在 __init__ 必被赋值 (默认内存版), 故无文件回落。
+        """
+        if not self.enable_history or self.history_store is None:
             return
-
-        item = {
-            "trace_id": trace_id,
-            "request": request,
-            "response": response,
-            "created_at": time.time(),
-        }
-
+        item = ConsoleHistoryItem(
+            timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            session_id=self.session.session_id or "default",
+            request=request,
+            response=response,
+            duration_ms=duration_ms,
+            source=source,
+        )
         try:
-            if self.history_store is not None:
-                if hasattr(self.history_store, "save"):
-                    self.history_store.save(item)
-                elif hasattr(self.history_store, "append"):
-                    self.history_store.append(item)
-                elif callable(self.history_store):
-                    self.history_store(item)
-                return
-
-            history_path = Path(self.history_file)
-            history_path.parent.mkdir(parents=True, exist_ok=True)
-            with history_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            if hasattr(self.history_store, "save"):
+                self.history_store.save(item)
+            elif hasattr(self.history_store, "append"):
+                self.history_store.append(item)
         except Exception as e:
-            self.logger.warning(f"控制台历史保存失败（已忽略）：trace_id={trace_id}, error={str(e)}")
-
-    def _render_history(self) -> str:
-        """渲染本地历史"""
-        history_path = Path(self.history_file)
-        if not history_path.exists():
-            return "暂无历史记录。"
-
-        lines = []
-        for line in history_path.read_text(encoding="utf-8").splitlines()[-20:]:
-            try:
-                item = json.loads(line)
-                trace_id = item.get("trace_id")
-                request = item.get("request", {})
-                lines.append(f"{trace_id} | {request.get('type')} | {request.get('query') or request.get('task')}")
-            except Exception:
-                continue
-
-        return "\n".join(lines) if lines else "暂无历史记录。"
+            self.logger.warning(f"控制台历史保存失败(已忽略): {e}")
 
     def _help_text(self) -> str:
         plan_state = "ON" if self.session.plan_only else "OFF"
