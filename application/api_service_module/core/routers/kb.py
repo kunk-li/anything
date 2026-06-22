@@ -28,6 +28,7 @@ import os
 import sqlite3
 import time
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -103,13 +104,12 @@ class KbRoutesMixin:
             now = int(time.time())
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
             try:
-                conn = _get_conn()
-                conn.execute(
-                    "INSERT INTO kb (id, name, description, tenant_id, created_at, created_at_iso) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (kb_id, name, description, tenant_id, now, iso),
-                )
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    conn.execute(
+                        "INSERT INTO kb (id, name, description, tenant_id, created_at, created_at_iso) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (kb_id, name, description, tenant_id, now, iso),
+                    )
                 return envelope(trace_id, data={"id": kb_id, "name": name, "description": description,
                              "tenant_id": tenant_id, "created_at_iso": iso})
             except Exception as e:
@@ -120,20 +120,19 @@ class KbRoutesMixin:
             trace_id = request.state.trace_id
             tenant = (request.query_params.get("tenant") or "default").strip()
             try:
-                conn = _get_conn()
-                cur = conn.execute(
-                    "SELECT k.id, k.name, k.description, k.tenant_id, k.created_at, k.created_at_iso, "
-                    "       (SELECT COUNT(*) FROM kb_doc d WHERE d.kb_id = k.id) AS doc_count "
-                    "FROM kb k WHERE k.tenant_id = ? "
-                    "ORDER BY k.created_at DESC",
-                    (tenant,),
-                )
-                items = []
-                for row in cur.fetchall():
-                    item = _kb_row(row[:6])
-                    item["doc_count"] = row[6]
-                    items.append(item)
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    cur = conn.execute(
+                        "SELECT k.id, k.name, k.description, k.tenant_id, k.created_at, k.created_at_iso, "
+                        "       (SELECT COUNT(*) FROM kb_doc d WHERE d.kb_id = k.id) AS doc_count "
+                        "FROM kb k WHERE k.tenant_id = ? "
+                        "ORDER BY k.created_at DESC",
+                        (tenant,),
+                    )
+                    items = []
+                    for row in cur.fetchall():
+                        item = _kb_row(row[:6])
+                        item["doc_count"] = row[6]
+                        items.append(item)
                 return envelope(trace_id, data={"count": len(items), "items": items})
             except Exception as e:
                 return _err(trace_id, "KB_LIST_FAILED", str(e))
@@ -142,25 +141,23 @@ class KbRoutesMixin:
         async def kb_get(kb_id: str, request: Request):
             trace_id = request.state.trace_id
             try:
-                conn = _get_conn()
-                cur = conn.execute(
-                    "SELECT id, name, description, tenant_id, created_at, created_at_iso "
-                    "FROM kb WHERE id = ?", (kb_id,)
-                )
-                row = cur.fetchone()
-                if not row:
-                    conn.close()
-                    return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
-                kb = _kb_row(row)
-                # 拉 doc 列表
-                cur = conn.execute(
-                    "SELECT doc_id, added_at FROM kb_doc WHERE kb_id = ? ORDER BY added_at",
-                    (kb_id,),
-                )
-                docs = [{"doc_id": r[0], "added_at": r[1]} for r in cur.fetchall()]
-                kb["docs"] = docs
-                kb["doc_count"] = len(docs)
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    cur = conn.execute(
+                        "SELECT id, name, description, tenant_id, created_at, created_at_iso "
+                        "FROM kb WHERE id = ?", (kb_id,)
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
+                    kb = _kb_row(row)
+                    # 拉 doc 列表
+                    cur = conn.execute(
+                        "SELECT doc_id, added_at FROM kb_doc WHERE kb_id = ? ORDER BY added_at",
+                        (kb_id,),
+                    )
+                    docs = [{"doc_id": r[0], "added_at": r[1]} for r in cur.fetchall()]
+                    kb["docs"] = docs
+                    kb["doc_count"] = len(docs)
                 return envelope(trace_id, data=kb)
             except Exception as e:
                 return _err(trace_id, "KB_GET_FAILED", str(e))
@@ -169,9 +166,8 @@ class KbRoutesMixin:
         async def kb_delete(kb_id: str, request: Request):
             trace_id = request.state.trace_id
             try:
-                conn = _get_conn()
-                conn.execute("DELETE FROM kb WHERE id = ?", (kb_id,))
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    conn.execute("DELETE FROM kb WHERE id = ?", (kb_id,))
                 return envelope(trace_id, message="deleted", data={"id": kb_id})
             except Exception as e:
                 return _err(trace_id, "KB_DELETE_FAILED", str(e))
@@ -187,24 +183,24 @@ class KbRoutesMixin:
             if not isinstance(doc_ids, list) or not doc_ids:
                 return _bad(trace_id, "doc_ids 必须是非空数组")
             try:
-                conn = _get_conn()
-                # 确认 kb 存在
-                cur = conn.execute("SELECT 1 FROM kb WHERE id = ?", (kb_id,))
-                if not cur.fetchone():
-                    conn.close()
-                    return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
-                now = int(time.time())
-                added = 0
-                for doc_id in doc_ids:
-                    try:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO kb_doc (kb_id, doc_id, added_at) VALUES (?, ?, ?)",
-                            (kb_id, str(doc_id), now),
-                        )
-                        added += 1
-                    except Exception:
-                        pass
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    # 确认 kb 存在
+                    cur = conn.execute("SELECT 1 FROM kb WHERE id = ?", (kb_id,))
+                    if not cur.fetchone():
+                        return envelope(trace_id, code="NOT_FOUND", message=f"kb {kb_id!r} 不存在", status_code=404)
+                    now = int(time.time())
+                    added = 0
+                    for doc_id in doc_ids:
+                        try:
+                            cur = conn.execute(
+                                "INSERT OR IGNORE INTO kb_doc (kb_id, doc_id, added_at) VALUES (?, ?, ?)",
+                                (kb_id, str(doc_id), now),
+                            )
+                            # INSERT OR IGNORE 命中既有成员时 rowcount=0, 不计入 added
+                            if cur.rowcount > 0:
+                                added += 1
+                        except Exception:
+                            pass
                 return envelope(trace_id, data={"kb_id": kb_id, "added": added, "requested": len(doc_ids)})
             except Exception as e:
                 return _err(trace_id, "KB_ADD_DOCS_FAILED", str(e))
@@ -213,12 +209,11 @@ class KbRoutesMixin:
         async def kb_remove_doc(kb_id: str, doc_id: str, request: Request):
             trace_id = request.state.trace_id
             try:
-                conn = _get_conn()
-                conn.execute(
-                    "DELETE FROM kb_doc WHERE kb_id = ? AND doc_id = ?",
-                    (kb_id, doc_id),
-                )
-                conn.close()
+                with closing(_get_conn()) as conn:
+                    conn.execute(
+                        "DELETE FROM kb_doc WHERE kb_id = ? AND doc_id = ?",
+                        (kb_id, doc_id),
+                    )
                 return envelope(trace_id, data={"kb_id": kb_id, "doc_id": doc_id})
             except Exception as e:
                 return _err(trace_id, "KB_REMOVE_DOC_FAILED", str(e))

@@ -311,6 +311,23 @@ class TestBuildSchedulerWiring(unittest.TestCase):
         finally:
             sch.stop()
 
+    def test_malformed_scheduler_block_does_not_crash_startup(self):
+        # fail-safe 契约: 顶层 scheduler 块被写成非 dict (字符串/数字/列表) 时, 之前
+        # sched_cfg.get(...) 抛 AttributeError 崩启动; 现按类型兜底当空 → 返 None, 不阻断。
+        for bad in ("daily", 5, ["a", "b"], True):
+            self.assertIsNone(self._build({"scheduler": bad}),
+                              msg=f"scheduler={bad!r} 应降级到 None")
+
+    def test_malformed_tasks_does_not_crash_startup(self):
+        # fail-safe 契约: scheduler.tasks 被写成非 list (int → for 迭代抛 TypeError;
+        # dict → 之前迭代 key 当任务) 时, 现按类型兜底当空 → 返 None, 不阻断。
+        self.assertIsNone(self._build({"scheduler": {"tasks": 7}}),
+                          msg="tasks=int 应降级到 None")
+        self.assertIsNone(self._build({"scheduler": {"tasks": {"id": "x"}}}),
+                          msg="tasks=dict 应降级到 None")
+        self.assertIsNone(self._build({"scheduler": {"tasks": "oops"}}),
+                          msg="tasks=str 应降级到 None")
+
 
 class TestGracefulShutdown(unittest.TestCase):
     """优化②: app 退出收尾 — 停 scheduler + 关 external providers (各自 fail-safe)。"""

@@ -135,6 +135,15 @@ class TestDeleteChain(unittest.TestCase):
         # BM25 摘除后已持久化
         self.assertTrue(os.path.exists(self.bm25_path))
 
+    def test_delete_missing_doc_returns_404_document_not_found(self):
+        """document_store 没这条 doc (delete_document 返 False) —
+        应 404 + code DOCUMENT_NOT_FOUND (与全仓 not_found 桶一致), 不再是 200/NOT_FOUND"""
+        self.store.delete_document = lambda doc_id: False
+        r = self.client.delete("/documents/dnope")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["code"], "DOCUMENT_NOT_FOUND")
+        self.assertFalse(r.json()["data"]["deleted_from_document_store"])
+
     def test_delete_upload_file_outside_upload_dir_not_touched(self):
         """info.stored_path 指到 upload_dir 外 (比如被篡改) — 一律不删"""
         outside = self.tmp / "outside.txt"

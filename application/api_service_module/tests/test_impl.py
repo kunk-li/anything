@@ -690,6 +690,70 @@ class TestWebSocketStream(unittest.TestCase):
         self.assertEqual(types[0], "start")
         self.assertEqual(types[-1], "done")
 
+    @staticmethod
+    def _make_jwt(secret: str, payload: dict) -> str:
+        """最小 HS256 JWT 编码器 (与 SecurityMixin._decode_jwt 同方案, 纯标准库)."""
+        import base64
+        import hashlib
+        import hmac
+        import json as _json
+
+        def _b64(raw: bytes) -> str:
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+        header_b64 = _b64(_json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8"))
+        payload_b64 = _b64(_json.dumps(payload).encode("utf-8"))
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+        sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        return f"{header_b64}.{payload_b64}.{_b64(sig)}"
+
+    def test_stream_auth_required_for_jwt_without_token(self):
+        """回归: auth_type=jwt 且无 token -> WS 握手必须被拒 (此前完全绕过鉴权)."""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = True
+        svc.auth_type = "jwt"
+        svc.jwt_secret = "ws-secret"
+        client = TestClient(svc.app)
+        # 无 token -> close 4401, TestClient 在握手被拒时抛异常
+        with self.assertRaises(Exception):
+            with client.websocket_connect("/invoke/stream") as ws:
+                ws.receive_json()
+
+    def test_stream_auth_jwt_token_in_querystring(self):
+        """auth_type=jwt + 合法 JWT (querystring) -> 接受 + payload.tenant_id 生效."""
+        class _H:
+            def handle(self, req, trace_id=None):
+                return {"code": "SUCCESS", "message": "ok",
+                        "data": {"answer": "ok", "_tid": req.get("tenant_id")},
+                        "trace_id": trace_id, "retryable": False, "details": None}
+
+        svc = ApiService(handler=_H())
+        svc.auth_enabled = True
+        svc.auth_type = "jwt"
+        svc.jwt_secret = "ws-secret"
+        # 让 payload 里的 tenant 是已知租户
+        svc._known_tenants = set(svc._known_tenants) | {"tenant-jwt"}
+        token = self._make_jwt("ws-secret", {"tenant_id": "tenant-jwt"})
+        client = TestClient(svc.app)
+        with client.websocket_connect(f"/invoke/stream?token={token}") as ws:
+            ws.send_json({"type": "rag", "query": "x"})
+            start = ws.receive_json()
+            self.assertEqual(start["type"], "start")
+            # 租户从 JWT payload 解析, 而非 body
+            self.assertEqual(start["tenant_id"], "tenant-jwt")
+
+    def test_stream_auth_jwt_bad_token_rejected(self):
+        """auth_type=jwt + 伪造/错签 token -> 4401 (验签失败 fail-closed)."""
+        svc = ApiService(handler=self.handler)
+        svc.auth_enabled = True
+        svc.auth_type = "jwt"
+        svc.jwt_secret = "ws-secret"
+        bad = self._make_jwt("WRONG-secret", {"tenant_id": "tenant-jwt"})
+        client = TestClient(svc.app)
+        with self.assertRaises(Exception):
+            with client.websocket_connect(f"/invoke/stream?token={bad}") as ws:
+                ws.receive_json()
+
 
 class TestDevModeAuthAutoDisable(unittest.TestCase):
     """DEV_MODE 启动 + yaml api_keys 全是未解析 ${ENV} 占位符 -> 自动关 auth"""

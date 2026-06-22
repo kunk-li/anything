@@ -247,7 +247,7 @@ class DocumentsRoutesMixin:
             except Exception as e:
                 warnings.append(f"kb: {e}")
 
-            return envelope(trace_id, code="SUCCESS" if deleted_doc else "NOT_FOUND", message="deleted" if deleted_doc else "doc_id not found in document_store", data={
+            return envelope(trace_id, code="SUCCESS" if deleted_doc else "DOCUMENT_NOT_FOUND", message="deleted" if deleted_doc else "doc_id not found in document_store", status_code=200 if deleted_doc else 404, data={
                         "doc_id": doc_id,
                         "tenant_id": tid,
                         "deleted_from_document_store": deleted_doc,

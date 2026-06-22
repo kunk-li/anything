@@ -25,6 +25,61 @@ from observability_module import (
 class InvokeRoutesMixin:
     """主入口路由 (RAG / Agent / Hybrid 同步 + 流式)."""
 
+    def _resolve_ws_auth(self, ws: WebSocket) -> tuple[bool, "str | None"]:
+        """WS 握手鉴权 + 租户解析 (镜像 HTTP 的 _check_auth + _resolve_tenant_from_auth)。
+
+        浏览器 WS API 不能设自定义 header, 凭证通过 querystring 传:
+            - apikey: ?api_key=<key>           -> 查 _key_to_tenant 反向映射
+            - jwt:    ?token=<jwt> / ?api_key=<jwt> / Authorization: Bearer (非浏览器客户端)
+                      -> self._decode_jwt 验签后取 payload.tenant_id
+
+        返回 (ok, auth_tid):
+            - auth 关闭 / auth_type=none -> (True, None)  调用方按 default/body 处理
+            - 鉴权通过 -> (True, tenant_id 或 None)
+            - 鉴权失败 -> (False, None)  调用方 close(4401)
+        """
+        if not self.auth_enabled or self.auth_type == "none":
+            return True, None
+
+        if self.auth_type == "apikey":
+            api_key = ws.query_params.get("api_key", "")
+            if api_key and api_key in self._key_to_tenant:
+                return True, self._key_to_tenant.get(api_key)
+            return False, None
+
+        if self.auth_type == "jwt":
+            # secret 未配置时 _decode_jwt 恒 None -> fail-closed 全部 4401
+            token = self._extract_ws_bearer_token(ws)
+            payload = self._decode_jwt(token)
+            if payload is None:
+                return False, None
+            tid = payload.get("tenant_id")
+            return True, (str(tid) if tid else None)
+
+        # 未知 auth_type: fail-closed (与 HTTP 侧 _check_auth 保持一致的保守姿态)
+        return False, None
+
+    @staticmethod
+    def _extract_ws_bearer_token(ws: WebSocket) -> str:
+        """从 WS 握手里提取 JWT (浏览器不能设 header, 故多渠道兜底)。
+
+        优先级: Authorization: Bearer (非浏览器客户端) > ?token= > ?api_key= > Sec-WebSocket-Protocol 子协议。
+        """
+        auth = ws.headers.get("Authorization") or ""
+        if auth.lower().startswith("bearer "):
+            tok = auth[7:].strip()
+            if tok:
+                return tok
+        tok = ws.query_params.get("token", "") or ws.query_params.get("api_key", "")
+        if tok:
+            return tok
+        # 子协议形式: Sec-WebSocket-Protocol: bearer, <token>
+        for sub in ws.scope.get("subprotocols") or []:
+            sub_s = str(sub).strip()
+            if sub_s and sub_s.lower() not in ("bearer", "jwt"):
+                return sub_s
+        return ""
+
     def _register_invoke_routes(self) -> None:
         @self.app.post("/invoke")
         async def invoke(request: Request):
@@ -172,12 +227,13 @@ class InvokeRoutesMixin:
             参考: docs/multi-tenancy-design.md §7.3 OTel 在 WS 上的传播本期不实现
                   (浏览器 WS API 没自定义 header, 后续需要换 querystring 模式)
             """
-            # 鉴权 (querystring 风格, 因为浏览器 WS 不能自定义 header)
-            api_key_qs = ws.query_params.get("api_key", "")
-            if self.auth_enabled and self.auth_type == "apikey":
-                if not api_key_qs or api_key_qs not in self._key_to_tenant:
-                    await ws.close(code=4401, reason="AUTH_REQUIRED")
-                    return
+            # 鉴权 (querystring 风格, 因为浏览器 WS 不能自定义 header)。
+            # 注意: 必须对 apikey 与 jwt 都设防 —— 此前仅 gate apikey, 导致
+            # auth_type=jwt 时 WS 握手完全绕过鉴权 (任何人可发起流式请求)。
+            ws_ok, ws_auth_tid = self._resolve_ws_auth(ws)
+            if self.auth_enabled and self.auth_type != "none" and not ws_ok:
+                await ws.close(code=4401, reason="AUTH_REQUIRED")
+                return
 
             await ws.accept()
             trace_id = ws.headers.get("X-Request-Id") or self._generate_trace_id()
@@ -203,8 +259,8 @@ class InvokeRoutesMixin:
                     })
                     return
 
-                # 2. tenant reconcile — 复用 _resolve_tenant_from_auth 但走 ws.query_params
-                auth_tid = self._key_to_tenant.get(api_key_qs) if api_key_qs else None
+                # 2. tenant reconcile — 认证产物 (apikey 反查 / jwt payload) 优先于 body 声明
+                auth_tid = ws_auth_tid
                 body_tid = body.get("tenant_id")
                 if auth_tid:
                     body["tenant_id"] = auth_tid
@@ -327,17 +383,32 @@ class InvokeRoutesMixin:
                                 "type": "done",
                                 "code": evt.get("code", "SUCCESS"),
                                 "message": evt.get("message", ""),
-                                "cost_time": evt.get("cost_time", round(duration, 3)),
+                                # done 在循环内发, 此处 duration 还是初始 0.0;
+                                # generator 未给 cost_time 时按真实墙钟时间兜底
+                                "cost_time": evt.get(
+                                    "cost_time", round(time.time() - start_t, 3)
+                                ),
                                 "trace_id": trace_id,
                             })
                         elif etype == "error":
+                            err_code = evt.get("code", "RAG_RUN_FAILED")
                             await ws.send_json({
                                 "type": "error",
-                                "code": evt.get("code", "RAG_RUN_FAILED"),
+                                "code": err_code,
                                 "message": evt.get("message", ""),
                                 "trace_id": trace_id,
                             })
+                            # 流式错误事件也要计入 metrics, 否则失败请求在
+                            # Prometheus 上彻底消失 (此前直接 return 不记)
+                            self._record_metrics(
+                                req_type=req_type, code=err_code,
+                                duration=time.time() - start_t,
+                                tenant_id=effective_tid,
+                            )
                             return  # 错误后中止流
+                    # 真实流式路径: duration 必须在收尾点结算; 此前沿用初始化的
+                    # 0.0 会把每条流式请求的延迟样本污染成 0, 拉低 P50/P99
+                    duration = time.time() - start_t
                     self._record_metrics(
                         req_type=req_type, code="SUCCESS", duration=duration,
                         tenant_id=effective_tid,
