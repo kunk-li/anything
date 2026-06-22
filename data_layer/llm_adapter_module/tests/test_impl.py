@@ -2,6 +2,11 @@ import unittest
 
 from llm_adapter_module.core.impl import LLMService
 from llm_adapter_module.model.data_model import LLMRequest, LLMParam, FileContent, MediaContent
+from llm_adapter_module.utils import (
+    configure_health_tracker,
+    get_health_tracker,
+    reset_health_tracker,
+)
 
 
 class TestLLMAdapterModule(unittest.TestCase):
@@ -38,6 +43,37 @@ class TestLLMAdapterModule(unittest.TestCase):
         req = LLMRequest(request_type="MULTIMODAL", input_text="描述图片", file_content=fc, model_name="default")
         resp = self.llm_service.call_llm(req)
         self.assertIn(resp.code, ["SUCCESS", "MODEL_NOT_FOUND", "RAG_RUN_FAILED", "UNKNOWN_ERROR"])
+
+    def test_all_health_skipped_records_skipped_models(self):
+        """全部候选都被健康检查跳过时, ALL_MODELS_FAILED 信封必须列出被跳过的模型,
+        否则空 tried_models 会掩盖 "为什么所有模型都没调用" 的原因。"""
+        # 低阈值 health tracker, 1 次失败即 unhealthy 且不冷却恢复
+        configure_health_tracker(fail_threshold=1, cooldown_seconds=3600)
+        self.addCleanup(reset_health_tracker)
+        try:
+            model_name = "skip-only-model"
+            self.llm_service.register_or_update_model(
+                name=model_name,
+                request_type="CHAT",
+                adapter_class="OpenAIChatAdapter",
+                api_key="",
+                api_base="",
+            )
+            # 把唯一候选打成 unhealthy
+            get_health_tracker().record_failure(model_name, error="forced")
+            self.assertFalse(get_health_tracker().is_available(model_name))
+
+            req = LLMRequest(request_type="CHAT", input_text="hi", model_name=model_name)
+            resp = self.llm_service.call_llm(req)
+
+            # 没有任何模型被真正调用过 → 走 ALL_MODELS_FAILED 合成信封
+            self.assertEqual(resp.code, "ALL_MODELS_FAILED")
+            self.assertIsNotNone(resp.request_info)
+            # tried 为空 (一个都没真正调), 但 skipped 必须记下被跳过的模型
+            self.assertEqual(resp.request_info.get("tried_models"), [])
+            self.assertIn(model_name, resp.request_info.get("skipped_models", []))
+        finally:
+            self.llm_service.unregister_model("skip-only-model")
 
 if __name__ == "__main__":
     unittest.main()

@@ -100,36 +100,79 @@ def chunk_document(
 
     units = split_by_natural_boundaries(content)
 
+    content_len = len(content)
+
     chunks: List[Dict[str, Any]] = []
+    buffer_units: List[str] = []  # 当前缓冲块的"原始单元"序列 (用于按真实单元在源文定位 span)
     buffer_text = ""
     chunk_index = 0
     search_cursor = 0  # 顺序游标: 从上一块末尾往后找, 防重复段落 find 回到首次出现
 
-    def flush_buffer(text_piece: str):
-        nonlocal chunk_index, search_cursor
+    def _locate_span(piece_units: List[str]) -> tuple:
+        """按"源文真实单元"定位整块的 (start_char, end_char)。
+
+        chunk 的 content 是若干单元用 "\n\n" 重拼后再 normalize 的结果,
+        这个拼接串通常无法在源文里 verbatim find 到 (源文分隔符可能是单个空格/换行,
+        且短块合并/滑窗会再改写 content)。因此不能用 content.find(whole_content) 或
+        start + len(content) 算 end —— 那会让 offset 指向错误源文。
+
+        做法: 顺着游标逐个把"原始单元"定位到源文 (单元本身一定是 normalize 后源文的
+        verbatim 子串), 整块跨度 = 第一个单元 start .. 最后一个单元 end。命中才推进游标,
+        保证 start_char 单调不回退; 任一单元定位失败则回退到安全区间 (单调、不越界)。
+        """
+        nonlocal search_cursor
+        cursor = search_cursor
+        first_start = None
+        last_end = None
+        for u in piece_units:
+            u = normalize_text(u)
+            if not u:
+                continue
+            pos = content.find(u, cursor)
+            if pos < 0:
+                # 该单元在游标之后无法 verbatim 定位 (重复内容耗尽 / 异常改写):
+                # 不再硬编偏移指向错误源文, 退化为安全区间 (单调非递减且不越界)。
+                fallback_start = chunks[-1]["meta"]["end_char"] if chunks else 0
+                fallback_start = min(fallback_start, content_len)
+                return fallback_start, content_len
+            if first_start is None:
+                first_start = pos
+            last_end = pos + len(u)
+            cursor = last_end
+        if first_start is None:
+            # piece 全空 (理论上不会到这里, flush_buffer 已挡空串)
+            fallback_start = chunks[-1]["meta"]["end_char"] if chunks else 0
+            fallback_start = min(fallback_start, content_len)
+            return fallback_start, fallback_start
+        search_cursor = last_end
+        return first_start, last_end
+
+    def flush_buffer(text_piece: str, piece_units: List[str]):
+        nonlocal chunk_index
         text_piece = normalize_text(text_piece)
         if not text_piece:
             return
 
         token_count_est = estimate_tokens(text_piece)
         if token_count_est < min_chunk_size_tokens and chunks:
-            # 过短 chunk 合并到上一块,避免噪声/误召回
-            chunks[-1]["content"] = normalize_text(chunks[-1]["content"] + "\n" + text_piece)
-            chunks[-1]["meta"]["end_char"] = chunks[-1]["meta"]["start_char"] + len(chunks[-1]["content"])
-            chunks[-1]["meta"]["token_count_est"] = estimate_tokens(chunks[-1]["content"])
+            # 过短 chunk 合并到上一块,避免噪声/误召回。
+            # end_char 必须扩到合并单元在源文的真实结束位置, 不能用 start + len(content) 算 ——
+            # 合并后的 content 含人造分隔符, 在源文里 find 不到, 算术 end 会指向错误源文。
+            prev = chunks[-1]
+            prev["content"] = normalize_text(prev["content"] + "\n" + text_piece)
+            _, merged_end = _locate_span(piece_units)
+            prev_end = prev["meta"]["end_char"]
+            # 合并块结束位置取两者较大 (单调不回退), 且不越界
+            prev["meta"]["end_char"] = min(max(prev_end, merged_end), content_len)
+            prev["meta"]["token_count_est"] = estimate_tokens(prev["content"])
             return
 
         chunk_index += 1
-        # 从游标往后找: 重复段落不再都定位到首次出现; 命中才推进游标 (start_char 单调不回退)。
+        # 按真实单元定位整块 span: 重复段落不再都定位到首次出现, 且 offset 永远指向真实源文区间。
         # 注: offset 仍是相对 normalize 后的 content; 与 doc_store 原文的 normalize 差异是另一更深的
-        # 课题 (需带偏移映射重做切分契约), 这里只治"重复段落 find 回退"这一明确子问题。
-        pos = content.find(text_piece, search_cursor)
-        if pos < 0:
-            start_char = 0 if not chunks else chunks[-1]["meta"]["end_char"]
-        else:
-            start_char = pos
-            search_cursor = pos + len(text_piece)
-        end_char = start_char + len(text_piece)
+        # 课题 (需带偏移映射重做切分契约), 这里治"重复段落 find 回退 / 拼接串 find 失败越界 / 合并块
+        # 算术 end 错位"三类对齐子问题。
+        start_char, end_char = _locate_span(piece_units)
 
         chunk_id = f"{doc_id}#c{chunk_index:06d}"
         chunks.append(
@@ -154,13 +197,16 @@ def chunk_document(
 
         if candidate_tokens <= chunk_size_tokens:
             buffer_text = candidate
+            buffer_units.append(unit)
             continue
 
         if buffer_text:
-            flush_buffer(buffer_text)
+            flush_buffer(buffer_text, buffer_units)
+            buffer_units = []
 
         if estimate_tokens(unit) > max_chunk_size_tokens:
-            # 单元过长,降级为滑动窗口
+            # 单元过长,降级为滑动窗口。每个 piece 是 normalize 后单元的 verbatim 切片,
+            # 本身就是源文子串, 直接作为自己的"单元"定位即可。
             approx_chars = chunk_size_tokens * 4
             overlap_chars = chunk_overlap_tokens * 4
             start = 0
@@ -168,16 +214,19 @@ def chunk_document(
             while start < len(unit):
                 end = min(len(unit), start + approx_chars)
                 piece = normalize_text(unit[start:end])
-                flush_buffer(piece)
+                flush_buffer(piece, [piece])
                 if end >= len(unit):
                     break
                 start = max(start + 1, end - overlap_chars)
             buffer_text = ""
+            buffer_units = []
         else:
             buffer_text = unit
+            buffer_units = [unit]
 
     if buffer_text:
-        flush_buffer(buffer_text)
+        flush_buffer(buffer_text, buffer_units)
+        buffer_units = []
 
     return chunks
 

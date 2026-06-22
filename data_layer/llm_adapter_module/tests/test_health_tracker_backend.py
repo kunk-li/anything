@@ -10,6 +10,7 @@ ModelHealthTracker + StateBackend 接入测试 (Task BBB #88).
 """
 import os
 import tempfile
+import threading
 import time
 import unittest
 
@@ -219,6 +220,83 @@ class TestLegacyModeUnchanged(unittest.TestCase):
         tracker = ModelHealthTracker(fail_threshold=2, cooldown_seconds=10)
         tracker.record_failure("gpt-4o"); tracker.record_failure("gpt-4o")
         self.assertFalse(tracker.is_available("gpt-4o"))
+
+
+class _ConcurrentConsistencyMixin:
+    """并发 record_success / record_failure 不能把共享 health state 写花.
+
+    回归: 修复前 backend 模式下每个 record_* 走多个独立 StateBackend op (incr/get/set),
+    op 间没有事务包裹, 并发时 state 与 consecutive_failures 会写成互相矛盾的值
+    (例: state='unhealthy' 却 consecutive_failures=0). 修复后整组更新在
+    backend.transaction() 内原子提交, 终态始终自洽.
+    """
+
+    def make_backend(self):
+        raise NotImplementedError
+
+    def tearDown(self):
+        try:
+            self.backend.close()
+        except Exception:
+            pass
+
+    def test_concurrent_success_failure_state_consistent(self):
+        self.backend = self.make_backend()
+        # threshold 高到不会因正常累计触发, 隔离 "并发写花" 这一个变量
+        tracker = ModelHealthTracker(
+            fail_threshold=10000, cooldown_seconds=300, backend=self.backend,
+        )
+        model = "gpt-4o"
+        barrier = threading.Barrier(2)
+
+        def hammer(fn):
+            barrier.wait()
+            for _ in range(200):
+                fn(model)
+
+        t_ok = threading.Thread(target=hammer, args=(tracker.record_success,))
+        t_bad = threading.Thread(
+            target=hammer, args=(lambda m: tracker.record_failure(m, "boom"),)
+        )
+        t_ok.start(); t_bad.start()
+        t_ok.join(); t_bad.join()
+
+        snap = tracker.snapshot()["models"][model]
+        # 计数器不丢更新: 200 成功 + 200 失败 = 400 total_calls, 200 total_failures
+        self.assertEqual(snap["total_calls"], 400)
+        self.assertEqual(snap["total_failures"], 200)
+        # state 与 consecutive_failures 必须自洽 — 不能出现 unhealthy 却 0 连失,
+        # 也不能 healthy 却连失达到/超过阈值 (这里阈值很高, 真正校验的是 state 不被写花).
+        state = snap["state"]
+        consec = snap["consecutive_failures"]
+        self.assertIn(state, ("healthy", "unhealthy", "probation"))
+        if state == "unhealthy":
+            self.assertGreaterEqual(
+                consec, tracker._fail_threshold,
+                "unhealthy 必须由连失达到阈值或 probation 探针失败造成, 不应凭空出现",
+            )
+
+
+class TestConcurrentInMemory(_ConcurrentConsistencyMixin, unittest.TestCase):
+    def make_backend(self):
+        return InMemoryBackend()
+
+
+class TestConcurrentSqlite(_ConcurrentConsistencyMixin, unittest.TestCase):
+    def make_backend(self):
+        fd, self._db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        return SqliteBackend(path=self._db_path)
+
+    def tearDown(self):
+        super().tearDown()
+        try:
+            os.unlink(self._db_path)
+            for suffix in ("-wal", "-shm"):
+                if os.path.exists(self._db_path + suffix):
+                    os.unlink(self._db_path + suffix)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

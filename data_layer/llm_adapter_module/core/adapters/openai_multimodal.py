@@ -53,6 +53,36 @@ class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
     def _max_bytes(self) -> int:
         return int(self.max_media_size_mb * 1024 * 1024)
 
+    # 扩展名 -> image MIME 映射 (data URI 用)
+    _IMAGE_MIME_BY_EXT: Dict[str, str] = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }
+
+    def _image_mime(self, m: MediaContent) -> str:
+        # 优先用 metadata 里显式声明的 mime/content_type
+        meta = m.media_metadata or {}
+        for key in ("mime", "mime_type", "content_type"):
+            v = meta.get(key)
+            if isinstance(v, str) and "/" in v:
+                return v.strip()
+        # 其次按 media_path 扩展名推断
+        ext = os.path.splitext(m.media_path or "")[1].lower()
+        if ext in self._IMAGE_MIME_BY_EXT:
+            return self._IMAGE_MIME_BY_EXT[ext]
+        # metadata 里可能只给了裸格式 (e.g. {"format": "png"})
+        fmt = meta.get("format")
+        if isinstance(fmt, str):
+            mapped = self._IMAGE_MIME_BY_EXT.get("." + fmt.strip().lower().lstrip("."))
+            if mapped:
+                return mapped
+        # 最后兜底
+        return "image/png"
+
     def media_to_text(self, media_list: List[MediaContent], request: LLMRequest) -> str:
         # 降级：若无真实多模态接口，这里只返回媒体元信息汇总
         parts: List[str] = []
@@ -81,9 +111,10 @@ class OpenAIMultimodalAdapter(BaseMultimodalAdapter, _BaseHTTPAdapterMixin):
             hydrate_media_base64(m, max_bytes=self._max_bytes())
             if not m.media_base64:
                 raise ValueError(f"missing media_base64 for {m.media_path}")
+            mime = self._image_mime(m)
             content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{m.media_base64}"}
+                "image_url": {"url": f"data:{mime};base64,{m.media_base64}"}
             })
         p = request.model_param
         payload: Dict[str, Any] = {

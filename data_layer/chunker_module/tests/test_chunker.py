@@ -209,6 +209,49 @@ class TestChunkOffsets(unittest.TestCase):
             self.assertGreaterEqual(s, last_start)  # start_char 单调非递减
             last_start = s
 
+    def test_joined_buffer_span_points_to_real_source(self):
+        """回归(F1/F3): 多句单段, 缓冲块用 \\n\\n 重拼后无法在源文 verbatim find,
+        旧实现要么 find 失败回退到 start=0 且 end=start+len(content) 越界,
+        要么把 offset 指向错误源文。修后整块 span 由"真实单元"定位 ——
+        offset 落在源文真实区间内、不越界、且第一/最后单元确实在 [s,e) 内。
+        """
+        rep = "重复句子在此处出现。"  # 同一句重复, 触发"定位到错误出现位置"风险
+        # 单段(无空行) + 句间用空格 => 走句子分支; 源文分隔符是空格, 与缓冲的 \n\n 不同
+        content = "起始句子在这里。 " + rep + " 中间句子不同。 " + rep + " 结尾句子收尾。"
+        norm = normalize_text(content)
+        chunks = chunk_document("docJ", content, "f.txt", chunk_size_tokens=8, min_chunk_size_tokens=1)
+        self.assertGreater(len(chunks), 0)
+        last_start = -1
+        for c in chunks:
+            s, e = c["meta"]["start_char"], c["meta"]["end_char"]
+            self.assertTrue(0 <= s <= e <= len(norm), f"bad offset {s},{e} vs {len(norm)}")
+            self.assertGreaterEqual(s, last_start)  # 单调非递减
+            last_start = s
+            # 拆出本块包含的单元(以 \n\n 重拼), 首单元应出现在 span 起点, 末单元应在 span 内结束
+            units = [u for u in c["content"].split("\n\n") if u]
+            self.assertTrue(norm[s:e].startswith(units[0]),
+                            f"span 起点未对齐首单元: src={norm[s:e]!r} unit0={units[0]!r}")
+            self.assertIn(units[-1], norm[s:e],
+                          f"末单元不在 span 内: src={norm[s:e]!r} last={units[-1]!r}")
+
+    def test_short_unit_merge_extends_end_to_real_source(self):
+        """回归(F2): 过短单元合并到上一块时, end_char 必须扩到合并单元在源文的真实结束位置,
+        而不是 start + len(merged_content) (合并 content 含人造分隔符, 算术 end 会越界/错位)。
+        """
+        big = "这是一段足够长的主体内容用于独立成块不会被合并掉哦。"
+        tail = "短尾。"  # 过短, 会合并进上一块
+        content = "\n\n".join([big, tail])
+        norm = normalize_text(content)
+        # min_chunk_size_tokens 设高让 tail 触发合并; big 单独 <= chunk_size 先成块
+        chunks = chunk_document("docM", content, "f.txt", chunk_size_tokens=40, min_chunk_size_tokens=4)
+        self.assertEqual(len(chunks), 1)  # tail 合并进 big, 只剩一块
+        meta = chunks[0]["meta"]
+        s, e = meta["start_char"], meta["end_char"]
+        self.assertTrue(0 <= s <= e <= len(norm), f"merge offset 越界: {s},{e} vs {len(norm)}")
+        # end_char 应覆盖到 tail 在源文的真实结束 (= 整段末尾), 而非算术 start+len(content)
+        self.assertIn(tail, norm[s:e], "合并块 span 未覆盖到被合并单元的真实源文位置")
+        self.assertEqual(e, len(norm))  # 本例 tail 是源文末尾
+
 
 if __name__ == "__main__":
     unittest.main()

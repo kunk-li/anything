@@ -69,6 +69,30 @@ class TestAnthropicChatAdapter(unittest.TestCase):
         # max_tokens 必传
         self.assertEqual(captured["payload"]["max_tokens"], 256)
 
+    def test_roleless_message_defaults_to_user(self):
+        """非 system 消息缺 role 时不应 KeyError, 默认补 user"""
+        adapter = AnthropicChatAdapter(
+            model_name="claude-3-sonnet",
+            model_cfg={"api_key": "sk-ant-xxx", "api_base": "https://api.anthropic.com"},
+            common_cfg=_common_cfg(),
+            logger=MagicMock(),
+        )
+        captured = {}
+
+        def _fake_post(url, headers, payload, timeout):
+            captured["payload"] = payload
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            out = adapter.chat_with_context(
+                [{"content": "no role here"}],  # 无 role 键
+                LLMRequest(request_type="CHAT", model_param=LLMParam(max_tokens=64)),
+            )
+
+        self.assertEqual(out, "ok")
+        self.assertEqual(captured["payload"]["messages"][0]["role"], "user")
+        self.assertEqual(captured["payload"]["messages"][0]["content"], "no role here")
+
 
 class TestOllamaChatAdapter(unittest.TestCase):
 
@@ -292,6 +316,145 @@ class TestSSEParsers(unittest.TestCase):
                 "http://x", {}, {}, timeout=10,
             ))
         self.assertEqual("".join(tokens), "Hello!")
+
+
+class TestOpenAIVectorAdapter(unittest.TestCase):
+    """embed_batch 必须按 response item['index'] 把向量散列回输入顺序,
+    并在响应条目数/向量缺失时抛错触发重试, 而不是静默错配/截短."""
+
+    def _adapter(self, max_retry=1):
+        from llm_adapter_module.core.impl import OpenAIVectorAdapter
+        return OpenAIVectorAdapter(
+            model_name="text-embedding-3-small",
+            model_cfg={"api_key": "sk-x", "api_base": "https://api.x"},
+            common_cfg={"timeout": 5, "max_retry": max_retry},
+            logger=MagicMock(),
+        )
+
+    def test_realigns_out_of_order_index(self):
+        """API 乱序返回时, 必须按 index 把向量对齐回原输入顺序"""
+        adapter = self._adapter()
+        texts = ["a", "b", "c"]
+
+        def _fake_post(url, headers, payload, timeout):
+            # 故意打乱顺序: index 2 先返回
+            return {"data": [
+                {"index": 2, "embedding": [3.0]},
+                {"index": 0, "embedding": [1.0]},
+                {"index": 1, "embedding": [2.0]},
+            ]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            out = adapter.embed_batch(texts, LLMRequest(request_type="VECTOR", model_param=LLMParam()))
+
+        self.assertEqual(out, [[1.0], [2.0], [3.0]])
+
+    def test_partial_response_raises(self):
+        """返回条目少于输入时抛错 (触发重试/上层回退), 不静默返回短列表"""
+        adapter = self._adapter(max_retry=1)
+        texts = ["a", "b", "c"]
+
+        def _fake_post(url, headers, payload, timeout):
+            return {"data": [
+                {"index": 0, "embedding": [1.0]},
+                {"index": 1, "embedding": [2.0]},
+            ]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            with self.assertRaises(Exception):
+                adapter.embed_batch(texts, LLMRequest(request_type="VECTOR", model_param=LLMParam()))
+
+    def test_empty_embedding_raises(self):
+        """某条目 embedding 为空也视为部分响应, 抛错"""
+        adapter = self._adapter(max_retry=1)
+        texts = ["a", "b"]
+
+        def _fake_post(url, headers, payload, timeout):
+            return {"data": [
+                {"index": 0, "embedding": [1.0]},
+                {"index": 1, "embedding": []},
+            ]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            with self.assertRaises(Exception):
+                adapter.embed_batch(texts, LLMRequest(request_type="VECTOR", model_param=LLMParam()))
+
+    def test_missing_index_falls_back_to_order(self):
+        """index 缺失时退回枚举顺序, 正常对齐"""
+        adapter = self._adapter()
+        texts = ["a", "b"]
+
+        def _fake_post(url, headers, payload, timeout):
+            return {"data": [
+                {"embedding": [1.0]},
+                {"embedding": [2.0]},
+            ]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            out = adapter.embed_batch(texts, LLMRequest(request_type="VECTOR", model_param=LLMParam()))
+
+        self.assertEqual(out, [[1.0], [2.0]])
+
+
+class TestOpenAIMultimodalAdapterMime(unittest.TestCase):
+    """data URI 的 MIME 必须按 media_path 扩展名 / metadata 推断, 不能恒为 image/png"""
+
+    def _adapter(self):
+        from llm_adapter_module.core.impl import OpenAIMultimodalAdapter
+        return OpenAIMultimodalAdapter(
+            model_name="gpt-4o",
+            model_cfg={"api_key": "sk-x", "api_base": "https://api.x",
+                       "support_media": ["image"]},
+            common_cfg=_common_cfg(),
+            logger=MagicMock(),
+        )
+
+    def _capture_urls(self, adapter, media_list):
+        captured = {}
+
+        def _fake_post(url, headers, payload, timeout):
+            captured["payload"] = payload
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        with patch.object(adapter, "_post_json", side_effect=_fake_post):
+            adapter.understand_text_media(
+                "看图", media_list,
+                LLMRequest(request_type="MULTIMODAL", model_param=LLMParam()),
+            )
+        content = captured["payload"]["messages"][0]["content"]
+        return [c["image_url"]["url"] for c in content if c.get("type") == "image_url"]
+
+    def test_jpeg_extension(self):
+        from llm_adapter_module.model.data_model import MediaContent
+        m = MediaContent(media_type="image", media_path="/tmp/pic.jpg", media_base64="QQ==")
+        urls = self._capture_urls(self._adapter(), [m])
+        self.assertTrue(urls[0].startswith("data:image/jpeg;base64,"), urls[0])
+
+    def test_webp_extension_case_insensitive(self):
+        from llm_adapter_module.model.data_model import MediaContent
+        m = MediaContent(media_type="image", media_path="/tmp/pic.WEBP", media_base64="QQ==")
+        urls = self._capture_urls(self._adapter(), [m])
+        self.assertTrue(urls[0].startswith("data:image/webp;base64,"), urls[0])
+
+    def test_metadata_mime_wins(self):
+        from llm_adapter_module.model.data_model import MediaContent
+        m = MediaContent(media_type="image", media_path="/tmp/pic.bin",
+                         media_base64="QQ==", media_metadata={"mime": "image/gif"})
+        urls = self._capture_urls(self._adapter(), [m])
+        self.assertTrue(urls[0].startswith("data:image/gif;base64,"), urls[0])
+
+    def test_metadata_format_fallback(self):
+        from llm_adapter_module.model.data_model import MediaContent
+        m = MediaContent(media_type="image", media_path="/tmp/pic",
+                         media_base64="QQ==", media_metadata={"format": "png"})
+        urls = self._capture_urls(self._adapter(), [m])
+        self.assertTrue(urls[0].startswith("data:image/png;base64,"), urls[0])
+
+    def test_unknown_defaults_to_png(self):
+        from llm_adapter_module.model.data_model import MediaContent
+        m = MediaContent(media_type="image", media_path="/tmp/pic", media_base64="QQ==")
+        urls = self._capture_urls(self._adapter(), [m])
+        self.assertTrue(urls[0].startswith("data:image/png;base64,"), urls[0])
 
 
 class TestLLMServiceRegistersNewAdapters(unittest.TestCase):

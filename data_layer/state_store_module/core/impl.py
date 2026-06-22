@@ -183,18 +183,29 @@ class LocalStateStore(BaseStateStore):
             self.logger.error(f"状态保存失败：{session_id} - {e}", logger_name="state_store_module")
             raise StateStoreException("STATE_STORE_SAVE_FAILED", f"状态保存失败：{e}") from e
 
+    def _read_state_unlocked(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """get_state 的无锁实现体。调用方负责持有 _lock_for(session_id):
+        get_state (公共入口) 自己加锁; append_event 已在锁内, 直接调本方法避免
+        非可重入锁自死锁。"""
+        # 读优先走主路径,缺则 default 租户 fallback 老扁平路径
+        path = self._resolve_read_path(session_id)
+        if not os.path.exists(path):
+            return None
+        data = safe_read_json(path)
+        # 若读取到的结构不完整，做轻量修复（不落盘）
+        if isinstance(data, dict):
+            data.setdefault("events", [])
+        return data
+
     def get_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         try:
             self._cleanup_expired_states()
-            # 读优先走主路径,缺则 default 租户 fallback 老扁平路径
-            path = self._resolve_read_path(session_id)
-            if not os.path.exists(path):
-                return None
-            data = safe_read_json(path)
-            # 若读取到的结构不完整，做轻量修复（不落盘）
-            if isinstance(data, dict):
-                data.setdefault("events", [])
-            return data
+            # 持 per-session 锁读: 与写方 (save/append/clear 的 os.replace/remove) 串行化。
+            # 否则在 Windows 上本读句柄 (无 FILE_SHARE_DELETE) 会令并发写方的 os.replace
+            # 抛 PermissionError → 静默丢事件/历史。readers↔writers 串行是与本提交其余
+            # 部分一致的根因修法。
+            with self._lock_for(session_id):
+                return self._read_state_unlocked(session_id)
         except ValueError:
             # session_id 校验失败
             raise
@@ -215,8 +226,9 @@ class LocalStateStore(BaseStateStore):
             # get→append→write 整段必须串行 (持 per-session 锁), 否则两并发 append 各读旧 state、
             # 各写回 → 后写覆盖先写丢事件 (lost update)。
             with self._lock_for(session_id):
+                # 已持锁, 走无锁读体: get_state 自身会再取同一把(非可重入)锁 → 自死锁。
                 # 若会话不存在，则创建基础状态
-                state = self.get_state(session_id)
+                state = self._read_state_unlocked(session_id)
                 if state is None:
                     state = {"events": []}
 
@@ -246,6 +258,58 @@ class LocalStateStore(BaseStateStore):
         except Exception as e:
             self.logger.error(f"事件追加失败：{session_id} - {e}", logger_name="state_store_module")
             raise StateStoreException("STATE_STORE_APPEND_FAILED", f"事件追加失败：{e}") from e
+
+    def merge_state(self, session_id: str, patch: Dict[str, Any]) -> bool:
+        """锁内浅合并顶层标量字段, 保留既有 events (race-free 标量更新)。
+
+        与 save_state 的关键区别: save_state 是 full-replace (会把 events 整列覆盖),
+        merge_state 只把 patch 里的 key 覆盖进现有 state, 绝不触碰 events ——
+        让 agent 层"追加对话事件 (append_event) + 更新顶层标量 (merge_state)"
+        两条路径在同一把 per-session 锁下互斥且互不覆盖, 消除 get+save 读-改-写的
+        lost-update 竞态 (见 agent_module state_history._save_state_safe)。
+
+        patch 里若误带 events 会被忽略 (events 只能通过 append_event 改)。
+        会话不存在则以 patch 为基础创建。
+        """
+        try:
+            self._cleanup_expired_states()
+            self._enforce_capacity()
+
+            if not isinstance(patch, dict):
+                raise StateStoreException("STATE_STORE_INVALID_STATE", "merge patch 必须为Dict")
+
+            # get→merge→write 整段持 per-session 锁, 与并发 append_event/save_state 互斥
+            with self._lock_for(session_id):
+                # 已持锁, 走无锁读体: get_state 自身会再取同一把(非可重入)锁 → 自死锁
+                state = self._read_state_unlocked(session_id)
+                if state is None or not isinstance(state, dict):
+                    state = {"events": []}
+
+                existing_events = state.get("events")
+                if not isinstance(existing_events, list):
+                    existing_events = []
+
+                for k, v in patch.items():
+                    if k == "events":
+                        # events 只能经 append_event 改, merge 不接管 (防覆盖历史链)
+                        continue
+                    state[k] = v
+                state["events"] = existing_events
+
+                meta = state.get("_meta") if isinstance(state.get("_meta"), dict) else {}
+                meta.update({"session_id": session_id, "updated_at": self._now_iso()})
+                state["_meta"] = meta
+
+                path = self._get_state_path(session_id)
+                safe_atomic_write_json(path, state)
+
+            self.logger.info(f"状态合并成功：{session_id}", logger_name="state_store_module")
+            return True
+        except StateStoreException:
+            raise
+        except Exception as e:
+            self.logger.error(f"状态合并失败：{session_id} - {e}", logger_name="state_store_module")
+            raise StateStoreException("STATE_STORE_MERGE_FAILED", f"状态合并失败：{e}") from e
 
     def clear_state(self, session_id: str) -> bool:
         try:
@@ -288,6 +352,10 @@ class LocalStateStore(BaseStateStore):
             entries = []
             for name in os.listdir(self.store_dir):
                 if not name.endswith(".json"):
+                    continue
+                # 跳过原子写产生的临时文件 (.tmp_state_*.json) 及其它点前缀文件,
+                # 否则会被当成假 session 列出/peek。
+                if name.startswith("."):
                     continue
                 p = os.path.join(self.store_dir, name)
                 try:

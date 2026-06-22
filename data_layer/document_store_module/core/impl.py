@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import json
+import tempfile
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple, List
 
@@ -68,6 +70,11 @@ class LocalDocumentStore(BaseDocumentStore):
         self.config_manager = deps.config
         self.logger = deps.logger
         self.tenant_id = self._validate_tenant_id(tenant_id)
+
+        # 实例级写锁 (RLock 允许同线程重入: save_document -> write_info_file 等内层调用).
+        # 守护 hash_doc_map 的内存读改写 + _save_hash_map 落盘, 以及 save/update/delete
+        # 的"文件 + info + hash_map"复合序列, 防并发交错丢更新 / 写半截 JSON。
+        self._lock = threading.RLock()
 
         defaults = DocumentStoreConfig()
 
@@ -158,10 +165,37 @@ class LocalDocumentStore(BaseDocumentStore):
             self.logger.error(f"Failed to load hash map: {e}", exc_info=True)
             return {}
 
-    def _save_hash_map(self) -> None:
-        """Persist hash->doc_id map."""
+    @staticmethod
+    def _atomic_json_dump(data, path: str) -> None:
+        """原子写 JSON: 先写同目录临时文件 + fsync, 再 os.replace 顶替目标
+        (POSIX/Windows 均原子), 避免并发或崩溃时读到写半截的 JSON。
+        对齐 state store 的 safe_atomic_write_json。"""
+        dir_name = os.path.dirname(path)
+        os.makedirs(dir_name, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=".tmp_doc_store_", suffix=".json", dir=dir_name)
         try:
-            json_dump(self.hash_doc_map, self.hash_map_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)  # atomic on POSIX & Windows
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                # best effort
+                pass
+
+    def _save_hash_map(self) -> None:
+        """Persist hash->doc_id map atomically.
+
+        调用方须持有 self._lock (本方法不自行加锁): 它总是跟在 hash_doc_map
+        内存改写之后, 锁要把"改内存 + 落盘"裹成一个整体, 否则两个线程会基于
+        各自的旧快照互相覆盖对方刚写出的文件 (lost update)。
+        """
+        try:
+            self._atomic_json_dump(self.hash_doc_map, self.hash_map_path)
         except Exception as e:
             self.logger.error(f"Failed to save hash map: {e}", exc_info=True)
 
@@ -288,40 +322,43 @@ class LocalDocumentStore(BaseDocumentStore):
         if not is_uuid4(doc_id):
             raise ValueError("doc_id格式非法，需为UUID4")
 
-        # PR4b: 配额硬限放在 try 之前, 让 DocumentStoreException 直接上抛 (不被 except 吞)
-        self._check_doc_quota(document)
-
         storage_type = self._storage_type_for(document.get("storage_type") or document.get("file_type") or "unknown")
         doc_path, info_path = self._doc_paths(doc_id, storage_type)
 
-        try:
-            # persist content
-            self._write_document_file(doc_path, document["content"])
+        # 整个写序列 (配额检查 + 文件 + info + hash_map) 持锁: 配额按 hash_doc_map
+        # 大小估算, 与随后的 map 改写 / 落盘必须对同一快照串行, 否则并发写会丢更新或越配额。
+        with self._lock:
+            # PR4b: 配额硬限放在 try 之前, 让 DocumentStoreException 直接上抛 (不被 except 吞)
+            self._check_doc_quota(document)
 
-            # update file_size
-            file_size = get_file_size(doc_path)
-            document["file_size"] = str(file_size)
-            document["storage_type"] = storage_type
-            document["info_file_path"] = info_path.replace("\\", "/")
+            try:
+                # persist content
+                self._write_document_file(doc_path, document["content"])
 
-            # write info file
-            if not self.write_info_file(document):
-                # if info file write fails, rollback doc file to avoid orphan
-                try:
-                    os.remove(doc_path)
-                except Exception:
-                    pass
+                # update file_size
+                file_size = get_file_size(doc_path)
+                document["file_size"] = str(file_size)
+                document["storage_type"] = storage_type
+                document["info_file_path"] = info_path.replace("\\", "/")
+
+                # write info file
+                if not self.write_info_file(document):
+                    # if info file write fails, rollback doc file to avoid orphan
+                    try:
+                        os.remove(doc_path)
+                    except Exception:
+                        pass
+                    return False
+
+                # update hash map — scope=chat (会话附件) 不注册全局查重表:
+                # 注册了会让后续 KB 上传同内容被 dedup 跳过, 永远进不了向量库
+                if str(document.get("scope") or "") != "chat":
+                    self.hash_doc_map[str(document["content_hash"]).lower()] = doc_id
+                    self._save_hash_map()
+                return True
+            except Exception as e:
+                self.logger.error(f"save_document failed: {e}", exc_info=True)
                 return False
-
-            # update hash map — scope=chat (会话附件) 不注册全局查重表:
-            # 注册了会让后续 KB 上传同内容被 dedup 跳过, 永远进不了向量库
-            if str(document.get("scope") or "") != "chat":
-                self.hash_doc_map[str(document["content_hash"]).lower()] = doc_id
-                self._save_hash_map()
-            return True
-        except Exception as e:
-            self.logger.error(f"save_document failed: {e}", exc_info=True)
-            return False
 
     def read_info_file(self, doc_id: str) -> Optional[Dict[str, str]]:
         if not is_uuid4(doc_id):
@@ -349,26 +386,29 @@ class LocalDocumentStore(BaseDocumentStore):
             raise ValueError("doc_id格式非法，需为UUID4")
 
         info_path = get_info_file_path(self.storage_dir, doc_id)
-        try:
-            # P8: info 不再冗余整份 content — 正文唯一权威在 <doc_id>.<ext> 文件,
-            # 此前 info.json 重复存全文导致同一内容落盘双份。留 content_length
-            # 给 list_documents / 辅助查重。旧 info 文件随下次读写自然瘦身。
-            payload = {k: document.get(k) for k in required if k != "content"}
-            payload["content_length"] = len(document.get("content") or "")
-            # 可选: 原始上传文件路径 — DELETE /documents 时据此回收 uploads/ 原件
-            if document.get("stored_path"):
-                payload["stored_path"] = str(document["stored_path"])
-            # 可选: 会话附件标记 — scope=chat 的文档与 session 绑定,
-            # 不进检索索引, 会话删除时联动清理
-            if document.get("scope"):
-                payload["scope"] = str(document["scope"])
-            if document.get("session_id"):
-                payload["session_id"] = str(document["session_id"])
-            json_dump(payload, info_path)
-            return True
-        except Exception as e:
-            self.logger.error(f"write_info_file failed: {e}", exc_info=True)
-            return False
+        # 持锁 + 原子写: 防并发直接调用 write_info_file 交错写出半截 info.json
+        # (RLock 可重入: save/update/get_document 已持锁时内层再取无碍)。
+        with self._lock:
+            try:
+                # P8: info 不再冗余整份 content — 正文唯一权威在 <doc_id>.<ext> 文件,
+                # 此前 info.json 重复存全文导致同一内容落盘双份。留 content_length
+                # 给 list_documents / 辅助查重。旧 info 文件随下次读写自然瘦身。
+                payload = {k: document.get(k) for k in required if k != "content"}
+                payload["content_length"] = len(document.get("content") or "")
+                # 可选: 原始上传文件路径 — DELETE /documents 时据此回收 uploads/ 原件
+                if document.get("stored_path"):
+                    payload["stored_path"] = str(document["stored_path"])
+                # 可选: 会话附件标记 — scope=chat 的文档与 session 绑定,
+                # 不进检索索引, 会话删除时联动清理
+                if document.get("scope"):
+                    payload["scope"] = str(document["scope"])
+                if document.get("session_id"):
+                    payload["session_id"] = str(document["session_id"])
+                self._atomic_json_dump(payload, info_path)
+                return True
+            except Exception as e:
+                self.logger.error(f"write_info_file failed: {e}", exc_info=True)
+                return False
 
     def list_documents(self) -> List[Dict[str, Any]]:
         """Task JJ (#70): 列出当前 tenant 下所有已索引文档的元信息.
@@ -455,85 +495,89 @@ class LocalDocumentStore(BaseDocumentStore):
         # 与 create_document 同一换行归一化约定 (chunk 偏移一致性)
         new_content = new_content.replace("\r\n", "\n").replace("\r", "\n")
 
-        info = self.read_info_file(doc_id)
-        if not info:
-            return False
-
-        storage_type = self._storage_type_for(info.get("storage_type") or info.get("file_type") or "unknown")
-        doc_path = get_document_path(self.storage_dir, doc_id, storage_type)
-        if not os.path.exists(doc_path):
-            return False
-
-        try:
-            self._write_document_file(doc_path, new_content)
-
-            info["content"] = new_content
-            info["update_time"] = now_str()
-            info["last_access_time"] = info["update_time"]
-            info["file_size"] = str(get_file_size(doc_path))
-
-            if not new_content_hash:
-                new_content_hash = calculate_content_hash(new_content, self.hash_algorithm)
-            else:
-                expected_len = 32 if self.hash_algorithm == "md5" else 64
-                if len(new_content_hash.strip()) != expected_len:
-                    new_content_hash = calculate_content_hash(new_content, self.hash_algorithm)
-            info["content_hash"] = new_content_hash.lower()
-
-            # persist info
-            if not self.write_info_file(info):
+        # 读 info + 改写文件/info/hash_map 持锁: 防与并发 save/update/delete 交错丢更新
+        with self._lock:
+            info = self.read_info_file(doc_id)
+            if not info:
                 return False
 
-            # update hash map (remove old hash entries pointing to doc_id)
-            old_hashes = [h for h, did in self.hash_doc_map.items() if did == doc_id]
-            for h in old_hashes:
-                self.hash_doc_map.pop(h, None)
-            self.hash_doc_map[info["content_hash"]] = doc_id
-            self._save_hash_map()
-            return True
-        except Exception as e:
-            self.logger.error(f"update_document failed: {e}", exc_info=True)
-            return False
+            storage_type = self._storage_type_for(info.get("storage_type") or info.get("file_type") or "unknown")
+            doc_path = get_document_path(self.storage_dir, doc_id, storage_type)
+            if not os.path.exists(doc_path):
+                return False
+
+            try:
+                self._write_document_file(doc_path, new_content)
+
+                info["content"] = new_content
+                info["update_time"] = now_str()
+                info["last_access_time"] = info["update_time"]
+                info["file_size"] = str(get_file_size(doc_path))
+
+                if not new_content_hash:
+                    new_content_hash = calculate_content_hash(new_content, self.hash_algorithm)
+                else:
+                    expected_len = 32 if self.hash_algorithm == "md5" else 64
+                    if len(new_content_hash.strip()) != expected_len:
+                        new_content_hash = calculate_content_hash(new_content, self.hash_algorithm)
+                info["content_hash"] = new_content_hash.lower()
+
+                # persist info
+                if not self.write_info_file(info):
+                    return False
+
+                # update hash map (remove old hash entries pointing to doc_id)
+                old_hashes = [h for h, did in self.hash_doc_map.items() if did == doc_id]
+                for h in old_hashes:
+                    self.hash_doc_map.pop(h, None)
+                self.hash_doc_map[info["content_hash"]] = doc_id
+                self._save_hash_map()
+                return True
+            except Exception as e:
+                self.logger.error(f"update_document failed: {e}", exc_info=True)
+                return False
 
     def delete_document(self, doc_id: str) -> bool:
         if not is_uuid4(doc_id):
             raise ValueError("doc_id格式非法，需为UUID4")
 
-        info = self.read_info_file(doc_id)
-        storage_type = self._storage_type_for((info or {}).get("storage_type") or (info or {}).get("file_type") or "unknown")
-        doc_path, info_path = self._doc_paths(doc_id, storage_type)
+        # 删文件 + hash_map 改写持锁: 与并发 save/update/delete 串行, 防丢更新 / 写半截
+        with self._lock:
+            info = self.read_info_file(doc_id)
+            storage_type = self._storage_type_for((info or {}).get("storage_type") or (info or {}).get("file_type") or "unknown")
+            doc_path, info_path = self._doc_paths(doc_id, storage_type)
 
-        success = True
-        release_size = 0
+            success = True
+            release_size = 0
 
-        # delete doc file
-        try:
-            if os.path.exists(doc_path):
-                release_size += get_file_size(doc_path)
-                os.remove(doc_path)
-        except Exception as e:
-            self.logger.error(f"delete_document doc file failed: {e}", exc_info=True)
-            success = False
+            # delete doc file
+            try:
+                if os.path.exists(doc_path):
+                    release_size += get_file_size(doc_path)
+                    os.remove(doc_path)
+            except Exception as e:
+                self.logger.error(f"delete_document doc file failed: {e}", exc_info=True)
+                success = False
 
-        # delete info file
-        try:
-            if os.path.exists(info_path):
-                release_size += get_file_size(info_path)
-                os.remove(info_path)
-        except Exception as e:
-            self.logger.error(f"delete_document info file failed: {e}", exc_info=True)
-            success = False
+            # delete info file
+            try:
+                if os.path.exists(info_path):
+                    release_size += get_file_size(info_path)
+                    os.remove(info_path)
+            except Exception as e:
+                self.logger.error(f"delete_document info file failed: {e}", exc_info=True)
+                success = False
 
-        # update hash map
-        try:
-            to_remove = [h for h, did in self.hash_doc_map.items() if did == doc_id]
-            for h in to_remove:
-                self.hash_doc_map.pop(h, None)
-            self._save_hash_map()
-        except Exception as e:
-            self.logger.error(f"delete_document hash map update failed: {e}", exc_info=True)
+            # update hash map
+            try:
+                to_remove = [h for h, did in self.hash_doc_map.items() if did == doc_id]
+                for h in to_remove:
+                    self.hash_doc_map.pop(h, None)
+                self._save_hash_map()
+            except Exception as e:
+                self.logger.error(f"delete_document hash map update failed: {e}", exc_info=True)
 
-        return success
+            return success
 
     def _list_info_files(self) -> List[str]:
         return [
@@ -703,65 +747,68 @@ class LocalDocumentStore(BaseDocumentStore):
         fail = 0
         release_size = 0
 
-        for z in zombies:
-            doc_id = z.get("doc_id")
-            path = z.get("path")
-            if not path:
-                continue
+        # 删文件 + 多轮 hash_map 改写 + 末尾落盘持锁: 与并发 save/update/delete 串行,
+        # 防它们基于旧快照覆盖本次清理写出的 hash_map (lost update)。
+        with self._lock:
+            for z in zombies:
+                doc_id = z.get("doc_id")
+                path = z.get("path")
+                if not path:
+                    continue
 
-            # protect core docs: if doc_id is known and matches prefix, skip
-            if doc_id and any(str(doc_id).startswith(pfx) for pfx in self.core_doc_prefix):
-                continue
+                # protect core docs: if doc_id is known and matches prefix, skip
+                if doc_id and any(str(doc_id).startswith(pfx) for pfx in self.core_doc_prefix):
+                    continue
 
-            try:
-                # Determine paired files
-                to_delete = []
-                if path.endswith(".info.json"):
-                    to_delete.append(path)
-                    if doc_id:
-                        # try infer doc file from info if possible
-                        info = None
-                        try:
-                            info = json_load(path)
-                        except Exception:
-                            info = None
-                        if info:
-                            st = self._storage_type_for(info.get("storage_type") or info.get("file_type") or "unknown")
-                            dp = get_document_path(self.storage_dir, doc_id, st)
-                            if os.path.exists(dp):
-                                to_delete.append(dp)
+                    try:
+                        # Determine paired files
+                        to_delete = []
+                        if path.endswith(".info.json"):
+                            to_delete.append(path)
+                            if doc_id:
+                                # try infer doc file from info if possible
+                                info = None
+                                try:
+                                    info = json_load(path)
+                                except Exception:
+                                    info = None
+                                if info:
+                                    st = self._storage_type_for(info.get("storage_type") or info.get("file_type") or "unknown")
+                                    dp = get_document_path(self.storage_dir, doc_id, st)
+                                    if os.path.exists(dp):
+                                        to_delete.append(dp)
+                                else:
+                                    # unknown: delete any file starting with doc_id.
+                                    for f in os.listdir(self.storage_dir):
+                                        if f.startswith(f"{doc_id}.") and not f.endswith(".info.json"):
+                                            to_delete.append(os.path.join(self.storage_dir, f))
                         else:
-                            # unknown: delete any file starting with doc_id.
-                            for f in os.listdir(self.storage_dir):
-                                if f.startswith(f"{doc_id}.") and not f.endswith(".info.json"):
-                                    to_delete.append(os.path.join(self.storage_dir, f))
-                else:
-                    to_delete.append(path)
-                    if doc_id:
-                        ip = get_info_file_path(self.storage_dir, doc_id)
-                        if os.path.exists(ip):
-                            to_delete.append(ip)
+                            to_delete.append(path)
+                            if doc_id:
+                                ip = get_info_file_path(self.storage_dir, doc_id)
+                                if os.path.exists(ip):
+                                    to_delete.append(ip)
 
-                # backup first
-                if backup:
-                    for fp in to_delete:
-                        backup_file(fp, self.backup_dir)
+                        # backup first
+                        if backup:
+                            for fp in to_delete:
+                                backup_file(fp, self.backup_dir)
 
-                # delete
-                for fp in set(to_delete):
-                    if os.path.exists(fp):
-                        release_size += get_file_size(fp)
-                        os.remove(fp)
+                        # delete
+                        for fp in set(to_delete):
+                            if os.path.exists(fp):
+                                release_size += get_file_size(fp)
+                                os.remove(fp)
 
-                # update hash map if doc_id known
-                if doc_id:
-                    old_hashes = [h for h, did in self.hash_doc_map.items() if did == doc_id]
-                    for h in old_hashes:
-                        self.hash_doc_map.pop(h, None)
-                success += 1
-            except Exception as e:
-                self.logger.error(f"clean_zombie_files failed for {path}: {e}", exc_info=True)
-                fail += 1
+                        # update hash map if doc_id known
+                        if doc_id:
+                            old_hashes = [h for h, did in self.hash_doc_map.items() if did == doc_id]
+                            for h in old_hashes:
+                                self.hash_doc_map.pop(h, None)
+                        success += 1
+                    except Exception as e:
+                        self.logger.error(f"clean_zombie_files failed for {path}: {e}", exc_info=True)
+                        fail += 1
 
-        self._save_hash_map()
-        return {"total": total, "success": success, "fail": fail, "release_size": release_size}
+            self._save_hash_map()
+            return {"total": total, "success": success, "fail": fail, "release_size": release_size}

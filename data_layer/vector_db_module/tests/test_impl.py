@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("ANYTHING_DEV_MODE", "1")
 
 import shutil
+import sqlite3
 import tempfile
 import unittest
 
@@ -213,6 +214,62 @@ class TestFaissVectorDB(unittest.TestCase):
         self.assertTrue(self.db.clear())
         self.assertEqual(self.db.index.ntotal, 0)
         self.assertEqual(self.db.query([0.1] * 64, top_k=5), [])
+
+    def test_upsert_sqlite_commit_failure_leaves_memory_consistent(self):
+        """data-loss 防回归: sqlite 提交失败时, 内存索引/映射不得先于磁盘被改 (不分叉)。
+
+        先写入一批基线并落盘, 再让下一批 upsert 的 sqlite 写入抛错, 断言:
+        - 抛 VECTOR_INSERT_FAILED
+        - index.ntotal / _int_of / _vid_of / _next_int / meta_map 全部停在抛错前的值
+        - 失败批次的新向量既未进索引也未进映射 (与磁盘一致)
+        """
+        self.db.upsert_vectors([
+            {"vector_id": "v1", "embedding": [0.1] * 64,
+             "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+        ])
+        # 抛错前快照
+        ntotal_before = self.db.index.ntotal
+        int_of_before = dict(self.db._int_of)
+        vid_of_before = dict(self.db._vid_of)
+        next_int_before = self.db._next_int
+        meta_before = dict(self.db.meta_map)
+
+        # 让 sqlite 写入阶段抛错 (模拟提交失败/磁盘满/库锁)
+        real_conn = self.db._conn
+
+        class _BoomConn:
+            def __enter__(self_inner):
+                raise sqlite3.OperationalError("disk I/O error (injected)")
+
+            def __exit__(self_inner, *a):
+                return False
+
+        self.db._conn = _BoomConn()
+        try:
+            with self.assertRaises(VectorDBException) as ctx:
+                self.db.upsert_vectors([
+                    {"vector_id": "v2", "embedding": [0.2] * 64,
+                     "metadata": {"doc_id": "d2", "chunk_id": "c2"}},
+                    {"vector_id": "v1", "embedding": [0.9] * 64,
+                     "metadata": {"doc_id": "d1", "chunk_id": "c1"}},
+                ])
+            self.assertEqual(ctx.exception.code, "VECTOR_INSERT_FAILED")
+        finally:
+            self.db._conn = real_conn
+
+        # 内存必须停在抛错前的状态, 没有被失败批次污染
+        self.assertEqual(self.db.index.ntotal, ntotal_before)
+        self.assertEqual(self.db._int_of, int_of_before)
+        self.assertEqual(self.db._vid_of, vid_of_before)
+        self.assertEqual(self.db._next_int, next_int_before)
+        self.assertEqual(self.db.meta_map, meta_before)
+        self.assertNotIn("v2", self.db._int_of)
+        # 与磁盘一致: 重载后只有 v1, 没有失败批次的 v2
+        cfg = _TestVectorDBConfig(dim=64, store_dir=self.tmp)
+        db2 = FaissVectorDB(cfg=cfg)
+        self.assertEqual(db2.index.ntotal, 1)
+        self.assertIn("v1", db2._int_of)
+        self.assertNotIn("v2", db2._int_of)
 
     def test_embedding_dimension_mismatch(self):
         bad = [{"vector_id": "v1", "embedding": [0.1] * 32, "metadata": {"doc_id": "d1", "chunk_id": "c1"}}]

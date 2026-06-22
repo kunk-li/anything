@@ -173,43 +173,53 @@ class ModelHealthTracker:
         b = self._backend
         assert b is not None
         prefix = f"{self._KEY_PREFIX}{model_name}"
-        state = b.get(f"{prefix}:state", "healthy") or "healthy"
-        if state == "healthy" or state == "probation":
-            return True
-        # unhealthy: 看冷却是否过了
-        last_fail_ts = float(b.get(f"{prefix}:last_fail_ts", 0) or 0)
-        if (time.time() - last_fail_ts) >= self._cooldown_seconds:
-            # 自动从 unhealthy → probation, 让下一个 worker 也看到 probation
-            b.set(f"{prefix}:state", "probation")
-            return True
-        return False
+        # 复合读改写 (读 state → 据冷却判定改 state) 必须整体原子, 否则并发的
+        # record_* 会插在 get 与 set 之间, 把 unhealthy→probation 的提升与一次
+        # 新失败串味 (in-memory 路径在 self._lock 下本就是原子的, 这里对齐).
+        with b.transaction():
+            state = b.get(f"{prefix}:state", "healthy") or "healthy"
+            if state == "healthy" or state == "probation":
+                return True
+            # unhealthy: 看冷却是否过了
+            last_fail_ts = float(b.get(f"{prefix}:last_fail_ts", 0) or 0)
+            if (time.time() - last_fail_ts) >= self._cooldown_seconds:
+                # 自动从 unhealthy → probation, 让下一个 worker 也看到 probation
+                b.set(f"{prefix}:state", "probation")
+                return True
+            return False
 
     def _record_success_backend(self, model_name: str) -> None:
         b = self._backend
         assert b is not None
         prefix = f"{self._KEY_PREFIX}{model_name}"
-        b.incr(f"{prefix}:total_calls", 1)
-        b.set(f"{prefix}:consecutive_failures", 0)
-        state = b.get(f"{prefix}:state", "healthy") or "healthy"
-        if state in ("probation", "unhealthy"):
-            b.set(f"{prefix}:state", "healthy")
-        b.list_append(self._KNOWN_MODELS_KEY, model_name, maxlen=200)
+        # 整组 counter + state 更新原子化, 对齐 in-memory 路径的单锁不变式: 否则并发的
+        # record_failure 会插在中间, 把 state / consecutive_failures 写成互相矛盾的值.
+        with b.transaction():
+            b.incr(f"{prefix}:total_calls", 1)
+            b.set(f"{prefix}:consecutive_failures", 0)
+            state = b.get(f"{prefix}:state", "healthy") or "healthy"
+            if state in ("probation", "unhealthy"):
+                b.set(f"{prefix}:state", "healthy")
+            b.list_append(self._KNOWN_MODELS_KEY, model_name, maxlen=200)
 
     def _record_failure_backend(self, model_name: str, error: str = "") -> None:
         b = self._backend
         assert b is not None
         prefix = f"{self._KEY_PREFIX}{model_name}"
-        b.incr(f"{prefix}:total_calls", 1)
-        b.incr(f"{prefix}:total_failures", 1)
-        new_consec = b.incr(f"{prefix}:consecutive_failures", 1)
-        b.set(f"{prefix}:last_fail_ts", time.time())
-        b.set(f"{prefix}:last_error", (error or "")[:200])
-        state = b.get(f"{prefix}:state", "healthy") or "healthy"
-        if state == "probation":
-            b.set(f"{prefix}:state", "unhealthy")
-        elif new_consec >= self._fail_threshold:
-            b.set(f"{prefix}:state", "unhealthy")
-        b.list_append(self._KNOWN_MODELS_KEY, model_name, maxlen=200)
+        # 整组 counter + state 更新原子化, 对齐 in-memory 路径的单锁不变式: 否则并发的
+        # record_success 会插在中间, 把 state / consecutive_failures 写成互相矛盾的值.
+        with b.transaction():
+            b.incr(f"{prefix}:total_calls", 1)
+            b.incr(f"{prefix}:total_failures", 1)
+            new_consec = b.incr(f"{prefix}:consecutive_failures", 1)
+            b.set(f"{prefix}:last_fail_ts", time.time())
+            b.set(f"{prefix}:last_error", (error or "")[:200])
+            state = b.get(f"{prefix}:state", "healthy") or "healthy"
+            if state == "probation":
+                b.set(f"{prefix}:state", "unhealthy")
+            elif new_consec >= self._fail_threshold:
+                b.set(f"{prefix}:state", "unhealthy")
+            b.list_append(self._KNOWN_MODELS_KEY, model_name, maxlen=200)
 
     def _snapshot_backend(self) -> Dict[str, Any]:
         b = self._backend

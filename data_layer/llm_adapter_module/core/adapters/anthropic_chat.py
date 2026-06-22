@@ -63,7 +63,7 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
             if m.get("role") == "system":
                 system_text = (system_text + "\n" + str(m.get("content", ""))).strip()
             else:
-                api_messages.append({"role": m["role"], "content": m.get("content", "")})
+                api_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
 
         url = f"{self.api_base}/v1/messages"
         headers = {
@@ -138,7 +138,7 @@ class AnthropicChatAdapter(BaseChatAdapter, _BaseHTTPAdapterMixin):
             if m.get("role") == "system":
                 system_text = (system_text + "\n" + str(m.get("content", ""))).strip()
             else:
-                api_messages.append({"role": m["role"], "content": m.get("content", "")})
+                api_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
 
         url = f"{self.api_base}/v1/messages"
         headers = {

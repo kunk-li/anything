@@ -173,6 +173,43 @@ class TestLocalDocumentStore(unittest.TestCase):
             with self.assertRaises(ValueError, msg=f"should reject {bad!r}"):
                 LocalDocumentStore(tenant_id=bad)
 
+    def test_concurrent_save_no_hash_map_lost_update(self):
+        """并发 save_document: hash_doc_map 不丢更新, 落盘文件不写半截。
+
+        无锁时多个线程基于各自旧快照改 dict 后互相覆盖落盘 (lost update),
+        持久 .hash_doc_map.json 最终只剩少数条目。加锁后内存表与磁盘表都应含全部 N 条。"""
+        import json as _json
+        import threading
+
+        n = 40
+        docs = [
+            self.store.create_document(f"c-{i}", f"f{i}.txt", "txt",
+                                       calculate_content_hash(f"c-{i}"))
+            for i in range(n)
+        ]
+        barrier = threading.Barrier(n)
+        results = [None] * n
+
+        def worker(idx):
+            barrier.wait()  # 最大化交错
+            results[idx] = self.store.save_document(docs[idx])
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertTrue(all(results), "every save_document should succeed")
+        # 内存表含全部 N 个 hash
+        self.assertEqual(len(self.store.hash_doc_map), n)
+        for d in docs:
+            self.assertEqual(self.store.hash_doc_map[d["content_hash"]], d["doc_id"])
+        # 落盘表必须可解析 (非半截 JSON) 且条目齐全 — 验证原子写 + 锁
+        with open(self.store.hash_map_path, "r", encoding="utf-8") as f:
+            persisted = _json.load(f)
+        self.assertEqual(len(persisted), n)
+
 
 class TestQuotaDoc(unittest.TestCase):
     """Task #33 PR4b: quotas.<tid>.max_documents 配额硬限

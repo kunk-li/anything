@@ -72,6 +72,50 @@ class TestLocalStateStore(unittest.TestCase):
         self.assertIsNotNone(state)
         self.assertEqual(len(state.get("events", [])), n_threads * per_thread)
 
+    def test_concurrent_readers_with_writers(self):
+        """回归: 并发读 (get_state) 与写 (append_event) 不让写方崩。
+        Windows 上无锁读句柄 (无 FILE_SHARE_DELETE) 会令并发写方的 os.replace
+        抛 PermissionError → append_event 包成 STATE_STORE_APPEND_FAILED 上抛 + 丢事件。
+        修法是 get_state 也持 per-session 锁, 与写方串行。本测试同时跑读写线程,
+        断言: 全部 write 成功 (无异常) 且最终事件数恰为 writer 写入总数。"""
+        import threading
+        sid = "rw_session"
+        n_writers, per_writer = 6, 30
+        n_readers = 6
+        errors = []
+        stop = threading.Event()
+
+        def writer(tid):
+            try:
+                for i in range(per_writer):
+                    self.state_store.append_event(sid, {"type": "ev", "tid": tid, "i": i})
+            except Exception as e:  # 写方崩 = 回归复现
+                errors.append(e)
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    self.state_store.get_state(sid)
+                except Exception as e:
+                    errors.append(e)
+
+        rthreads = [threading.Thread(target=reader) for _ in range(n_readers)]
+        wthreads = [threading.Thread(target=writer, args=(t,)) for t in range(n_writers)]
+        for th in rthreads:
+            th.start()
+        for th in wthreads:
+            th.start()
+        for th in wthreads:
+            th.join()
+        stop.set()
+        for th in rthreads:
+            th.join()
+
+        self.assertEqual(errors, [], f"并发读写下不应有异常: {errors[:3]}")
+        state = self.state_store.get_state(sid)
+        self.assertIsNotNone(state)
+        self.assertEqual(len(state.get("events", [])), n_writers * per_writer)
+
     def test_append_event(self):
         self.state_store.save_state(self.test_session_id, self.test_state)
         append_result = self.state_store.append_event(self.test_session_id, self.test_event)

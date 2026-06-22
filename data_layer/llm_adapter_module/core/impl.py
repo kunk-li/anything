@@ -392,12 +392,16 @@ class LLMService(BaseLLMService):
 
         last_resp: Optional[LLMResponse] = None
         tried: List[str] = []
+        # 因健康检查 (冷却中) 被跳过、压根没真正调用过的模型; 与 tried 区分,
+        # 以便上层在 "全部被跳过" 时仍能看到是哪些模型、为什么被跳过 (避免空 tried 掩盖原因)。
+        skipped: List[str] = []
         for model_name in candidates:
             # 跳过 unhealthy 模型 (冷却中)
             if health and not health.is_available(model_name):
                 self.logger.warning(
                     f"[fallback] 跳过 unhealthy 模型: {model_name}, trace_id={trace_id}"
                 )
+                skipped.append(model_name)
                 continue
 
             adapter = self._get_adapter(model_name)
@@ -469,11 +473,12 @@ class LLMService(BaseLLMService):
                 last_resp.request_info = {}
             last_resp.request_info["fallback_exhausted"] = True
             last_resp.request_info["tried_models"] = tried
+            last_resp.request_info["skipped_models"] = skipped
             return last_resp
         return LLMResponse(
             code="ALL_MODELS_FAILED",
             message=f"所有候选模型都不可用 (健康检查均失败): {candidates}",
-            request_info={"trace_id": trace_id, "tried_models": tried},
+            request_info={"trace_id": trace_id, "tried_models": tried, "skipped_models": skipped},
             cost_time=now_ts() - start, trace_id=trace_id,
         )
 

@@ -346,31 +346,38 @@ class FaissVectorDB(BaseVectorDB):
                 if not items:
                     return True
 
-                # 已存在的 id: 先从索引摘掉 (同 int id 重新 add)
-                updated_ints = [
-                    self._int_of[vid] for vid, _, _ in items if vid in self._int_of
-                ]
-                if updated_ints:
-                    self.index.remove_ids(np.asarray(updated_ints, dtype="int64"))
-
+                # 关键: 先把派生值算进局部变量, sqlite 持久化成功后再动内存
+                # (index/_int_of/_vid_of/_next_int/meta_map)。
+                # 否则 sqlite 提交失败时内存已被改, 与磁盘分叉 (data-loss):
+                # 新向量进了索引却没落盘, 重载即丢; 更新的 id 索引是新值磁盘是旧值。
+                # int_id 分配只算进局部 _int_of 视图, 实例状态暂不变更。
+                int_of_view = dict(self._int_of)  # 仅供本批查询/分配, 不写回实例
+                new_ids: Dict[str, int] = {}      # 本批新分配的 id (落盘后并入实例映射)
                 vids: List[str] = []
                 ints: List[int] = []
                 embs: List[np.ndarray] = []
+                metas: List[Dict] = []
+                next_int = self._next_int
                 for vector_id, emb, meta in items:
-                    if vector_id not in self._int_of:
-                        self._int_of[vector_id] = self._next_int
-                        self._vid_of[self._next_int] = vector_id
-                        self._next_int += 1
-                    self.meta_map[vector_id] = meta
+                    if vector_id not in int_of_view:
+                        int_of_view[vector_id] = next_int
+                        new_ids[vector_id] = next_int
+                        next_int += 1
                     vids.append(vector_id)
-                    ints.append(self._int_of[vector_id])
+                    ints.append(int_of_view[vector_id])
                     embs.append(emb)
+                    metas.append(meta)
 
                 mat = normalize_embeddings(
                     np.stack(embs, axis=0).astype("float32", copy=False)
                 )
-                self.index.add_with_ids(mat, np.asarray(ints, dtype="int64"))
 
+                # 已存在的 id: upsert 即覆盖, 同 int id 需先 remove 再 add
+                updated_ints = [
+                    self._int_of[vid] for vid in vids if vid in self._int_of
+                ]
+
+                # 1) 先持久化到 sqlite (失败则内存原封不动, 不分叉)
                 with self._conn:
                     self._conn.executemany(
                         "INSERT OR REPLACE INTO vectors (chunk_id, int_id, embedding, metadata) "
@@ -380,15 +387,27 @@ class FaissVectorDB(BaseVectorDB):
                                 vid,
                                 ints[i],
                                 mat[i].astype("float32").tobytes(),
-                                json.dumps(self.meta_map[vid], ensure_ascii=False),
+                                json.dumps(metas[i], ensure_ascii=False),
                             )
                             for i, vid in enumerate(vids)
                         ],
                     )
                     self._conn.execute(
                         "INSERT OR REPLACE INTO kv (key, value) VALUES ('next_int', ?)",
-                        (str(self._next_int),),
+                        (str(next_int),),
                     )
+
+                # 2) sqlite 已 commit, 再改内存索引与映射 (此后才与磁盘一致);
+                #    映射增量更新, 维持 O(本批) 而非全量重建。
+                if updated_ints:
+                    self.index.remove_ids(np.asarray(updated_ints, dtype="int64"))
+                self.index.add_with_ids(mat, np.asarray(ints, dtype="int64"))
+                for vid, iv in new_ids.items():
+                    self._int_of[vid] = iv
+                    self._vid_of[iv] = vid
+                self._next_int = next_int
+                for i, vid in enumerate(vids):
+                    self.meta_map[vid] = metas[i]
 
                 if self.logger:
                     self.logger.info(

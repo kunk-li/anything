@@ -66,10 +66,25 @@ class OpenAIVectorAdapter(BaseVectorAdapter, _BaseHTTPAdapterMixin):
         for attempt in range(self.max_retry):
             try:
                 data = self._post_json(url, headers, payload, timeout=self.timeout)
-                # OpenAI embeddings: data['data'][i]['embedding']
-                out: List[List[float]] = []
-                for item in data.get("data", []):
-                    out.append(item.get("embedding", []))
+                # OpenAI embeddings: data['data'][i] = {'index': i, 'embedding': [...]}
+                # API 不保证按输入顺序返回, 必须按 item['index'] 散列回原位,
+                # 否则会把向量错配到别的文本上 (静默污染向量库).
+                items = data.get("data", []) or []
+                out: List[List[float]] = [[] for _ in texts]
+                for pos, item in enumerate(items):
+                    idx = item.get("index")
+                    if not isinstance(idx, int) or idx < 0 or idx >= len(texts):
+                        # index 缺失/越界时退回枚举顺序 (仅在 index 不可用时)
+                        idx = pos
+                    if idx < len(out):
+                        out[idx] = item.get("embedding", []) or []
+                # 任何一个槽位为空 (条目缺失 / index 越界 / embedding 空) 都视为
+                # 部分响应, 抛错触发重试/上层回退, 而不是持久化错配或缺失的向量.
+                if len(items) != len(texts) or any(not v for v in out):
+                    raise RuntimeError(
+                        f"OpenAI embeddings 返回与输入不匹配: 输入 {len(texts)} 条, "
+                        f"返回 {len(items)} 条 (含空向量: {sum(1 for v in out if not v)})"
+                    )
                 return out
             except Exception as e:
                 last_err = e

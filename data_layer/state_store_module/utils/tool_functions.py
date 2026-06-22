@@ -81,6 +81,10 @@ def list_session_files(dir_path: str) -> Tuple[str, ...]:
         return tuple()
     files = []
     for fn in os.listdir(dir_path):
+        # 跳过原子写临时文件 (.tmp_state_*.json) 及其它点前缀文件: 它们不是 session 文件,
+        # 不应被过期清理/枚举当成会话扫描。
+        if fn.startswith("."):
+            continue
         fp = os.path.join(dir_path, fn)
         if os.path.isfile(fp) and is_json_file(fp):
             files.append(fp)
