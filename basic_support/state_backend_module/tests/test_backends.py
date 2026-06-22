@@ -109,6 +109,41 @@ class _BackendContractMixin:
         # 4 worker × 50 incr = 200 (从 set('k', 0) 起算, incr 把它读为 0.0 起累加)
         self.assertEqual(self.b.get("k"), 200.0)
 
+    # ---------- transaction (原子复合更新) ----------
+    def test_transaction_basic_ops(self):
+        with self.b.transaction():
+            self.b.set("a", 1)
+            self.b.incr("c", 5)
+            self.b.list_append("L", "x")
+        self.assertEqual(self.b.get("a"), 1)
+        self.assertEqual(self.b.get("c"), 5.0)
+        self.assertEqual(self.b.list_get("L"), ["x"])
+
+    def test_transaction_reentrant(self):
+        # transaction() 块内再开 transaction() 不应死锁 / 嵌套事务报错
+        with self.b.transaction():
+            self.b.incr("c", 1)
+            with self.b.transaction():
+                self.b.incr("c", 1)
+        self.assertEqual(self.b.get("c"), 2.0)
+
+    def test_transaction_atomic_read_modify_write(self):
+        """事务内的 read-modify-write 不被并发 writer 插入 → 不丢更新.
+
+        每个 worker 在一个 transaction() 内做 get→+1→set; 没有事务保护时
+        get 与 set 之间会被别的 worker 插入, 终值 < 期望.
+        """
+        self.b.set("rmw", 0)
+        def worker():
+            for _ in range(50):
+                with self.b.transaction():
+                    cur = int(self.b.get("rmw", 0) or 0)
+                    self.b.set("rmw", cur + 1)
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(self.b.get("rmw"), 200)
+
 
 class TestInMemoryBackend(_BackendContractMixin, unittest.TestCase):
     def make_backend(self):

@@ -143,9 +143,16 @@ class QuotaGuard:
                 window.append(now)
 
             # 2. Daily USD
-            if self.daily_usd_limit is not None and cost_usd > 0:
+            # 注意: pre_llm/pre_tool hook 总是传 cost_usd=0 (调用前不知道精确 cost),
+            # 实际 cost 在 post_llm 阶段经 record_cost 累计. 因此这里必须用 "已累计总额"
+            # 做闸门, 不能只在 cost_usd>0 时判 — 否则累计触顶后 cost_usd=0 的新请求会全部漏过,
+            # daily 上限形同虚设. 闸门语义: 已累计 >= 上限 直接拒, 或本次 cost 会把累计推过上限.
+            if self.daily_usd_limit is not None:
                 entry = self._get_or_init_daily(tenant)
-                if entry["usd"] + cost_usd > self.daily_usd_limit:
+                if (
+                    entry["usd"] >= self.daily_usd_limit
+                    or entry["usd"] + cost_usd > self.daily_usd_limit
+                ):
                     raise BlockedError(
                         f"tenant={tenant} 今日 USD 上限触顶 "
                         f"({entry['usd']:.4f}/{self.daily_usd_limit:.2f} USD)",
@@ -158,9 +165,12 @@ class QuotaGuard:
                         },
                     )
 
-            # 3. Global USD
-            if self.global_usd_limit is not None and cost_usd > 0:
-                if self._global_usd + cost_usd > self.global_usd_limit:
+            # 3. Global USD (同上: 用已累计总额做闸门, 不依赖 cost_usd>0)
+            if self.global_usd_limit is not None:
+                if (
+                    self._global_usd >= self.global_usd_limit
+                    or self._global_usd + cost_usd > self.global_usd_limit
+                ):
                     raise BlockedError(
                         f"全局 USD 上限触顶 "
                         f"({self._global_usd:.4f}/{self.global_usd_limit:.2f} USD)",
@@ -258,11 +268,15 @@ class QuotaGuard:
             b.list_append(self._KNOWN_TENANTS_KEY, tenant, maxlen=200)
 
         # 2. Daily USD (跨进程共享, check + incr 非原子, 接受 ≤ N_workers 溢出)
-        if self.daily_usd_limit is not None and cost_usd > 0:
+        # 同 in-process 分支: pre hook cost_usd=0, 必须用已累计总额做闸门, 否则触顶后漏过.
+        if self.daily_usd_limit is not None:
             today = self._today_key()
             daily_key = f"{self._DAILY_KEY}:{tenant}:{today}:usd"
             current = float(b.get(daily_key, 0) or 0)
-            if current + cost_usd > self.daily_usd_limit:
+            if (
+                current >= self.daily_usd_limit
+                or current + cost_usd > self.daily_usd_limit
+            ):
                 raise BlockedError(
                     f"tenant={tenant} 今日 USD 上限触顶 "
                     f"({current:.4f}/{self.daily_usd_limit:.2f} USD)",
@@ -275,10 +289,13 @@ class QuotaGuard:
                     },
                 )
 
-        # 3. Global USD
-        if self.global_usd_limit is not None and cost_usd > 0:
+        # 3. Global USD (同上: 用已累计总额做闸门, 不依赖 cost_usd>0)
+        if self.global_usd_limit is not None:
             current = float(b.get(self._GLOBAL_KEY, 0) or 0)
-            if current + cost_usd > self.global_usd_limit:
+            if (
+                current >= self.global_usd_limit
+                or current + cost_usd > self.global_usd_limit
+            ):
                 raise BlockedError(
                     f"全局 USD 上限触顶 "
                     f"({current:.4f}/{self.global_usd_limit:.2f} USD)",
@@ -354,14 +371,17 @@ def configure_quota(
 
 
 def _load_quota_from_env() -> QuotaGuard:
-    """从环境变量读 quota 配置. 都没设 → 一个空 QuotaGuard (不启用)."""
-    daily = os.environ.get("ANYTHING_QUOTA_DAILY_USD")
-    global_ = os.environ.get("ANYTHING_QUOTA_GLOBAL_USD")
-    rate = os.environ.get("ANYTHING_QUOTA_RATE_PER_MIN")
+    """从环境变量读 quota 配置. 都没设 → 一个空 QuotaGuard (不启用).
+
+    env 值原样传给 QuotaGuard, 由 _coerce_positive 统一做转换 + 合法性判定:
+    非数字 / 空 / <=0 一律视为 "不启用" (None), 不抛异常 — 跟模块 "invalid => disabled"
+    契约一致. 之前直接 float()/int() 会在 env 配错 (如 DAILY_USD=abc) 时炸掉
+    install_quota_hooks 整个启动流程.
+    """
     return QuotaGuard(
-        daily_usd_limit=float(daily) if daily else None,
-        global_usd_limit=float(global_) if global_ else None,
-        rate_per_minute=int(rate) if rate else None,
+        daily_usd_limit=os.environ.get("ANYTHING_QUOTA_DAILY_USD"),
+        global_usd_limit=os.environ.get("ANYTHING_QUOTA_GLOBAL_USD"),
+        rate_per_minute=os.environ.get("ANYTHING_QUOTA_RATE_PER_MIN"),
     )
 
 

@@ -264,15 +264,16 @@ class ConfigManager(BaseConfigManager):
             # 范围校验 (数值用 [lo, hi] 两元列表; 字符串用枚举列表)
             # 旧代码此处有个运算符优先级写错、body 仅 pass 的死 if, 已删。
             if range_rule is not None:
-                if isinstance(val, (int, float)) and isinstance(range_rule, list) and len(range_rule) == 2:
+                # bool 是 int 的子类, 必须先于数值分支判定, 否则布尔值会误入 [lo, hi] 数值比较
+                if isinstance(val, bool) and isinstance(range_rule, list) and len(range_rule) >= 1:
+                    if val not in range_rule:
+                        raise ValueError(f"配置项枚举校验失败: {cfg_key}={val} 不在 {range_rule}")
+                elif isinstance(val, (int, float)) and isinstance(range_rule, list) and len(range_rule) == 2:
                     lo, hi = range_rule
                     if val < lo or val > hi:
                         raise ValueError(f"配置项范围校验失败: {cfg_key}={val} 不在 [{lo}, {hi}]")
                 elif isinstance(val, str) and isinstance(range_rule, list) and len(range_rule) >= 1:
                     # 枚举校验
-                    if val not in range_rule:
-                        raise ValueError(f"配置项枚举校验失败: {cfg_key}={val} 不在 {range_rule}")
-                elif isinstance(val, bool) and isinstance(range_rule, list) and len(range_rule) >= 1:
                     if val not in range_rule:
                         raise ValueError(f"配置项枚举校验失败: {cfg_key}={val} 不在 {range_rule}")
 

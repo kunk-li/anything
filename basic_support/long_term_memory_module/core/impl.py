@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -38,6 +39,11 @@ _FACT_KEY = "memory:fact"
 _HASH_KEY = "memory:hash"
 _INDEX_KEY = "memory:index"
 _TAG_KEY = "memory:tag"
+
+# 固定锁池大小: 同 tenant_id 哈希到同一把锁 (串行化其 fact 读-改-写 + dedup-decide-write),
+# 不同 tenant 偶尔同桶 (轻微误串, 不影响正确性)。固定池避免 per-tenant 锁字典无界增长 + 创建竞态。
+# 与 state_store 的 per-session 写锁 (commit c45050c) 同构。
+_TENANT_LOCK_POOL_SIZE = 64
 
 
 class LongTermMemoryImpl(BaseLongTermMemory):
@@ -72,10 +78,20 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         # MEM-3: 敏感 secret 加密密钥 (DI 优先, 否则取环境 SENSITIVE_CONFIG_SECRET)
         import os
         self._secret_key = secret_key or os.environ.get("SENSITIVE_CONFIG_SECRET") or None
+        # per-tenant 写锁池: 串行化同一 tenant 的 dedup-decide-write + fact 读-改-写,
+        # 防 (a) 并发 add_fact 各自 hash miss 双写重复 fact, (b) mark_accessed/_bump_existing
+        # 等读-改-写整存覆盖丢更新 / 复活已 superseded 的 fact (lost update)。
+        # 仅 per-process —— 后端原子性只保单次调用, 跨多次调用的不变量靠此进程内锁守;
+        # 跨进程/多 worker 并发同一 tenant 仍会竞争 (真要并发请换 SQL/Redis 后端走 backend 级事务)。
+        self._tenant_lock_pool = [threading.Lock() for _ in range(_TENANT_LOCK_POOL_SIZE)]
 
     # ------------------------------------------------------------------
     # 内部辅助
     # ------------------------------------------------------------------
+
+    def _lock_for(self, tenant_id: str) -> "threading.Lock":
+        """取该 tenant 的写锁 (固定池哈希分桶)。同 tenant 必同锁 → 串行化其 dedup / 读-改-写。"""
+        return self._tenant_lock_pool[hash(tenant_id) % len(self._tenant_lock_pool)]
 
     def _fact_key(self, tenant_id: str, fact_id: str) -> str:
         return f"{_FACT_KEY}:{tenant_id}:{fact_id}"
@@ -121,50 +137,54 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         fact = fact.ensure_hash()
         tenant = fact.tenant_id or "default"
 
-        # 一阶段 — content_hash 精确匹配
-        existing_id = self._backend.get(self._hash_key(tenant, fact.content_hash))
-        if existing_id:
-            existing = self._load_fact(tenant, str(existing_id))
-            if existing is not None:
-                return self._bump_existing(existing, fact, reason="hash")
+        # 整个 dedup-decide-write 序列持 per-tenant 锁串行化: 否则两并发 add 相同 content 各自
+        # hash 反查均 miss → 各自落盘 → 重复 fact + hash 反查被后者覆盖 (check-then-act race)。
+        # _bump_existing 在锁内调用且不再二次取锁 (普通 Lock 非重入)。
+        with self._lock_for(tenant):
+            # 一阶段 — content_hash 精确匹配
+            existing_id = self._backend.get(self._hash_key(tenant, fact.content_hash))
+            if existing_id:
+                existing = self._load_fact(tenant, str(existing_id))
+                if existing is not None:
+                    return self._bump_existing(existing, fact, reason="hash")
 
-        # Task EEE (#91) — 二阶段语义查重 (cosine > threshold)
-        if self._embedder is not None and fact.embedding is None:
-            try:
-                # MEM-3: secret 用 digest 算 embedding (明文可检索), 不用即将加密的 content
-                embed_target = (fact.digest if (fact.content_type == "secret" and fact.digest)
-                                else fact.content)
-                fact.embedding = self._embedder.embed_text(embed_target)
-            except Exception:
-                # embedder 失败不阻断 add, 直接落盘 (无 embedding 的 fact 仍可用 hash 路径)
-                fact.embedding = None
+            # Task EEE (#91) — 二阶段语义查重 (cosine > threshold)
+            if self._embedder is not None and fact.embedding is None:
+                try:
+                    # MEM-3: secret 用 digest 算 embedding (明文可检索), 不用即将加密的 content
+                    embed_target = (fact.digest if (fact.content_type == "secret" and fact.digest)
+                                    else fact.content)
+                    fact.embedding = self._embedder.embed_text(embed_target)
+                except Exception:
+                    # embedder 失败不阻断 add, 直接落盘 (无 embedding 的 fact 仍可用 hash 路径)
+                    fact.embedding = None
 
-        # secret 的语义去重会因 digest 相似而误判不同的值 → secret 只靠 content_hash 精确去重
-        if fact.embedding and fact.content_type != "secret":
-            semantic_match = self._find_semantic_match(tenant, fact)
-            if semantic_match is not None:
-                return self._bump_existing(semantic_match, fact, reason="cosine")
+            # secret 的语义去重会因 digest 相似而误判不同的值 → secret 只靠 content_hash 精确去重
+            if fact.embedding and fact.content_type != "secret":
+                semantic_match = self._find_semantic_match(tenant, fact)
+                if semantic_match is not None:
+                    return self._bump_existing(semantic_match, fact, reason="cosine")
 
-        # MEM-3: 敏感 secret 落盘前保护 content (加密 or 无密钥时丢弃明文)
-        fact = self._maybe_protect_secret(fact)
-        # 新 fact 落盘
-        self._save_fact(fact)
-        # hash → fact_id 反查
-        self._backend.set(self._hash_key(tenant, fact.content_hash), fact.fact_id)
-        # tenant 索引
-        self._backend.list_append(
-            self._index_key(tenant),
-            fact.fact_id,
-            maxlen=self._max_facts_per_tenant,
-        )
-        # tag 索引
-        for t in fact.tags:
+            # MEM-3: 敏感 secret 落盘前保护 content (加密 or 无密钥时丢弃明文)
+            fact = self._maybe_protect_secret(fact)
+            # 新 fact 落盘
+            self._save_fact(fact)
+            # hash → fact_id 反查
+            self._backend.set(self._hash_key(tenant, fact.content_hash), fact.fact_id)
+            # tenant 索引
             self._backend.list_append(
-                self._tag_index_key(tenant, t),
+                self._index_key(tenant),
                 fact.fact_id,
                 maxlen=self._max_facts_per_tenant,
             )
-        return fact
+            # tag 索引
+            for t in fact.tags:
+                self._backend.list_append(
+                    self._tag_index_key(tenant, t),
+                    fact.fact_id,
+                    maxlen=self._max_facts_per_tenant,
+                )
+            return fact
 
     # ------------------------------------------------------------------
     # MEM-3: 敏感 secret 加密 / 解密 (复用 config_module 的 Fernet)
@@ -308,14 +328,19 @@ class LongTermMemoryImpl(BaseLongTermMemory):
     # ------------------------------------------------------------------
 
     def mark_accessed(self, fact_id: str, tenant_id: str = "default") -> bool:
-        """access_count + 1, last_accessed = now. 返回 True 如果 fact 存在."""
-        f = self._load_fact(tenant_id, fact_id)
-        if f is None:
-            return False
-        f.access_count += 1
-        f.last_accessed = time.time()
-        self._save_fact(f)
-        return True
+        """access_count + 1, last_accessed = now. 返回 True 如果 fact 存在.
+
+        持 per-tenant 锁做读-改-写: 否则与并发 add_fact/_bump_existing/reconcile 的整存
+        互相覆盖 (lost update) — 旧快照写回会复活已 superseded 的 fact 或吞掉别处的 bump。
+        """
+        with self._lock_for(tenant_id):
+            f = self._load_fact(tenant_id, fact_id)
+            if f is None:
+                return False
+            f.access_count += 1
+            f.last_accessed = time.time()
+            self._save_fact(f)
+            return True
 
     # ------------------------------------------------------------------
     # list_facts
@@ -329,6 +354,10 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         tags_filter: Optional[List[str]] = None,
     ) -> List[Fact]:
         """枚举 tenant 下 facts, 按 last_accessed 倒序."""
+        # 负数 limit/offset 直接钳到 0: 否则 out[offset:offset+limit] 切片会静默
+        # 丢条 (如 limit=-1 → out[0:-1] 漏掉最后一条) 而非返回空页。
+        limit = max(0, int(limit))
+        offset = max(0, int(offset))
         ids = list(dict.fromkeys(self._backend.list_get(self._index_key(tenant_id))))
         out: List[Fact] = []
         for fid in ids:
@@ -406,16 +435,19 @@ class LongTermMemoryImpl(BaseLongTermMemory):
         ids = list(dict.fromkeys(self._backend.list_get(self._index_key(tenant_id))))
         degraded = 0
         for fid in ids:
-            f = self._load_fact(tenant_id, str(fid))
-            if f is None or f.pinned or f.mutability == "canonical":
-                continue
-            if not f.digest or f.content == DEGRADED:
-                continue  # 没精炼可留(留给 prune 删) 或已 degrade 过
-            if f.last_accessed >= cutoff_ts:
-                continue
-            f.content = DEGRADED
-            self._save_fact(f)
-            degraded += 1
+            # 持锁重读再写: 与并发 mark_accessed 互斥, 锁内复检 last_accessed,
+            # 否则可能把期间被访问 bump 的 fresh fact 用 stale 快照覆盖成 DEGRADED (lost update)。
+            with self._lock_for(tenant_id):
+                f = self._load_fact(tenant_id, str(fid))
+                if f is None or f.pinned or f.mutability == "canonical":
+                    continue
+                if not f.digest or f.content == DEGRADED:
+                    continue  # 没精炼可留(留给 prune 删) 或已 degrade 过
+                if f.last_accessed >= cutoff_ts:
+                    continue
+                f.content = DEGRADED
+                self._save_fact(f)
+                degraded += 1
         return degraded
 
     def consolidate(self, tenant_id: str = "default", max_facts: int = 20) -> int:
@@ -521,11 +553,19 @@ class LongTermMemoryImpl(BaseLongTermMemory):
             if len(idxs) < 2:
                 continue
             winner = max(idxs, key=lambda i: active[i].created_at)   # 组内最新者 = 当前偏好
+            winner_id = active[winner].fact_id
             for i in idxs:
                 if i == winner or active[i].superseded_by is not None:
                     continue
-                active[i].superseded_by = active[winner].fact_id
-                self._save_fact(active[i])
+                loser_id = active[i].fact_id
+                # 持锁重读再写: 只改 superseded_by 单字段, 不回写 LLM 前的整存快照,
+                # 否则会吞掉期间并发 mark_accessed 的 access_count/last_accessed bump (lost update)。
+                with self._lock_for(tenant_id):
+                    cur = self._load_fact(tenant_id, loser_id)
+                    if cur is None or cur.superseded_by is not None:
+                        continue
+                    cur.superseded_by = winner_id
+                    self._save_fact(cur)
                 superseded += 1
         return superseded
 

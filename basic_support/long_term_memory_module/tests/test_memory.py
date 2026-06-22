@@ -7,6 +7,7 @@ LongTermMemoryImpl 测试 (Task DDD #90).
 """
 import os
 import tempfile
+import threading
 import time
 import unittest
 
@@ -173,6 +174,42 @@ class _BaseMemoryTests:
         ids1 = {f.fact_id for f in page1}
         ids2 = {f.fact_id for f in page2}
         self.assertFalse(ids1 & ids2)
+
+    def test_list_negative_limit_clamped_to_empty(self):
+        """负数 limit 被钳到 0 → 返回空页, 不再 out[0:-1] 静默漏掉最后一条."""
+        for i in range(3):
+            self.memory.add_fact(Fact.make(f"fact_{i}", tenant_id="t1"))
+        self.assertEqual(self.memory.list_facts("t1", limit=-1), [])
+        self.assertEqual(self.memory.list_facts("t1", limit=-5, offset=-3), [])
+        # 正常 limit 仍取全量
+        self.assertEqual(len(self.memory.list_facts("t1", limit=100)), 3)
+
+    # ---------- 并发: dedup-decide-write 串行化 (无锁版会双写重复 fact) ----------
+
+    def test_concurrent_add_same_content_dedup_no_duplicate(self):
+        """8 线程并发 add 同一 content → 应只落 1 条 fact (其余被 dedup 成 bump).
+        check-then-act race 未修时多个线程各自 hash miss 双写 → index 里出现多个不同 fact_id."""
+        barrier = threading.Barrier(8)
+        results = []
+        lock = threading.Lock()
+
+        def worker():
+            barrier.wait()  # 尽量同时冲, 放大 check-then-act 窗口
+            f = self.memory.add_fact(Fact.make("并发相同事实", tenant_id="t_conc"))
+            with lock:
+                results.append(f.fact_id)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # 全部 8 次 add 必须收敛到同一个 fact_id
+        self.assertEqual(len(set(results)), 1, f"并发 add 产生了多个 fact_id: {set(results)}")
+        # 存储里该 tenant 也只应有 1 条实际 fact
+        listed = self.memory.list_facts("t_conc", limit=100)
+        self.assertEqual(len(listed), 1)
 
     # ---------- delete_fact_in_tenant ----------
 

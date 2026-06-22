@@ -11,7 +11,8 @@ import json
 import sqlite3
 import threading
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional
+from contextlib import contextmanager
+from typing import Any, Deque, Dict, Iterator, List, Optional
 
 from .base import StateBackend
 
@@ -32,7 +33,9 @@ class InMemoryBackend(StateBackend):
     def __init__(self) -> None:
         self._kv: Dict[str, Any] = {}
         self._lists: Dict[str, Deque[Any]] = {}
-        self._lock = threading.Lock()
+        # RLock (非 Lock): transaction() 持锁期间块内还会再调 get/set/incr, 这些方法
+        # 各自也取同一把锁, 需要可重入否则自锁死.
+        self._lock = threading.RLock()
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:
@@ -80,6 +83,12 @@ class InMemoryBackend(StateBackend):
             for k in [k for k in self._lists if k.startswith(key_prefix)]:
                 self._lists.pop(k, None)
 
+    @contextmanager
+    def transaction(self) -> Iterator[StateBackend]:
+        # 持锁整段 — 块内 get/set/incr/list_* 取同一把 RLock, 期间无别的线程能写.
+        with self._lock:
+            yield self
+
 
 # ---------------------------------------------------------------------------
 # SqliteBackend — cross-process via WAL mode
@@ -116,7 +125,11 @@ class SqliteBackend(StateBackend):
             ")"
         )
         self._conn.execute("CREATE INDEX IF NOT EXISTS lst_k_seq ON lst (k, seq)")
-        self._lock = threading.Lock()
+        # RLock: transaction() 持锁期间块内再调 incr/list_append/get/set 取同一把锁.
+        self._lock = threading.RLock()
+        # transaction() 进入时置 True — 让 incr/list_append 跳过自己的 BEGIN/COMMIT,
+        # 复用外层那一个事务 (sqlite 不允许嵌套 BEGIN).
+        self._in_txn = False
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:
@@ -139,54 +152,70 @@ class SqliteBackend(StateBackend):
     def incr(self, key: str, delta: float = 1.0) -> float:
         delta = float(delta)
         with self._lock:
+            # 已在外层 transaction() 内 → 复用那个事务, 不再自己 BEGIN/COMMIT.
+            if self._in_txn:
+                return self._incr_locked(key, delta)
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                row = self._conn.execute("SELECT v FROM kv WHERE k=?", (key,)).fetchone()
-                cur = 0.0
-                if row is not None:
-                    try:
-                        cur = float(json.loads(row[0]))
-                    except Exception:
-                        cur = 0.0
-                new = cur + delta
-                self._conn.execute(
-                    "INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
-                    (key, json.dumps(new)),
-                )
+                new = self._incr_locked(key, delta)
                 self._conn.execute("COMMIT")
                 return new
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    def _incr_locked(self, key: str, delta: float) -> float:
+        """read-modify-write 主体 (不管理事务边界). 必须在持锁 + 事务内调用."""
+        row = self._conn.execute("SELECT v FROM kv WHERE k=?", (key,)).fetchone()
+        cur = 0.0
+        if row is not None:
+            try:
+                cur = float(json.loads(row[0]))
+            except Exception:
+                cur = 0.0
+        new = cur + delta
+        self._conn.execute(
+            "INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+            (key, json.dumps(new)),
+        )
+        return new
+
     def list_append(self, key: str, item: Any, maxlen: Optional[int] = None) -> None:
         encoded = json.dumps(item, default=str)
         with self._lock:
+            # 已在外层 transaction() 内 → 复用那个事务, 不再自己 BEGIN/COMMIT.
+            if self._in_txn:
+                self._list_append_locked(key, encoded, maxlen)
+                return
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                # 取当前最大 seq + 1
-                row = self._conn.execute("SELECT COALESCE(MAX(seq), -1) FROM lst WHERE k=?", (key,)).fetchone()
-                next_seq = (row[0] if row else -1) + 1
-                self._conn.execute(
-                    "INSERT INTO lst(k, seq, v) VALUES(?,?,?)",
-                    (key, next_seq, encoded),
-                )
-                # 超长时 FIFO 截
-                if maxlen is not None and maxlen > 0:
-                    count = self._conn.execute("SELECT COUNT(*) FROM lst WHERE k=?", (key,)).fetchone()[0]
-                    if count > maxlen:
-                        excess = count - maxlen
-                        # 删除 seq 最小的 excess 条
-                        self._conn.execute(
-                            "DELETE FROM lst WHERE rowid IN ("
-                            "  SELECT rowid FROM lst WHERE k=? ORDER BY seq ASC LIMIT ?"
-                            ")",
-                            (key, excess),
-                        )
+                self._list_append_locked(key, encoded, maxlen)
                 self._conn.execute("COMMIT")
             except Exception:
                 self._conn.execute("ROLLBACK")
                 raise
+
+    def _list_append_locked(self, key: str, encoded: str, maxlen: Optional[int]) -> None:
+        """append 主体 (不管理事务边界). 必须在持锁 + 事务内调用."""
+        # 取当前最大 seq + 1
+        row = self._conn.execute("SELECT COALESCE(MAX(seq), -1) FROM lst WHERE k=?", (key,)).fetchone()
+        next_seq = (row[0] if row else -1) + 1
+        self._conn.execute(
+            "INSERT INTO lst(k, seq, v) VALUES(?,?,?)",
+            (key, next_seq, encoded),
+        )
+        # 超长时 FIFO 截
+        if maxlen is not None and maxlen > 0:
+            count = self._conn.execute("SELECT COUNT(*) FROM lst WHERE k=?", (key,)).fetchone()[0]
+            if count > maxlen:
+                excess = count - maxlen
+                # 删除 seq 最小的 excess 条
+                self._conn.execute(
+                    "DELETE FROM lst WHERE rowid IN ("
+                    "  SELECT rowid FROM lst WHERE k=? ORDER BY seq ASC LIMIT ?"
+                    ")",
+                    (key, excess),
+                )
 
     def list_get(self, key: str, limit: Optional[int] = None) -> List[Any]:
         with self._lock:
@@ -217,6 +246,26 @@ class SqliteBackend(StateBackend):
             pattern = key_prefix + "%"
             self._conn.execute("DELETE FROM kv WHERE k LIKE ?", (pattern,))
             self._conn.execute("DELETE FROM lst WHERE k LIKE ?", (pattern,))
+
+    @contextmanager
+    def transaction(self) -> Iterator[StateBackend]:
+        with self._lock:
+            # 可重入: 已在事务内则直接 yield, 不再开新事务 (sqlite 不允许嵌套 BEGIN).
+            if self._in_txn:
+                yield self
+                return
+            # BEGIN IMMEDIATE: 立刻拿写锁, 跨进程 (WAL + busy_timeout) 让别的 worker 排队,
+            # 整段读改写不被插入 → 跟 in-memory 单锁不变式一致.
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._in_txn = True
+            try:
+                yield self
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+            finally:
+                self._in_txn = False
 
     def close(self) -> None:
         try:

@@ -75,6 +75,23 @@ validate_rules:
         with self.assertRaises(ValueError):
             self.config_manager.validate_config()
 
+    def test_validate_config_bool_range_enum(self):
+        # bool 是 int 的子类: 带 range 的布尔配置应走枚举校验, 不能误入数值 [lo, hi] 比较
+        self.config_manager.load_config(self.temp_config_path)
+
+        # range 为单元素枚举 [True]: True 合法
+        self.assertTrue(
+            self.config_manager.validate_config(
+                {"security.auth_enabled": {"type": "bool", "range": [True]}}
+            )
+        )
+
+        # range 为 [False]: 当前值 True 不在枚举内, 应抛 ValueError 而非走数值分支
+        with self.assertRaises(ValueError):
+            self.config_manager.validate_config(
+                {"security.auth_enabled": {"type": "bool", "range": [False]}}
+            )
+
     def test_backup_and_restore_config(self):
         self.config_manager.load_config(self.temp_config_path)
 

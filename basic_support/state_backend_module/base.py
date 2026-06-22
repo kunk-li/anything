@@ -17,7 +17,8 @@ Backend 实现要保证:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, List, Optional
 
 
 class StateBackend(ABC):
@@ -62,6 +63,30 @@ class StateBackend(ABC):
     def clear(self, key_prefix: Optional[str] = None) -> None:
         """清空状态 (测试用). key_prefix 非空时只清匹配前缀的 key."""
         ...
+
+    # ---------- 原子复合更新 ----------
+    @contextmanager
+    def transaction(self) -> Iterator["StateBackend"]:
+        """让一组 get/set/incr/list_* 调用整体原子地执行 (读改写不被打断).
+
+        调用方需要 "读状态 → 据此改多个 key" 这种复合更新时, 单个 op 各自原子并不够:
+        op 与 op 之间状态会被别的线程/进程插入修改, 造成 lost-update / 状态机串味
+        (例: ModelHealthTracker 在 backend 模式下并发 record_success / record_failure
+        会把 state 与 consecutive_failures 写成互相矛盾的值).
+
+        with backend.transaction():
+            cur = backend.get(k)
+            backend.set(k, f(cur))      # 整段内不会被别的 writer 插入
+
+        语义保证:
+            - 进入到退出之间, 同一 backend 上的其它写操作被阻塞 (互斥)
+            - 块内的 get/set/incr/list_* 是同一事务的一部分, 全部提交或全部回滚
+            - 可重入: transaction() 块内再调 transaction() 不会死锁/嵌套事务报错
+
+        默认实现是 no-op (单 op 后端 / RedisBackend stub 不提供组级原子性).
+        需要跨线程 / 跨进程原子性的后端 (InMemoryBackend / SqliteBackend) 覆写本方法.
+        """
+        yield self
 
     def close(self) -> None:
         """关闭底层连接 (sqlite 句柄 / redis pool). 默认 no-op."""

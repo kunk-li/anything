@@ -84,6 +84,18 @@ class _BaseQuotaBackendTests:
         with self.assertRaises(BlockedError):
             guard.check_and_record("a", cost_usd=0.2)
 
+    def test_daily_usd_blocks_when_accumulated_at_limit_cost_zero(self):
+        """死闸门回归: pre hook 传 cost_usd=0, 累计已达上限的请求必须被拒.
+
+        这正是 hooks 里 quota_pre_llm/quota_pre_tool 的调用形态 (cost_usd=0.0).
+        修复前 daily 闸门只在 cost_usd>0 时判, 累计触顶后这类请求会全部漏过.
+        """
+        guard = QuotaGuard(daily_usd_limit=1.0, backend=self.backend)
+        guard.record_cost("t1", 1.0)  # 累计正好打满
+        with self.assertRaises(BlockedError) as cm:
+            guard.check_and_record("t1", cost_usd=0.0)
+        self.assertEqual(cm.exception.code, "QUOTA_EXCEEDED")
+
     # ---------- global USD ----------
     def test_global_usd_blocks_when_exceeded(self):
         guard = QuotaGuard(global_usd_limit=2.0, backend=self.backend)
@@ -92,6 +104,14 @@ class _BaseQuotaBackendTests:
         # 1.7 + 0.5 > 2.0 → 阻断
         with self.assertRaises(BlockedError) as cm:
             guard.check_and_record("c", cost_usd=0.5)
+        self.assertEqual(cm.exception.code, "QUOTA_EXCEEDED")
+
+    def test_global_usd_blocks_when_accumulated_at_limit_cost_zero(self):
+        """死闸门回归 (global): 累计已达上限时 cost_usd=0 的请求也必须被拒."""
+        guard = QuotaGuard(global_usd_limit=2.0, backend=self.backend)
+        guard.record_cost("a", 2.0)  # 全局累计打满
+        with self.assertRaises(BlockedError) as cm:
+            guard.check_and_record("b", cost_usd=0.0)
         self.assertEqual(cm.exception.code, "QUOTA_EXCEEDED")
 
     # ---------- snapshot ----------
@@ -218,6 +238,65 @@ class TestLegacyModeUnchanged(unittest.TestCase):
         guard.record_cost("t1", 0.8)
         with self.assertRaises(BlockedError):
             guard.check_and_record("t1", cost_usd=0.5)
+
+    def test_default_no_backend_daily_gate_cost_zero(self):
+        """死闸门回归 (in-process): 累计触顶后 cost_usd=0 的请求也被拒."""
+        guard = QuotaGuard(daily_usd_limit=1.0)
+        guard.record_cost("t1", 1.0)
+        with self.assertRaises(BlockedError) as cm:
+            guard.check_and_record("t1", cost_usd=0.0)
+        self.assertEqual(cm.exception.code, "QUOTA_EXCEEDED")
+
+
+class TestLoadQuotaFromEnv(unittest.TestCase):
+    """install_quota_hooks 读 env 时对脏值的鲁棒性 (invalid => disabled, 不炸)."""
+
+    def setUp(self):
+        self._saved = {
+            k: os.environ.get(k)
+            for k in (
+                "ANYTHING_QUOTA_DAILY_USD",
+                "ANYTHING_QUOTA_GLOBAL_USD",
+                "ANYTHING_QUOTA_RATE_PER_MIN",
+            )
+        }
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_malformed_env_disables_instead_of_crashing(self):
+        from quota_module.impl import _load_quota_from_env
+        os.environ["ANYTHING_QUOTA_DAILY_USD"] = "abc"      # 非数字
+        os.environ["ANYTHING_QUOTA_GLOBAL_USD"] = ""         # 空串
+        os.environ["ANYTHING_QUOTA_RATE_PER_MIN"] = "30.5"   # int 无法解析
+        guard = _load_quota_from_env()  # 不应抛
+        self.assertIsNone(guard.daily_usd_limit)
+        self.assertIsNone(guard.global_usd_limit)
+        self.assertIsNone(guard.rate_per_minute)
+
+    def test_valid_env_parsed(self):
+        from quota_module.impl import _load_quota_from_env
+        os.environ["ANYTHING_QUOTA_DAILY_USD"] = "10.0"
+        os.environ["ANYTHING_QUOTA_GLOBAL_USD"] = "100"
+        os.environ["ANYTHING_QUOTA_RATE_PER_MIN"] = "30"
+        guard = _load_quota_from_env()
+        self.assertEqual(guard.daily_usd_limit, 10.0)
+        self.assertEqual(guard.global_usd_limit, 100.0)
+        self.assertEqual(guard.rate_per_minute, 30)
+
+    def test_zero_and_negative_env_disabled(self):
+        from quota_module.impl import _load_quota_from_env
+        os.environ["ANYTHING_QUOTA_DAILY_USD"] = "0"
+        os.environ["ANYTHING_QUOTA_GLOBAL_USD"] = "-5"
+        os.environ.pop("ANYTHING_QUOTA_RATE_PER_MIN", None)
+        guard = _load_quota_from_env()
+        self.assertIsNone(guard.daily_usd_limit)
+        self.assertIsNone(guard.global_usd_limit)
+        self.assertIsNone(guard.rate_per_minute)
 
 
 if __name__ == "__main__":
