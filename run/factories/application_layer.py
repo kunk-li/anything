@@ -48,8 +48,16 @@ def _build_scheduler(handler: Any, deps: BasicDeps) -> Optional[TaskScheduler]:
     log = deps.logger
     tasks: list = []
 
-    sched_cfg = cfg.get_config("scheduler", {}) or {}
-    for t in (sched_cfg.get("tasks") or []):
+    # fail-safe: 顶层 scheduler 块可能被写成非 dict (字符串/数字/列表) — 直接 .get 会
+    # AttributeError 崩启动; tasks 也可能被写成非 list (dict/int) — for 迭代会 TypeError。
+    # 两处都按类型兜底 (非预期类型当空), 守住"不阻断启动"契约。
+    sched_cfg = cfg.get_config("scheduler", {})
+    if not isinstance(sched_cfg, dict):
+        sched_cfg = {}
+    raw_tasks = sched_cfg.get("tasks")
+    if not isinstance(raw_tasks, list):
+        raw_tasks = []
+    for t in raw_tasks:
         if isinstance(t, dict):
             tasks.append(t)
 
@@ -171,7 +179,15 @@ def build_application_layer(
 
         # 方向1/4: 接线 TaskScheduler (默认关 — 无配置定时任务时返 None, 不起线程)。
         # 让 /scheduler/* 路由真正可用 + 自维护扫描 (reconcile/consolidate/prune / 全域) 能定时触发。
-        scheduler = _build_scheduler(handler, deps)
+        # fail-safe: 调度构建/启动任何意外失败都不阻断 API 启动 (契约: scheduler 出问题 → 降级到 None,
+        # 下游已全程兼容 None), 兜底 WARN 不抛。
+        try:
+            scheduler = _build_scheduler(handler, deps)
+        except Exception as e:
+            scheduler = None
+            _sched_log = getattr(deps, "logger", None)
+            if _sched_log:
+                _sched_log.warning(f"[scheduler] 构建失败, 已降级 (不阻断启动): {e}")
 
         result["api_service"] = ApiService(
             handler=handler,

@@ -21,6 +21,18 @@ def test_topk_command_changes_state() -> None:
     assert app.session.top_k == 9
 
 
+def test_topk_command_rejects_above_schema_limit(capsys) -> None:
+    """top_k 上界须与 schema_module (le=50) 对齐: >50 应被拒, 不改 state."""
+    app = ConsoleApp(handler=DummyHandler())
+    app.handle_command(app.parse_input("/topk 80"))
+    assert app.session.top_k == 5  # 默认值未被改动
+    out = capsys.readouterr().out
+    assert "[1,50]" in out
+    # 边界 50 仍可接受
+    app.handle_command(app.parse_input("/topk 50"))
+    assert app.session.top_k == 50
+
+
 def test_attach_and_clear() -> None:
     app = ConsoleApp(handler=DummyHandler())
     app.handle_command(app.parse_input("/attach ./a.pdf"))

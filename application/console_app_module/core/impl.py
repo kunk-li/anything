@@ -208,8 +208,11 @@ class ConsoleApp(BaseConsoleApp):
         except (ValueError, TypeError):
             print(f"[error] top_k 必须是整数, 收到 {arg!r}")
             return
-        if k < 1 or k > 100:
-            print(f"[error] top_k 应在 [1,100], 收到 {k}")
+        # 上界与 schema_module.RequestEnvelope (top_k: ge=1, le=50) 对齐:
+        # 控制台放行 >50 会让 build_request 出一个"看着合法"的请求, 却在接口层
+        # schema 校验阶段被拒. 两处必须同界, 故此处固定为 50 (schema 是唯一真值源).
+        if k < 1 or k > 50:
+            print(f"[error] top_k 应在 [1,50], 收到 {k}")
             return
         self.session.top_k = k
         print(f"top_k -> {k}")
@@ -459,8 +462,11 @@ class ConsoleApp(BaseConsoleApp):
         while True:
             try:
                 raw = self._read_input(">>> ")
+                # provider 返回 None = EOF / 输入耗尽 -> 收尾退出, 不能 continue
+                # (注入 ListInputProvider/StdinInputProvider 时, continue 会空转死循环).
                 if raw is None:
-                    continue
+                    print("\n已退出控制台.")
+                    break
                 if not raw.strip():
                     continue
 
@@ -482,7 +488,9 @@ class ConsoleApp(BaseConsoleApp):
                 except Exception:
                     pass
 
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, EOFError):
+                # 默认 input() 在 EOF (管道结束/Ctrl-D) 抛 EOFError; 若不显式捕获
+                # 并 break, 主循环会被外层 except Exception 接住后无限重试 -> 死循环.
                 print("\n已退出控制台.")
                 break
             except Exception as e:
@@ -569,10 +577,17 @@ class ConsoleApp(BaseConsoleApp):
         mode = mode or self.default_render_mode
 
         if self.renderer is not None and hasattr(self.renderer, "render"):
-            try:
-                return self.renderer.render(response, mode=mode)
-            except Exception:
-                pass
+            # 注入的 renderer 走 BaseRenderer 契约: render(response, verbose=bool)
+            # -> ConsoleRenderResult. 这里负责把结构化结果落成可打印文本.
+            # raw 模式仍走下面的内置 json 分支, 不经 renderer.
+            if mode != "raw":
+                try:
+                    result = self.renderer.render(response, verbose=(mode != "brief"))
+                    return self._render_result_to_text(result)
+                except Exception as e:
+                    # 不再吞掉 renderer 故障: 记 warning 让坏掉的 renderer 可见,
+                    # 再 fall through 到内置文本渲染兜底.
+                    self.logger.warning(f"[console] 注入 renderer 渲染失败, 回退内置渲染: {e}")
 
         code = response.get("code", "UNKNOWN_ERROR")
         trace_id = response.get("trace_id")
@@ -618,6 +633,25 @@ class ConsoleApp(BaseConsoleApp):
                 lines.append(f"details: {details}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _render_result_to_text(result: "ConsoleRenderResult") -> str:
+        """把 BaseRenderer 返回的 ConsoleRenderResult 落成可打印文本.
+
+        ConsoleRenderResult 是纯 dataclass (无自定义 __str__), 故这里手动拼
+        title / body / footer 三段. body 是主体, title/footer 为可选装饰.
+        """
+        parts: List[str] = []
+        title = getattr(result, "title", None)
+        body = getattr(result, "body", None)
+        footer = getattr(result, "footer", None)
+        if title:
+            parts.append(str(title))
+        if body:
+            parts.append(str(body))
+        if footer:
+            parts.append(str(footer))
+        return "\n".join(parts)
+
     # =========================
     # 内部辅助方法
     # =========================
@@ -637,8 +671,15 @@ class ConsoleApp(BaseConsoleApp):
         return standardized
 
     def _read_input(self, prompt: str = "") -> Optional[str]:
-        """读取输入，优先使用注入的 input_provider"""
+        """读取输入，优先使用注入的 input_provider.
+
+        provider 契约 (adapters.input_provider.BaseInputProvider) 暴露
+        read_line(prompt) -> Optional[str], EOF/输入耗尽时返回 None. 故先探
+        read_line, 再退回历史的 read / callable 形态, 最后才是内置 input().
+        """
         if self.input_provider is not None:
+            if hasattr(self.input_provider, "read_line"):
+                return self.input_provider.read_line(prompt)
             if hasattr(self.input_provider, "read"):
                 return self.input_provider.read(prompt)
             if callable(self.input_provider):

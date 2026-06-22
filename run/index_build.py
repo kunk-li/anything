@@ -367,6 +367,19 @@ def rebuild_index(
     skipped: List[Dict[str, Any]] = []
     for i, item in enumerate(docs):
         doc_id = (item or {}).get("doc_id")
+        # 会话附件 (scope=chat) 不进全局检索索引 (镜像 build_index 的 store_only 排除),
+        # 否则重建会把聊天附件灌回向量库/BM25, 破坏检索隔离不变量。
+        if (item or {}).get("scope") == "chat":
+            skipped.append({
+                "doc_id": doc_id,
+                "reason": "scope=chat (session attachment, excluded from global index)",
+            })
+            if progress_cb is not None:
+                try:
+                    progress_cb(i + 1, total)
+                except Exception:
+                    pass
+            continue
         document = store.get_document(doc_id) if doc_id else None
         content = (document or {}).get("content") or ""
         file_name = (document or {}).get("file_name") or "unknown.txt"

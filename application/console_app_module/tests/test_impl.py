@@ -44,3 +44,34 @@ def test_render_response_contains_answer() -> None:
         }
     )
     assert "abc" in result.body
+
+
+def test_injected_input_provider_read_line_is_used() -> None:
+    """注入的 ListInputProvider (read_line 契约) 必须被消费, 而不是被 input() 顶替.
+    /exit 后主循环退出 — 若 provider 被忽略走 input() 会在 EOF 死循环/卡住."""
+    from console_app_module.adapters.input_provider import ListInputProvider
+    provider = ListInputProvider(["/topk 7", "/exit"])
+    app = ConsoleApp(handler=DummyHandler(), input_provider=provider)
+    app.run_interactive()  # 必须正常返回, 不挂起
+    assert app.session.top_k == 7
+
+
+def test_interactive_stops_on_input_exhaustion() -> None:
+    """provider 输入耗尽返回 None = EOF 语义, 主循环应退出而非空转死循环."""
+    from console_app_module.adapters.input_provider import ListInputProvider
+    provider = ListInputProvider(["/mode agent"])  # 没有 /exit, 靠耗尽收尾
+    app = ConsoleApp(handler=DummyHandler(), input_provider=provider)
+    app.run_interactive()  # 不应挂起
+    assert app.session.mode == "agent"
+
+
+def test_injected_renderer_output_is_used() -> None:
+    """注入的 BaseRenderer 子类 (render -> ConsoleRenderResult) 渲染结果应真正落成
+    文本被打印, 而不是被 except-pass 吞掉返回 None."""
+    from console_app_module.adapters.renderer import PlainRenderer
+    app = ConsoleApp(handler=DummyHandler(), renderer=PlainRenderer())
+    text = app._render_text(
+        {"code": "SUCCESS", "message": "ok", "data": {"answer": "hello-render"}, "trace_id": "t"}
+    )
+    assert text  # 不再是 None / 空
+    assert "hello-render" in text
