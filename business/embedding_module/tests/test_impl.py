@@ -73,6 +73,38 @@ class TestEmbeddingModule(unittest.TestCase):
         self.assertEqual(resp.code, "SUCCESS")
         self.assertEqual(len(resp.vector_result), 1)
 
+    @patch("embedding_module.core.impl.SentenceTransformer", DummySentenceTransformer)
+    def test_call_embedding_batch_size_override_is_not_persisted(self):
+        # per-request batch_size 覆盖只能影响本次 encode, 不得回写到共享的
+        # self.default_batch_size (长生命周期单例 + 并发下会状态污染/竞态)。
+        recorded = []
+
+        class RecordingST(DummySentenceTransformer):
+            def encode(self, texts, batch_size: int = 32, **kwargs):
+                recorded.append(batch_size)
+                return super().encode(texts, batch_size=batch_size, **kwargs)
+
+        with patch("embedding_module.core.impl.SentenceTransformer", RecordingST):
+            emb = STEmbedding()
+            original_default = emb.default_batch_size
+
+            req = EmbeddingRequest(
+                input_type="BATCH",
+                batch_texts=["a", "b"],
+                batch_size=original_default + 7,
+            )
+            resp = emb.call_embedding(req)
+            self.assertEqual(resp.code, "SUCCESS")
+            # 本次 encode 收到的是 per-request 覆盖值
+            self.assertIn(original_default + 7, recorded)
+            # 共享默认值未被污染
+            self.assertEqual(emb.default_batch_size, original_default)
+
+            # 后续不带覆盖的请求仍用原始默认值, 证明无残留状态
+            recorded.clear()
+            emb.call_embedding(EmbeddingRequest(input_type="BATCH", batch_texts=["c"]))
+            self.assertIn(original_default, recorded)
+
     def test_normalize_vector(self):
         vector = normalize_vector([3.0, 4.0])
         self.assertAlmostEqual(vector[0], 0.6, places=6)

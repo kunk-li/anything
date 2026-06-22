@@ -174,12 +174,16 @@ class STEmbedding(_BaseEmbeddingImpl):
             self.logger.exception("本地单条文本向量化失败")
             raise RAGException("EMBEDDING_CALL_FAILED", f"本地单条文本向量化失败：{exc}") from exc
 
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def embed_texts(
+        self,
+        texts: List[str],
+        batch_size: Optional[int] = None,
+    ) -> List[List[float]]:
         try:
             cleaned = clean_texts(texts)
             vectors = self.model.encode(
                 cleaned,
-                batch_size=self.default_batch_size,
+                batch_size=self.default_batch_size if batch_size is None else int(batch_size),
                 normalize_embeddings=False,
                 convert_to_numpy=False,
             )
@@ -230,20 +234,23 @@ class STEmbedding(_BaseEmbeddingImpl):
             if input_type == "BATCH":
                 if not request.batch_texts:
                     raise RAGException("PARAM_MISSING", "batch_texts 不能为空")
-                if request.batch_size:
-                    self.default_batch_size = int(request.batch_size)
+                # per-request 覆盖只用局部变量, 不回写共享的 self.default_batch_size
+                # (实例多为长生命周期单例, 回写会污染后续所有请求且并发下竞态)。
+                effective_batch = (
+                    int(request.batch_size) if request.batch_size else self.default_batch_size
+                )
                 # 同 SINGLE: normalize=False 不再先 embed_texts() 编码又丢弃
                 if normalize is False:
                     cleaned = clean_texts(request.batch_texts)
                     raw_vectors = self.model.encode(
                         cleaned,
-                        batch_size=self.default_batch_size,
+                        batch_size=effective_batch,
                         normalize_embeddings=False,
                         convert_to_numpy=False,
                     )
                     vectors = [[float(v) for v in vector] for vector in raw_vectors]
                 else:
-                    vectors = self.embed_texts(request.batch_texts)
+                    vectors = self.embed_texts(request.batch_texts, batch_size=effective_batch)
                 return self._build_success_response(vectors, start_time, trace_id)
 
             raise RAGException("PARAM_INVALID", "input_type 仅支持 SINGLE 或 BATCH")

@@ -164,6 +164,30 @@ class TestBM25Retriever(unittest.TestCase):
         r2 = bm25.query("beta", top_k=3)
         self.assertEqual(r2[0]["chunk_id"], "c1")
 
+    def test_reindex_with_punctuation_only_keeps_state_consistent(self):
+        """同 chunk_id 用纯标点(零 token)内容二次 add: 不能破坏 _total_tokens
+        与 _doc_lens 的自洽, 也不能留下查不到的孤儿条目。"""
+        bm25 = BM25Retriever()
+        bm25.add_chunks([
+            {"chunk_id": "c1", "doc_id": "d", "content": "alpha beta gamma"},
+            {"chunk_id": "c2", "doc_id": "d", "content": "delta"},
+        ])
+        # _total_tokens 始终等于 sum(_doc_lens)
+        self.assertEqual(bm25._total_tokens, sum(bm25._doc_lens.values()))
+        before_tokens = bm25._total_tokens
+        before_len = bm25._doc_lens["c1"]
+        # 用纯标点(tokenize → []) 重新 add 同一个 cid
+        bm25.add_chunks([{"chunk_id": "c1", "doc_id": "d", "content": "!!! ??? ..."}])
+        # 旧条目保持原样: doc_len 不变, total_tokens 不变, 仍与 doc_lens 自洽
+        self.assertEqual(bm25._doc_lens["c1"], before_len)
+        self.assertEqual(bm25._total_tokens, before_tokens)
+        self.assertEqual(bm25._total_tokens, sum(bm25._doc_lens.values()))
+        # 没有孤儿: 原内容仍可检索
+        r = bm25.query("alpha", top_k=3)
+        self.assertEqual(r[0]["chunk_id"], "c1")
+        # avg_doc_len 仍健康 (> 0)
+        self.assertGreater(bm25.avg_doc_len, 0)
+
     def test_save_load_roundtrip(self):
         bm25 = BM25Retriever()
         bm25.add_chunks(self._make_corpus())

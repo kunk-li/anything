@@ -209,8 +209,14 @@ class SimpleRAG(
                 )
 
         # 6. 可选 rerank (用 effective_query 而非 original)
+        # 把生效的 top_k 透传给 rerank: 之前 _apply_rerank 硬截到 self.top_k_rerank(默认 8),
+        # 当请求 top_k > 8 时会在此处被悄悄削顶, 第 7 步的 chunks[:top_k] 永远拿不到更多候选。
+        # 现以 max(top_k, top_k_rerank) 为重排上限(请求要少时仍保留 rerank 候选下限),
+        # 真正的截断权威交给第 7 步唯一的 chunks[:top_k]。
         if self.enable_rerank and self.reranker is not None and chunks:
-            chunks = self._apply_rerank(query=effective_query, chunks=chunks, trace_id=trace_id)
+            chunks = self._apply_rerank(
+                query=effective_query, chunks=chunks, top_k=top_k, trace_id=trace_id,
+            )
 
         # 7. 按 top_k 截断为生成候选
         final_chunks = chunks[:top_k] if top_k > 0 else chunks

@@ -83,15 +83,20 @@ class BM25Retriever:
                 content = c.get("content") or ""
                 if not cid or not content:
                     continue
-                # 同 chunk_id 重复: 先减掉旧贡献
+                # 先 tokenize 再动状态: content 可能全是标点 → tokens 为空。
+                # 若先减旧贡献/摘 posting 再 continue, 会让 _total_tokens 与
+                # _doc_lens 失配, 并在 _chunk_meta 留下查不到的孤儿条目。
+                tokens = tokenize(content)
+                if not tokens:
+                    # 内容无可索引 token: 不写新条目。已存在的旧条目保持原样
+                    # (不减贡献、不摘 posting), 状态全程自洽。
+                    continue
+                # 同 chunk_id 重复: 此处已确定要写新条目, 先减掉旧贡献
                 if cid in self._doc_lens:
                     self._total_tokens -= self._doc_lens[cid]
                     for term, postings in self._inverted.items():
                         postings.pop(cid, None)
-                # 重新统计 token freq
-                tokens = tokenize(content)
-                if not tokens:
-                    continue
+                # 统计 token freq
                 tf: Dict[str, int] = {}
                 for t in tokens:
                     tf[t] = tf.get(t, 0) + 1

@@ -22,6 +22,7 @@ class RagSessionMemoryMixin:
         """从 state_store 读最近 N 轮对话, 返回 [{role,content}, ...] 形式.
 
         - 未注入 state_store / session_id 为空 / history_max_turns=0 时返回 []
+        - 只认 _save_turn 写的 type=="rag" 事件 (共享 session 上别的模块也会写对话事件)
         - 只保留 role/content 字段, 不带 timestamp 等元信息 (LLM 不需要)
         - 严格按 N 轮 (= 2N 条 message, user+assistant 各算 1) 截断
         """
@@ -35,18 +36,25 @@ class RagSessionMemoryMixin:
         if not isinstance(state, dict):
             return []
         events = state.get("events") or []
-        # 截断到最近 2N 条
         max_msgs = self.history_max_turns * 2
-        if len(events) > max_msgs:
-            events = events[-max_msgs:]
+        # 先按 type=="rag" + role 过滤, 再截断 (顺序很关键)。
+        # events 是按 session_id 共享的混合事件链: 同一会话上 agent_module 也会
+        # append role=user/assistant 的对话事件 (type=agent/execution_mode), 还有
+        # ReAct 状态事件。只认 _save_turn 自己写的 type=="rag" 事件, 否则会把别的
+        # 模块的对话轮当成 RAG 历史喂给 LLM。且必须过滤后再取最近 2N 条, 否则末尾的
+        # 跨模块事件会把真正的 RAG 对话轮挤出截断窗口。
         messages: List[Dict[str, str]] = []
         for ev in events:
             if not isinstance(ev, dict):
+                continue
+            if ev.get("type") != "rag":
                 continue
             role = ev.get("role")
             content = ev.get("content")
             if role in ("user", "assistant") and isinstance(content, str) and content:
                 messages.append({"role": role, "content": content})
+        if len(messages) > max_msgs:
+            messages = messages[-max_msgs:]
         return messages
 
     def _save_turn(

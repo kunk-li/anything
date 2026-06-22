@@ -214,6 +214,38 @@ class TestRAGHistoryMemory(_ut.TestCase):
         self.assertEqual(rag._load_history("sA")[0]["content"], "qA")
         self.assertEqual(rag._load_history("sB")[0]["content"], "qB")
 
+    def test_load_history_ignores_non_rag_events(self):
+        """共享 session 上 agent_module 也写 role=user/assistant 事件 (type!=rag).
+        _load_history 只能认自己 _save_turn 写的 type==rag 事件, 否则把别的模块的
+        对话轮当成 RAG 历史。"""
+        rag, store = self._make_rag()
+        # agent_module 风格的对话事件 (有 role, 但 type 不是 rag)
+        store.append_event("sX", {"role": "user", "content": "agent问题", "type": "agent"})
+        store.append_event("sX", {"role": "assistant", "content": "agent回答", "type": "agent"})
+        # 没有 type 字段的裸事件也不能算 RAG 历史
+        store.append_event("sX", {"role": "user", "content": "裸问题"})
+        # RAG 自己的一轮
+        rag._save_turn("sX", "rag问题", "rag回答")
+        hist = rag._load_history("sX")
+        self.assertEqual(hist, [
+            {"role": "user", "content": "rag问题"},
+            {"role": "assistant", "content": "rag回答"},
+        ])
+
+    def test_load_history_truncates_after_filtering(self):
+        """先过滤 type==rag 再截断: 末尾大量跨模块事件不能把真正的 RAG 轮挤出窗口。"""
+        rag, store = self._make_rag(history_max_turns=2)
+        rag._save_turn("sY", "q0", "a0")
+        rag._save_turn("sY", "q1", "a1")
+        # 之后别的模块灌入一堆事件 (远超 max_turns*2 窗口)
+        for i in range(50):
+            store.append_event("sY", {"role": "user", "content": f"noise{i}", "type": "agent"})
+        hist = rag._load_history("sY")
+        # 仍拿到最近 2 轮 RAG 对话 (= 4 条), 跨模块噪声被滤掉
+        self.assertEqual(len(hist), 4)
+        self.assertEqual(hist[0]["content"], "q0")
+        self.assertEqual(hist[-1]["content"], "a1")
+
     def test_build_prompt_includes_history(self):
         history = [
             {"role": "user", "content": "刚刚问了什么"},
@@ -403,6 +435,99 @@ class TestHybridRetrieval(_ut2.TestCase):
         self.assertIsInstance(chunks, list)
         ids = [c["chunk_id"] for c in chunks]
         self.assertIn("c_vec_only", ids)
+
+    def test_hybrid_old_signature_internal_error_is_silent(self):
+        """老签名 retriever (无 allowed_doc_ids) 内部抛错也应仅 WARN 不中断检索.
+
+        回归: 旧实现用 `except TypeError` 当签名探针, 老签名 retriever 内部真抛
+        TypeError 时, 兜底调用未被 try 包住会把异常透传出去, 违反"失败不抛"契约。
+        """
+        rag, _ = self._make_rag_with_hybrid()
+
+        class _OldSigBM25:
+            size = 5
+
+            def query(self, query_text, top_k=10):
+                # 老签名 (无 allowed_doc_ids), 但内部逻辑炸了 (含 TypeError)
+                raise TypeError("internal scoring bug")
+
+        rag.bm25_retriever = _OldSigBM25()
+        chunks = rag.retrieve({"query": "x", "top_k": 5, "trace_id": "t1"})
+        # 不应透传异常, 应降级走向量路
+        self.assertIsInstance(chunks, list)
+        self.assertIn("c_vec_only", [c["chunk_id"] for c in chunks])
+
+    def test_hybrid_old_signature_no_kwargs_is_used_without_allowed_doc_ids(self):
+        """老签名 retriever 应被识别并以无 allowed_doc_ids 的方式调用 (正常返回)."""
+        rag, _ = self._make_rag_with_hybrid()
+
+        calls = {}
+
+        class _OldSigBM25:
+            size = 5
+
+            def query(self, query_text, top_k=10):
+                calls["kw_seen"] = True
+                return [{"chunk_id": "c_old", "doc_id": "d9", "file_name": "o.md",
+                         "chunk_index": 0, "content": "old sig hit", "score": 0.5}]
+
+        rag.bm25_retriever = _OldSigBM25()
+        chunks = rag.retrieve({"query": "x", "top_k": 5, "trace_id": "t1"})
+        self.assertTrue(calls.get("kw_seen"))
+        self.assertIn("c_old", [c["chunk_id"] for c in chunks])
+
+
+# ==========================================
+# Rerank top_k 契约 — 请求 top_k > top_k_rerank 不应被 rerank 步骤悄悄削顶
+# ==========================================
+class _CapturingReranker:
+    """记录 rerank() 收到的 top_k, 原样返回候选 (保持顺序) 用于断言截断逻辑."""
+
+    def __init__(self):
+        self.seen_top_k = None
+
+    def rerank(self, query, candidates, top_k=8):
+        self.seen_top_k = top_k
+        return list(candidates)[:top_k]
+
+
+class TestRerankTopKContract(unittest.TestCase):
+    """回归: rerank 步骤之前硬截到 self.top_k_rerank(默认 8), 请求更大 top_k 被悄悄削顶."""
+
+    def _make_rag(self, n_results):
+        vec_results = [
+            {"chunk_id": f"c{i}", "doc_id": "d1", "file_name": "v.md",
+             "chunk_index": i, "content": f"chunk {i}", "score": 1.0 - i * 0.01}
+            for i in range(n_results)
+        ]
+        reranker = _CapturingReranker()
+        rag = SimpleRAG(
+            llm_client=MockLLMClient(),
+            embedding=_MockEmbedding(),
+            vector_db=_MockVectorDB(vec_results),
+            reranker=reranker,
+        )
+        rag.enable_rerank = True
+        return rag, reranker
+
+    def test_request_top_k_larger_than_top_k_rerank_is_honored(self):
+        """请求 top_k=15 > top_k_rerank(8): rerank 不应把候选削到 8, 最终应返回 15 条."""
+        rag, reranker = self._make_rag(n_results=20)
+        self.assertEqual(rag.top_k_rerank, 8)  # 前置: 确认默认上限 8
+        chunks = rag.retrieve({"query": "q", "top_k": 15, "trace_id": "t1"})
+        # 修复前: rerank 削到 8, 这里只能拿到 8 条; 修复后应拿满 15 条
+        self.assertEqual(len(chunks), 15)
+        # rerank 应以 max(15, 8)=15 为上限被调用, 而非硬编码的 8
+        self.assertEqual(reranker.seen_top_k, 15)
+
+    def test_request_top_k_smaller_keeps_top_k_rerank_floor(self):
+        """请求 top_k=3 < top_k_rerank(8): rerank 仍以 8 为候选下限, 最终由 chunks[:3] 截断."""
+        rag, reranker = self._make_rag(n_results=20)
+        chunks = rag.retrieve({"query": "q", "top_k": 3, "trace_id": "t1"})
+        # 最终输出按请求 top_k=3 截断 (retrieve 第 7 步权威裁剪)
+        self.assertEqual(len(chunks), 3)
+        # rerank 候选下限仍是 top_k_rerank=8 (max(3, 8))
+        self.assertEqual(reranker.seen_top_k, 8)
 
 
 # ==========================================

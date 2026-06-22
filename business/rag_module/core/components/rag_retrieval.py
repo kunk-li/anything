@@ -9,6 +9,7 @@ RagRetrievalMixin (从 impl.py 拆出 — 检索机制, 零行为变更)
 """
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any, Dict, List, Optional
 
@@ -130,17 +131,37 @@ class RagRetrievalMixin:
         if self.bm25_retriever is None or not query_text:
             return []
         try:
-            hits = self.bm25_retriever.query(
-                query_text=query_text, top_k=top_k, allowed_doc_ids=allowed_doc_ids,
-            )
-        except TypeError:
-            # 老签名 retriever (无 allowed_doc_ids) 兼容
-            hits = self.bm25_retriever.query(query_text=query_text, top_k=top_k)
+            # 结构化探测签名是否支持 allowed_doc_ids — 不再用 TypeError 当探针,
+            # 否则 retriever 内部真实抛出的 TypeError 会被误判为"老签名"并错误重试。
+            if self._bm25_supports_allowed_doc_ids():
+                hits = self.bm25_retriever.query(
+                    query_text=query_text, top_k=top_k, allowed_doc_ids=allowed_doc_ids,
+                )
+            else:
+                # 老签名 retriever (无 allowed_doc_ids) 兼容
+                hits = self.bm25_retriever.query(query_text=query_text, top_k=top_k)
         except Exception as e:
             self.logger.warning(f"BM25 检索失败 (忽略): trace_id={trace_id}, err={e}")
             return []
         normalized = [self._normalize_retrieved_item(h) for h in (hits or [])]
         return [c for c in normalized if c is not None]
+
+    def _bm25_supports_allowed_doc_ids(self) -> bool:
+        """结构化判断 bm25_retriever.query 是否接受 allowed_doc_ids 关键字。
+
+        用 inspect.signature 而非 TypeError 探针:
+        - 有显式 allowed_doc_ids 形参 → True
+        - 有 **kwargs 兜底 (如 def query(self, **kw)) → True (能吃任意 kw)
+        - 无法 introspect (内建/C 实现) → 默认 True, 由调用处 try/except 兜底降级。
+        """
+        try:
+            sig = inspect.signature(self.bm25_retriever.query)
+        except (TypeError, ValueError):
+            return True
+        params = sig.parameters
+        if "allowed_doc_ids" in params:
+            return True
+        return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
     def _hybrid_merge(
         self,
@@ -243,13 +264,21 @@ class RagRetrievalMixin:
         self,
         query: str,
         chunks: List[Dict[str, Any]],
-        trace_id: Optional[str],
+        top_k: Optional[int] = None,
+        trace_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """按 BaseReranker.rerank(query, candidates, top_k) 契约调用,失败时退化原顺序。"""
+        """按 BaseReranker.rerank(query, candidates, top_k) 契约调用,失败时退化原顺序。
+
+        rerank 上限取 max(请求 top_k, self.top_k_rerank): 请求要的比 top_k_rerank 多时按请求
+        放行(否则 retrieve() 第 7 步的 chunks[:top_k] 拿不到足量候选, 大 top_k 被悄悄削顶);
+        请求要的更少或未指定时仍以 top_k_rerank 作为重排候选下限。最终截断权威交给
+        retrieve() 的 chunks[:top_k] 单点裁剪, 这里只重排 + 不过度削顶。
+        """
+        limit = self.top_k_rerank if top_k is None else max(int(top_k), self.top_k_rerank)
         try:
-            result = self.reranker.rerank(query, chunks, top_k=self.top_k_rerank)
+            result = self.reranker.rerank(query, chunks, top_k=limit)
             if isinstance(result, list) and result:
-                return result[: self.top_k_rerank]
+                return result[:limit]
         except Exception as e:
             self.logger.warning(f"Rerank 失败，退回原检索顺序：trace_id={trace_id}, error={str(e)}")
-        return chunks[: self.top_k_rerank]
+        return chunks[:limit]
