@@ -10,6 +10,7 @@ import unittest
 
 from agent_module.tools.external import (
     HttpToolSpec, HttpToolProvider, make_http_tool,
+    McpToolProvider, McpServerSpec,
     register_external_tools, build_providers_from_config,
 )
 
@@ -129,6 +130,47 @@ class TestProviderAndRegister(unittest.TestCase):
             def get_config(self, k, default=None): return default
         self.assertEqual(build_providers_from_config(_Cfg()), [])
         self.assertEqual(build_providers_from_config(None), [])
+
+    def test_build_mcp_http_server_discoverable(self):
+        # http transport MCP server: 必填是 url 而非 command —— 不应被静默丢弃 (死功能修复)
+        class _Cfg:
+            def get_config(self, k, default=None):
+                if k == "agent.mcp_servers":
+                    return [{"name": "remote", "transport": "http",
+                             "url": "https://1.1.1.1/mcp", "junk_key": 1}]
+                return default
+        providers = build_providers_from_config(_Cfg())
+        self.assertEqual(len(providers), 1)
+        self.assertIsInstance(providers[0], McpToolProvider)
+        specs = providers[0].specs
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].name, "remote")
+        self.assertEqual(specs[0].transport, "http")
+        self.assertEqual(specs[0].url, "https://1.1.1.1/mcp")
+
+    def test_build_mcp_stdio_server_discoverable(self):
+        # stdio transport (默认): 必填 command, 无 url
+        class _Cfg:
+            def get_config(self, k, default=None):
+                if k == "agent.mcp_servers":
+                    return [{"name": "local", "command": "npx", "args": ["mcp-server"]}]
+                return default
+        providers = build_providers_from_config(_Cfg())
+        self.assertEqual(len(providers), 1)
+        specs = providers[0].specs
+        self.assertEqual(specs[0].name, "local")
+        self.assertEqual(specs[0].transport, "stdio")
+        self.assertEqual(specs[0].command, "npx")
+
+    def test_build_mcp_missing_endpoint_dropped(self):
+        # stdio 缺 command / http 缺 url 都应被过滤 (各自端点必填)
+        class _Cfg:
+            def get_config(self, k, default=None):
+                if k == "agent.mcp_servers":
+                    return [{"name": "no_cmd"},                                   # stdio 缺 command
+                            {"name": "http_no_url", "transport": "http"}]         # http 缺 url
+                return default
+        self.assertEqual(build_providers_from_config(_Cfg()), [])
 
 
 if __name__ == "__main__":

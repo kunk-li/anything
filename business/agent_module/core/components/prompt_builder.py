@@ -45,6 +45,7 @@ class PromptBuilderMixin:
             max_iterations: int,
             tool_descriptions: Optional[Dict[str, str]] = None,
             project_root: Optional[str] = None,
+            match_text: Optional[str] = None,
     ) -> str:
         """构造 ReAct prompt: 任务 + 工具 + 历史 + 期望输出格式.
 
@@ -53,6 +54,10 @@ class PromptBuilderMixin:
 
         Task U (#55): 顶部注入 ProjectMemory (AGENTS.md / CLAUDE.md).
         Task AA (#61): 命中关键字时拼上对应 skill body.
+
+        match_text: 用于 skill trigger 匹配的文本; 默认 = task。调用方应传"用户原始问题"
+        (未注入记忆/画像/历史/附件的原话), 否则注入进 task 的那些文本会误触发或抑制 skill 命中
+        (trigger 是子串匹配, 一条画像 fact 里出现 trigger 词就会假命中)。不传时回退 task 保持向后兼容。
         """
         tool_descriptions = tool_descriptions or {}
         fallback_docs = {
@@ -116,10 +121,13 @@ class PromptBuilderMixin:
             memory_block = ""
 
         # Task AA (#61): 命中的 skill body 拼到 prompt 顶部 (trigger 自动注入)
+        # 用 match_text(= 用户原始问题) 匹配, 不用已注入记忆/画像/历史/附件的 task,
+        # 否则注入文本会改变 trigger 命中 (子串匹配); 不传时回退 task。
+        _match_text = match_text if match_text is not None else task
         matched = []
         skills_block = ""
         try:
-            matched = get_skill_registry().match(task or "")
+            matched = get_skill_registry().match(_match_text or "")
             if matched:
                 # 借用 inject_skills_into_prompt 拼好的格式, 但只截 <Skills>...</Skills> 段
                 wrapped = inject_skills_into_prompt("__TASK_PH__", matched, max_skills=3)

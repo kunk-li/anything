@@ -26,16 +26,17 @@ def make_spawn_subagent_tool(parent_agent: Any) -> Callable[..., Dict[str, Any]]
     但通过 allowed_tools 限制可见工具集. ReAct 跑完后把 final_answer 包装成
     标准 tool 返回结构 (code/data/success).
     """
-    def spawn_subagent(
-        role: Optional[str] = None,
-        task: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        max_iterations: Optional[int] = None,
-        trace_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        extra_params: Optional[Dict[str, Any]] = None,
-        **_ignored,
-    ) -> Dict[str, Any]:
+    def spawn_subagent(payload: Optional[Dict[str, Any]] = None, **_ignored) -> Dict[str, Any]:
+        # 平台工具契约: tool(payload_dict) 单字典调用 (见 tool_executor._invoke_tool_with_timeout).
+        # 早期 kwargs 签名会把整个 payload dict 绑到首个位置参 role 上, task 永远 None → PARAM_MISSING.
+        payload = payload or {}
+        role = payload.get("role")
+        task = payload.get("task")
+        allowed_tools = payload.get("allowed_tools")
+        max_iterations = payload.get("max_iterations")
+        trace_id = payload.get("trace_id")
+        session_id = payload.get("session_id")
+        extra_params = payload.get("extra_params")
         if not task:
             return {
                 "code": "PARAM_MISSING",

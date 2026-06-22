@@ -169,6 +169,22 @@ class TestReflectRevise(unittest.TestCase):
         self.assertIsNone(new_ans)
         self.assertEqual(meta["skipped"], "revise_empty")
 
+    def test_non_numeric_quality_does_not_crash_and_revises(self):
+        """LLM 返非数值 overall_quality (如 'high') → 不抛 ValueError, 降级为 0 → 仍 revise."""
+        critique = '{"issues": ["x"], "overall_quality": "high", "should_revise": false}'
+        revised = "改进版"
+        agent = SimpleAgent(
+            tool_registry=_DummyTool(),
+            llm_planner=self._mock_llm([critique, revised]),
+        )
+        new_ans, meta = agent._reflect_revise(
+            task="x", initial_answer="y", trace_id="t1",
+        )
+        # quality 非数值 → 降级 0 < 4 → 不跳过 → revise 正常返回
+        self.assertEqual(new_ans, "改进版")
+        self.assertEqual(meta["llm_calls"], 2)
+        self.assertEqual(meta["overall_quality"], "high")  # 原值原样保留在 meta
+
     def test_quality_low_forces_revise_even_if_should_revise_false(self):
         """LLM 说 should_revise=false 但 quality<4 → 仍然 revise (gate 条件)."""
         critique = '{"issues": ["minor"], "overall_quality": 2, "should_revise": false}'

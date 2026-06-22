@@ -18,18 +18,19 @@ http_get 强很多 (后者只 GET 静态 HTML).
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
+# 复用 http_get 已加固的 SSRF 守卫: IP 字面量走 _is_private_ip, 域名走
+# _resolve_safe (DNS 解析全部 A/AAAA 记录, 任一私网/环回/链路本地/保留/IPv6 环回即拒).
+# 取代原先只认几个 IPv4 前缀 + "localhost" 的正则 (IPv6 / 数字 IP / 任意指向内网的
+# 域名都能绕过).
+from .http_get import _is_private_ip, _resolve_safe
 
-_INTERNAL_IPV4 = re.compile(
-    r"^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.0\.0\.0|localhost)",
-    re.I,
-)
 _MAX_TEXT = 8000
 
 
@@ -54,10 +55,19 @@ def browser_visit(payload: Dict[str, Any]) -> Dict[str, Any]:
     if pu.scheme not in ("http", "https"):
         return _err("INVALID_URL", f"只支持 http/https. 收到: {pu.scheme}://", trace_id)
     host = pu.hostname or ""
-    if _INTERNAL_IPV4.match(host):
+    if not host:
+        return _err("INVALID_URL", "url 缺 host", trace_id)
+    # SSRF 守卫: IP 字面量直接判私网; 否则 DNS 解析全部记录, 任一私网即拒.
+    try:
+        ip = ipaddress.ip_address(host)
+        forbidden = _is_private_ip(str(ip))
+    except ValueError:
+        # 是域名, 走 DNS (覆盖 IPv6 / 数字 IP / 指向内网的任意域名)
+        forbidden = _resolve_safe(host) is None
+    if forbidden:
         return _err(
             "FORBIDDEN_HOST",
-            f"内网/环回地址禁访 (SSRF 防御). host={host}",
+            f"内网/环回地址或 DNS 解析失败 禁访 (SSRF 防御). host={host}",
             trace_id,
         )
 

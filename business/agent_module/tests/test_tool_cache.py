@@ -210,6 +210,36 @@ class TestToolCache(unittest.TestCase):
         self.assertEqual(stats["hit_ratio"], 0.5)
         self.assertEqual(stats["size"], 1)
 
+    def test_datetime_not_in_default_cacheable(self):
+        """datetime 的输出随墙钟变化 (op=now), 不是入参的纯函数, 必须不在默认可缓存名单里。
+        否则同一 (op=now) 入参的 cache key 永远命中首次结果 → '现在几点' 被冻结。"""
+        agent = SimpleAgent(tool_registry=_DictRegistry())
+        self.assertNotIn("datetime", agent.cacheable_tools)
+        # 对照: rag_search 这类纯只读工具仍应默认可缓存
+        self.assertIn("rag_search", agent.cacheable_tools)
+
+    def test_now_sensitive_tool_runs_every_time(self):
+        """模拟 datetime/now 工具: 不在 cacheable_tools → 每次都实际执行, 返回新鲜时间。"""
+        agent, reg = _make_agent(cacheable=None)  # 用默认 cacheable 名单
+        agent.cacheable_tools = set(SimpleAgent(tool_registry=_DictRegistry()).cacheable_tools)
+        calls = {"n": 0}
+
+        def _now(payload):
+            calls["n"] += 1
+            return {"code": "SUCCESS", "data": {"iso": f"2026-06-22T10:0{calls['n']}:00"}}
+
+        reg.register("datetime", _now)
+        out1 = agent._call_tool_with_retry(
+            step={"step_id": "s1", "tool_name": "datetime", "input_data": {"op": "now"}},
+            session_id="ss", trace_id="t", max_retries=0,
+        )
+        out2 = agent._call_tool_with_retry(
+            step={"step_id": "s2", "tool_name": "datetime", "input_data": {"op": "now"}},
+            session_id="ss", trace_id="t", max_retries=0,
+        )
+        self.assertEqual(calls["n"], 2)  # 每次都真跑, 没被缓存冻结
+        self.assertNotEqual(out1["output"]["data"]["iso"], out2["output"]["data"]["iso"])
+
     def test_clear_cache(self):
         agent, reg = _make_agent(cacheable=["rag_search"])
         tool = _CountingTool()

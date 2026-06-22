@@ -43,12 +43,18 @@ class ReActEngineMixin:
             extra_params: Dict[str, Any],
             start_time: float,
             timeout: Optional[float] = None,
+            original_task: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """ReAct 多轮循环: observe -> reflect -> next, 直到 final_answer 或 max iterations.
+
+        original_task: 用户原始问题 (未注入记忆/画像/历史/附件的原话), 仅用于 skill trigger 匹配;
+        不传时回退 task。task 是已增强的规划输入, 不能拿它匹配 skill (注入文本会误触发/抑制命中)。
 
         返回:
             统一响应信封 dict (完整结果), 或 None 表示"无法走 ReAct"(由 execute 降级 single_shot).
         """
+        # skill 匹配用的原话 (在 task 被 SessionSystemPrompt 等进一步包装前先定下来)
+        _match_text = original_task if original_task is not None else task
         llm_call = self._resolve_llm_planner(trace_id=trace_id)
         if llm_call is None:
             return None
@@ -72,6 +78,7 @@ class ReActEngineMixin:
                 task=task, available_tools=available_tools, trace_id=trace_id,
                 llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
                 project_root=extra_params.get("active_project_root"),
+                match_text=_match_text,
             )
             if plan_result is not None:
                 self._append_state_event(
@@ -140,6 +147,7 @@ class ReActEngineMixin:
                 max_iterations=max_iter,
                 tool_descriptions=tool_descriptions,
                 project_root=extra_params.get("active_project_root"),
+                match_text=_match_text,
             )
             try:
                 raw = llm_call(prompt)
@@ -631,8 +639,11 @@ class ReActEngineMixin:
             llm_call: Callable[[str], str],
             tool_descriptions: Optional[Dict[str, str]] = None,
             project_root: Optional[str] = None,
+            match_text: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Task V (#56): 跑一次 ReAct 风格 LLM 调用拿 plan, 不执行任何工具.
+
+        match_text: skill trigger 匹配用的用户原话; 默认 = task (转交 _build_react_prompt)。
 
         plan 结构:
             {thought: str, action: {tool, input}}   # 准备调工具
@@ -647,6 +658,7 @@ class ReActEngineMixin:
             max_iterations=self.max_react_iterations,
             tool_descriptions=tool_descriptions or {},
             project_root=project_root,
+            match_text=match_text,
         )
         try:
             raw = llm_call(prompt)

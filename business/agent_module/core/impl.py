@@ -271,9 +271,11 @@ class SimpleAgent(
                 self.tool_approval_required = set(default_dangerous)
 
         # Task FF (#66): 工具结果缓存 — 同 (tool_name, input) 命中缓存直接返回.
+        # 仅缓存"输出是入参的纯函数"的工具; datetime/now 这类输出随墙钟变化的工具不可缓存,
+        # 否则同一 (op=now) 入参的 cache key 永远命中首次结果 → "现在几点"被冻结成首次时间.
         default_cacheable = [
             "rag_search", "calculator", "currency_convert", "weather",
-            "wikipedia", "datetime", "text_stats", "regex_extract",
+            "wikipedia", "text_stats", "regex_extract",
             "json_query", "code_lint",
         ]
         env_cache_tools = os.environ.get("ANYTHING_AGENT_CACHEABLE_TOOLS", "")
@@ -451,6 +453,7 @@ class SimpleAgent(
             react_result = self._react_execute(
                 task=task, session_id=session_id, trace_id=trace_id,
                 extra_params=extra_params, start_time=start_time,
+                timeout=timeout, original_task=original_task,
             )
             if react_result is not None:
                 # UP-4: react 也走了 refine(在分支前), 在此单一出口补记 details, 不碰 react 引擎

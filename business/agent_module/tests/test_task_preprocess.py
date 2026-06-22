@@ -113,5 +113,26 @@ class TestRealAgentNoop(unittest.TestCase):
         self.assertIsNone(ctx.refine_meta)
 
 
+class TestCorrectionRecursionSkipsMemory(unittest.TestCase):
+    """自我纠正递归 (_skip_history_prefix) 时, 记忆注入必须跳过 (与 refine/profile/history 步一致),
+    避免重复拼记忆块 + 二次 bump access_count。"""
+
+    def test_inject_memory_skipped_when_skip_history_prefix(self):
+        agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None)
+        # 强行打开记忆开关 + 装一个会爆炸的 long_term_memory, 证明 guard 在调用它之前就短路了
+        agent.memory_enabled = True
+
+        class _Boom:
+            def search_facts(self, *a, **k):
+                raise AssertionError("纠正递归不该查/bump 长期记忆")
+        agent.long_term_memory = _Boom()
+
+        ctx = _ctx(task="修正后的任务", extra_params={"_skip_history_prefix": True})
+        agent._pre_step_inject_memory(ctx)
+        # task 原样未被记忆块包裹, memory_hits 仍空
+        self.assertEqual(ctx.task, "修正后的任务")
+        self.assertEqual(ctx.memory_hits, [])
+
+
 if __name__ == "__main__":
     unittest.main()

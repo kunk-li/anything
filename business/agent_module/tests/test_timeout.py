@@ -124,6 +124,27 @@ class TestAgentTimeoutEnforce(unittest.TestCase):
         self.assertEqual(result["code"], "AGENT_TIMEOUT")
         self.assertEqual(calls["n"], 1)  # 只执行了第一步, 第二步被超时中止
 
+    def test_execute_react_path_forwards_per_request_timeout(self):
+        """execute() 走 ReAct 分支时, 必须把 *本次请求* 的 timeout 透传给 _react_execute,
+        而不是丢弃后让 react 回退到实例默认 self.timeout。
+
+        回归: impl.py:451 此前漏传 timeout=, 导致 request.timeout 在 ReAct 路径被忽略
+        (react 内 fallback 到 self.timeout=60), 单次请求无法收紧/放宽超时。"""
+        agent = SimpleAgent(tool_registry=_Reg(), llm_planner=None)
+        agent.timeout = 60  # 实例默认; 本次请求要用 7 覆盖
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return {"code": "SUCCESS", "data": {"answer": "ok"}, "trace_id": kwargs.get("trace_id")}
+
+        agent._react_execute = _capture
+        agent.execute({
+            "task": "x", "trace_id": "t1", "session_id": "s1", "timeout": 7,
+            "extra_params": {"execution_strategy": "react"},
+        })
+        self.assertEqual(captured.get("timeout"), 7)
+
     def test_inflight_tool_thread_cap_fail_fast(self):
         """工具超时后工作线程泄漏: 在飞线程达上界时第 N+1 个调用立即 fail-fast, 不再 spawn。"""
         import threading

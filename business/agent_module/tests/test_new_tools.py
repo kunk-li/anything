@@ -74,6 +74,21 @@ class TestPdfExcelPathSafety(unittest.TestCase):
         self.assertIsNone(_resolve_safe_path(None))
         self.assertIsNone(_resolve_safe_path("../escape"))
 
+    def test_sibling_prefix_not_treated_as_inside(self):
+        # uploads_secret/ 是 uploads 的兄弟目录, startswith 会误放行 —
+        # 按路径段比较必须拒绝.
+        self.assertIsNone(_resolve_safe_path("uploads_secret/x.pdf"))
+        self.assertIsNone(_resolve_safe_path("documents_evil/x.pdf"))
+        # 前缀目录"自身" (无子路径) 也不是合法文件路径
+        self.assertIsNone(_resolve_safe_path("uploads"))
+
+    def test_absolute_in_cwd_wrong_prefix_rejected(self):
+        # 绝对路径即便落在 cwd 内, 不在允许前缀下也要拒 (两条分支同一道墙)
+        abs_wrong = os.path.join(os.getcwd(), "random_folder", "x.pdf")
+        self.assertIsNone(_resolve_safe_path(abs_wrong))
+        r = pdf_read({"file_path": abs_wrong})
+        self.assertEqual(r["code"], "INVALID_PATH")
+
 
 # ---------- pdf_read 扫描版兜底 ----------
 
@@ -158,6 +173,30 @@ class TestSqlQuerySecurity(unittest.TestCase):
         # 不强求 SUCCESS (sqlalchemy 可能未装), 但只要没被安全检查拦, 就是 SUCCESS 或 EXECUTION_FAILED 而非 FORBIDDEN_STATEMENT
         self.assertNotEqual(r["code"], "FORBIDDEN_STATEMENT")
 
+    def test_sqlite_url_path_relative_vs_absolute(self):
+        # 回归: 旧 lstrip('/') 把 sqlite:////abs 削成相对路径 → 连错库
+        from agent_module.tools.tools_impl.sql_query import _sqlite_url_to_path
+        self.assertEqual(_sqlite_url_to_path("sqlite:///rel.db"), "rel.db")
+        self.assertEqual(_sqlite_url_to_path("sqlite:////abs/path.db"), "/abs/path.db")
+        self.assertEqual(_sqlite_url_to_path("sqlite:///C:/win/abs.db"), "C:/win/abs.db")
+        self.assertEqual(_sqlite_url_to_path("sqlite:///./foo/bar.db"), "./foo/bar.db")
+
+    def test_sqlite_absolute_file_roundtrip(self):
+        # 绝对路径 sqlite 文件能被正确解析并读到 (而不是退化成 cwd 下相对库)
+        import sqlite3
+        import tempfile
+        d = tempfile.mkdtemp()
+        abspath = os.path.join(d, "real.db")
+        con = sqlite3.connect(abspath)
+        con.execute("CREATE TABLE t (x TEXT)")
+        con.execute("INSERT INTO t VALUES ('absolute-hit')")
+        con.commit()
+        con.close()
+        url = "sqlite:///" + abspath.replace(os.sep, "/")
+        r = sql_query({"query": "SELECT x FROM t", "connection_string": url})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["rows"], [["absolute-hit"]])
+
 
 # ---------- browser_visit SSRF + 参数 ----------
 
@@ -188,6 +227,15 @@ class TestBrowserVisit(unittest.TestCase):
 
     def test_ssrf_192_168(self):
         r = browser_visit({"url": "http://192.168.1.1/"})
+        self.assertEqual(r["code"], "FORBIDDEN_HOST")
+
+    def test_ssrf_ipv6_loopback(self):
+        # 老正则只认 IPv4, [::1] 能绕过; 加固后必须拦.
+        r = browser_visit({"url": "http://[::1]/"})
+        self.assertEqual(r["code"], "FORBIDDEN_HOST")
+
+    def test_ssrf_ipv6_link_local(self):
+        r = browser_visit({"url": "http://[fe80::1]/"})
         self.assertEqual(r["code"], "FORBIDDEN_HOST")
 
     def test_invalid_action(self):

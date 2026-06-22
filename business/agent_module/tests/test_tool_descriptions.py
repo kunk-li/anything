@@ -109,5 +109,43 @@ class TestToolDescriptionsPath(unittest.TestCase):
         self.assertIn("(无描述)", prompt)
 
 
+class TestReactPromptSkillMatchText(unittest.TestCase):
+    """skill trigger 匹配应针对用户原话 (match_text), 不被注入进 task 的记忆/画像/历史污染。"""
+
+    def _build(self, **kw):
+        from unittest.mock import patch
+        captured = {}
+
+        def _match(query):
+            captured["query"] = query
+            return []  # 返回空, 不影响 prompt 主体, 只观察被匹配的文本
+
+        reg = MagicMock()
+        reg.match.side_effect = _match
+        reg.catalog.return_value = []
+        with patch(
+            "agent_module.core.components.prompt_builder.get_skill_registry",
+            return_value=reg,
+        ):
+            SimpleAgent._build_react_prompt(
+                available_tools=["llm_generate"], history=[],
+                iteration=1, max_iterations=3, **kw,
+            )
+        return captured.get("query")
+
+    def test_match_uses_match_text_not_augmented_task(self):
+        """传了 match_text 时, skill 匹配用 match_text (原话), 而非已增强的 task。"""
+        matched_against = self._build(
+            task="[用户画像]\n- 偏好 tdd\n\n[当前问题]\n今天天气如何",
+            match_text="今天天气如何",
+        )
+        self.assertEqual(matched_against, "今天天气如何")
+
+    def test_match_falls_back_to_task_when_no_match_text(self):
+        """未传 match_text 时回退 task (向后兼容)。"""
+        matched_against = self._build(task="原始问题")
+        self.assertEqual(matched_against, "原始问题")
+
+
 if __name__ == "__main__":
     unittest.main()

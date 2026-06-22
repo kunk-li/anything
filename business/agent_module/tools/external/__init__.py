@@ -70,6 +70,34 @@ def _specs_from(config: Any, key: str, spec_cls: type, required: tuple) -> list:
     return out
 
 
+def _mcp_specs_from(config: Any) -> list:
+    """从 config `agent.mcp_servers` 构造 McpServerSpec 列表 (transport 感知必填校验)。
+
+    `_specs_from` 的固定 required 元组对 MCP 不成立: stdio 必填 `command`, http 必填 `url`
+    (二选一, 取决于 `transport`)。统一要求 `command` 会让 **http MCP server 永远被静默丢弃**
+    (死功能)。这里按 `transport` 判定: name + (stdio→command / http→url)。未知键/异常自动过滤。"""
+    try:
+        raw = config.get_config("agent.mcp_servers", []) or []
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    fields = set(McpServerSpec.__dataclass_fields__)
+    out = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        transport = item.get("transport", "stdio")
+        endpoint_key = "url" if transport == "http" else "command"
+        if not item.get(endpoint_key):          # 传输对应的端点必填 (stdio:command / http:url)
+            continue
+        try:
+            out.append(McpServerSpec(**{k: v for k, v in item.items() if k in fields}))
+        except Exception:
+            continue
+    return out
+
+
 def _openapi_specs_from(config: Any) -> list:
     """从 config `agent.openapi_tools` 生成 HttpToolSpec 列表。每项二选一取 spec 来源:
       - inline `spec`: OpenAPI dict (本地直接给);
@@ -124,7 +152,7 @@ def build_providers_from_config(config: Any) -> List[ExternalToolProvider]:
     http_specs += _openapi_specs_from(config)          # OpenAPI 自动生成的 HTTP 工具
     if http_specs:
         providers.append(HttpToolProvider(http_specs))
-    mcp_specs = _specs_from(config, "agent.mcp_servers", McpServerSpec, ("name", "command"))
+    mcp_specs = _mcp_specs_from(config)                # transport 感知: stdio→command / http→url
     if mcp_specs:
         providers.append(McpToolProvider(mcp_specs))
     return providers

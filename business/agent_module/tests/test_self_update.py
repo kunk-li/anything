@@ -3,10 +3,13 @@
 
 注入 fake worktree / test_runner, 不动真 git、不跑真 pytest。
 """
+import os
+import subprocess
 import unittest
+from unittest import mock
 
 from agent_module.core.impl import SimpleAgent
-from agent_module.core.self_update import ShadowSelfUpdate
+from agent_module.core.self_update import ShadowSelfUpdate, _GitWorktree
 
 
 class _FakeWorktree:
@@ -91,6 +94,25 @@ class TestVerifyInShadow(unittest.TestCase):
         r = self._su(wt, rc=0).verify_in_shadow({"diff": "d"})
         self.assertFalse(r["gate_passed"])              # 异常 → fail-safe 拒绝
         self.assertEqual(wt.cleaned, [])                # 没建成 → 无需清理, 不崩
+
+
+class TestGitWorktreeCreate(unittest.TestCase):
+    def test_create_failure_removes_temp_dir(self):
+        # git worktree add 失败时, mkdtemp 落盘的临时目录必须被清掉 (否则泄漏)
+        wt = _GitWorktree(repo_root="/x")
+        captured = {}
+
+        def fake_run(cmd, *a, **kw):
+            # cmd: ["git", "-C", repo_root, "worktree", "add", "--detach", <tmpdir>, "HEAD"]
+            captured["dir"] = cmd[6]
+            raise subprocess.CalledProcessError(128, cmd, stderr="fatal: boom")
+
+        with mock.patch("agent_module.core.self_update.subprocess.run", side_effect=fake_run):
+            with self.assertRaises(subprocess.CalledProcessError):
+                wt.create()
+
+        self.assertIn("dir", captured)                      # 确认 mkdtemp 真建了目录并传给了 git
+        self.assertFalse(os.path.exists(captured["dir"]))   # 失败后该临时目录已被删除, 无泄漏
 
 
 class TestAgentHook(unittest.TestCase):

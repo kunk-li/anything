@@ -232,6 +232,17 @@ class TestRegexExtract(unittest.TestCase):
         self.assertEqual(r["data"]["match_count"], 5)
         self.assertTrue(r["data"]["truncated"])
 
+    def test_exact_match_count_not_truncated(self):
+        # 命中数恰好等于 max_matches 且没有溢出 -> 不应标记 truncated
+        r = regex_extract({"text": "xxxxx", "pattern": "x", "max_matches": 5})
+        self.assertEqual(r["data"]["match_count"], 5)
+        self.assertFalse(r["data"]["truncated"])
+
+    def test_under_max_not_truncated(self):
+        r = regex_extract({"text": "xx", "pattern": "x", "max_matches": 5})
+        self.assertEqual(r["data"]["match_count"], 2)
+        self.assertFalse(r["data"]["truncated"])
+
     def test_invalid_pattern(self):
         r = regex_extract({"text": "abc", "pattern": "("})
         self.assertEqual(r["code"], "PARAM_INVALID")
@@ -333,6 +344,32 @@ class TestHttpGet(unittest.TestCase):
         r = http_get({"url": ""})
         self.assertEqual(r["code"], "PARAM_MISSING")
 
+    def test_connection_pinned_to_validated_ip(self):
+        """DNS-rebinding 防御: 真正拨号的 IP 必须是校验时解析到的那个,
+        而不是连接时重新解析的结果 (TOCTOU 窗口)."""
+        import importlib
+        import socket as _socket
+        # 用 importlib 拿子模块本身: tools_impl/__init__ 把同名函数 http_get
+        # 重新 export, 直接 import 会拿到函数而非模块.
+        _hg = importlib.import_module("agent_module.tools.tools_impl.http_get")
+
+        dialed = {}
+
+        def fake_getaddrinfo(host, port, *a, **k):
+            # 校验时解析到公网 IP
+            return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+        def fake_create_connection(addr, *a, **k):
+            dialed["ip"] = addr[0]
+            raise OSError("blocked-after-pin")  # 只关心拨到哪个 IP
+
+        with patch.object(_socket, "getaddrinfo", fake_getaddrinfo), \
+                patch.object(_socket, "create_connection", fake_create_connection):
+            r = _hg.http_get({"url": "http://rebind.example/", "timeout": 2})
+        # 拨号 IP == 校验过的 IP (没有发生二次独立解析)
+        self.assertEqual(dialed.get("ip"), "93.184.216.34")
+        self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
 
 class TestTextSummarize(unittest.TestCase):
 
@@ -412,6 +449,39 @@ class TestCodeLint(unittest.TestCase):
             self.assertTrue(r["data"]["valid"])
         else:
             self.assertEqual(r["code"], "TOOL_CALL_FAILED")
+
+    def test_path_inside_project_ok(self):
+        """cwd 内的相对路径: 应读到真实文件并检查 (沙盒放行)。"""
+        import tempfile
+        from pathlib import Path
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", dir=str(Path.cwd()), delete=False, encoding="utf-8"
+        ) as f:
+            f.write("x = 1\ny = x + 2\n")
+            rel = Path(f.name).name
+        try:
+            r = code_lint({"path": rel})
+            self.assertEqual(r["code"], "SUCCESS")
+            self.assertTrue(r["data"]["valid"])
+            self.assertEqual(r["data"]["language"], "python")  # 按 .py 推断
+            self.assertTrue(r["data"]["source"].startswith("path:"))
+        finally:
+            os.unlink(rel)
+
+    def test_path_absolute_escape_rejected(self):
+        """项目树外的绝对路径 (任意文件读取) 必须被拒, 不得读盘。"""
+        import sys
+        # 选一个肯定在 cwd 外的绝对路径
+        outside = os.path.join(sys.prefix, "python.exe") if os.name == "nt" else "/etc/passwd"
+        r = code_lint({"path": outside})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIsNone(r["data"])
+
+    def test_path_parent_traversal_rejected(self):
+        """.. 穿越出项目根必须被拒。"""
+        r = code_lint({"path": "../../../../../../etc/passwd"})
+        self.assertEqual(r["code"], "PARAM_INVALID")
+        self.assertIsNone(r["data"])
 
 
 class TestEmailSendTool(unittest.TestCase):
@@ -610,6 +680,29 @@ result = total
     def test_empty(self):
         r = python_sandbox({"code": ""})
         self.assertEqual(r["code"], "PARAM_MISSING")
+
+    def test_trailing_expression_is_result(self):
+        # 末尾裸表达式应作为 result 返回 (此前实现忽略它, 只看 locals)
+        r = python_sandbox({"code": "a = 5\na + 100"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], 105)
+
+    def test_pure_expression_is_result(self):
+        r = python_sandbox({"code": "7 * 6"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], 42)
+
+    def test_reassigned_var_no_result_returns_none(self):
+        # 重赋值 + 无 result 变量 + 无末尾表达式: 不应按 dict 顺序猜测返回错值, 应为 None
+        r = python_sandbox({"code": "x = 1\ny = 2\nx = 99"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertIsNone(r["data"]["result"])
+
+    def test_trailing_name_reflects_latest_value(self):
+        # 末尾引用被重赋值的变量, 应取其最新值 (99), 而非 dict 中某个先插入的变量
+        r = python_sandbox({"code": "x = 1\ny = 2\nx = 99\nx"})
+        self.assertEqual(r["code"], "SUCCESS")
+        self.assertEqual(r["data"]["result"], 99)
 
 
 class TestToolDescriptions(unittest.TestCase):

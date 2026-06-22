@@ -116,6 +116,28 @@ def _rows_to_markdown_table(cols: List[str], rows: List[List[Any]], max_rows: in
     return "\n".join([header, sep] + body_lines) + note
 
 
+def _sqlite_url_to_path(conn_str: str) -> str:
+    """sqlite sqlalchemy URL → 文件路径 (保留绝对/相对语义).
+
+    sqlalchemy 约定: 'sqlite://' authority + 路径, 其中第一个 '/' 是 URL 路径分隔符:
+      sqlite:///rel.db      → 'rel.db'        (相对)
+      sqlite:////abs/x.db   → '/abs/x.db'     (绝对, POSIX)
+      sqlite:///C:/x.db     → 'C:/x.db'       (绝对, Windows)
+    旧实现 lstrip('/') 会把 sqlite:////abs 的前导 '/' 全削掉, 绝对路径退化成相对 → 连错库.
+    优先用 sqlalchemy 自带 URL 解析器 (与工具宣传的 sqlalchemy URL 语义完全一致),
+    没装 sqlalchemy 时手工只剥 'sqlite://' authority + 恰好一个路径分隔符 '/'.
+    """
+    try:
+        from sqlalchemy.engine.url import make_url
+
+        db = make_url(conn_str).database
+        return db or ""
+    except ImportError:
+        # 'sqlite:' + '//' authority = 'sqlite://' (8 chars), 余下首个 '/' 是路径分隔符, 只剥它一个
+        rest = conn_str[len("sqlite://"):] if conn_str.startswith("sqlite://") else conn_str[len("sqlite:"):]
+        return rest[1:] if rest.startswith("/") else rest
+
+
 def _run_query(
     query: str, conn_str: str, params: Any
 ) -> Tuple[List[List[Any]], List[str], Optional[str]]:
@@ -129,7 +151,7 @@ def _run_query(
     if conn_str.startswith("sqlite:"):
         import sqlite3
 
-        path = conn_str[len("sqlite:"):].lstrip("/")
+        path = _sqlite_url_to_path(conn_str)
         conn = sqlite3.connect(path)
         try:
             return _run_sqlite_cursor(conn, query, params) + (None,)

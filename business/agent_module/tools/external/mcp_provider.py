@@ -60,6 +60,7 @@ class _McpClientBase:
     def __init__(self):
         self._id = 0
         self._lock = threading.Lock()
+        self._init_lock = threading.Lock()   # 单独锁: initialize 握手串行化 (不能复用 _lock —— _rpc 会再取它, 非重入会死锁)
         self._initialized = False
 
     def _rpc(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -71,11 +72,14 @@ class _McpClientBase:
     def initialize(self) -> None:
         if self._initialized:
             return
-        self._rpc("initialize", {
-            "protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": _CLIENT_INFO,
-        })
-        self._notify("notifications/initialized")
-        self._initialized = True
+        with self._init_lock:                # 双检锁: 并发 call_tool 只跑一次握手
+            if self._initialized:
+                return
+            self._rpc("initialize", {
+                "protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": _CLIENT_INFO,
+            })
+            self._notify("notifications/initialized")
+            self._initialized = True
 
     def list_tools(self) -> List[Dict[str, Any]]:
         self.initialize()
@@ -174,31 +178,35 @@ def _default_http_post(url: str, payload: Dict[str, Any], headers: Dict[str, str
 
 
 def _parse_mcp_http_body(body: str, rid: int) -> Optional[Dict[str, Any]]:
-    """从 HTTP 响应体取匹配 id 的 JSON-RPC 消息。支持 SSE(data: 行) 与 纯 JSON(对象/数组)。"""
+    """从 HTTP 响应体取匹配 id 的 JSON-RPC 消息。支持 纯 JSON(对象/数组) 与 SSE(data: 行)。
+
+    **先按 JSON 解析整体**, 失败再退回 SSE 逐行扫描。不能用 `"data:" in body` 判 SSE ——
+    JSON 值里若含子串 `data:` 会把合法 JSON 响应误判成 SSE 帧而丢消息。"""
     body = (body or "").strip()
     if not body:
         return None
-    if "data:" in body:                      # SSE 帧
-        for line in body.splitlines():
-            line = line.strip()
-            if line.startswith("data:"):
-                try:
-                    msg = json.loads(line[5:].strip())
-                except ValueError:
-                    continue
-                if isinstance(msg, dict) and msg.get("id") == rid:
-                    return msg
-        return None
-    try:
+    try:                                     # 优先整体 JSON (对象/数组)
         obj = json.loads(body)
     except ValueError:
-        return None
-    if isinstance(obj, list):
-        for m in obj:
-            if isinstance(m, dict) and m.get("id") == rid:
-                return m
-        return None
-    return obj if isinstance(obj, dict) else None
+        obj = None
+    if obj is not None:
+        if isinstance(obj, list):
+            for m in obj:
+                if isinstance(m, dict) and m.get("id") == rid:
+                    return m
+            return None
+        return obj if isinstance(obj, dict) else None
+    # 非完整 JSON → 尝试 SSE: 必须有真正以 `data:` 开头的行才走此分支
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            try:
+                msg = json.loads(line[5:].strip())
+            except ValueError:
+                continue
+            if isinstance(msg, dict) and msg.get("id") == rid:
+                return msg
+    return None
 
 
 class McpHttpClient(_McpClientBase):
@@ -282,11 +290,19 @@ class McpToolProvider(ExternalToolProvider):
     def discover(self) -> List[ExternalToolDef]:
         out: List[ExternalToolDef] = []
         for spec in self.specs:
+            client = None
             try:
                 client = self._client_factory(spec)
                 tools = client.list_tools()
             except Exception:
-                continue  # fail-safe: server 连不上 → 跳过, 不拖垮启动
+                # fail-safe: server 连不上 → 跳过, 不拖垮启动。但 list_tools() 可能在 stdio
+                # 子进程已 Popen 后才失败(握手报错), 必须 close 回收, 否则子进程泄漏。
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                continue
             self._clients.append(client)   # 连上的 client 留引用, 退出时可 close (stdio 杀子进程)
             for t in tools:
                 rname = t.get("name") if isinstance(t, dict) else None

@@ -4,6 +4,7 @@
 验证: 4 个 Execution 场景 pass/fail + 异常处理 + TaskVerifier completed/缺口/
 fail-open + ToolSuccess + run_verifiers 路由。
 """
+import time
 import unittest
 
 from agent_module.core.impl import SimpleAgent
@@ -198,6 +199,91 @@ class TestSelfVerifyLoop(unittest.TestCase):
         })
         self.assertFalse(resp["details"]["verify_passed"])
         self.assertIn("verify_gaps", resp["details"])
+
+
+class TestSelfVerifyBudget(unittest.TestCase):
+    """墙钟超时护栏: 自纠正递归承接外层 deadline, 不重开完整 timeout 窗口。"""
+
+    def _agent(self):
+        a = SimpleAgent(tool_registry=_Reg(), llm_planner=None)
+        a.enable_self_verify = True
+        a.verify_mode = "auto"
+        a.max_correction = 5
+        a.timeout = 30
+        # 恒失败但可修 → 进入递归纠正分支
+        a._build_verify_runner = lambda: (lambda spec: {"exit_code": 1, "stderr": "lint error"})
+        a._resolve_llm_planner = lambda trace_id=None: (lambda p: '{"completed": true}')
+        return a
+
+    def _failing_response(self):
+        return {"code": "SUCCESS", "data": {"answer": "x"}, "details": None}
+
+    def test_recursion_threads_remaining_budget(self):
+        a = self._agent()
+        seen = {}
+
+        def fake_execute(req):
+            seen["timeout"] = req.get("timeout")
+            return req            # 不真递归, 只捕获下传的 request
+        a.execute = fake_execute
+
+        # 外层已耗 5s, 配置 timeout=30 → 剩余 ~25s 应下传, 而非重置回 30
+        resp = a._post_verify(
+            request={"task": "t", "trace_id": "t", "session_id": "s",
+                     "extra_params": {"verify": [{"type": "lint"}]}},
+            response=self._failing_response(),
+            original_task="t",
+            start_time=time.time() - 5,
+        )
+        # 递归被触发 (返回的是被捕获的 new_request)
+        self.assertTrue(callable(a.execute))
+        self.assertIsNotNone(seen.get("timeout"))
+        self.assertLessEqual(seen["timeout"], 26)   # 承接外层剩余, 明显 < 满额 30
+        self.assertGreaterEqual(seen["timeout"], 1)
+        self.assertEqual(resp.get("extra_params", {}).get("_verify_attempt"), 1)
+
+    def test_no_recursion_when_outer_budget_exhausted(self):
+        a = self._agent()
+        called = {"n": 0}
+
+        def fake_execute(req):
+            called["n"] += 1
+            return req
+        a.execute = fake_execute
+
+        # 外层墙钟已超过 timeout → within_time False → 不再递归, 直接标缺口返回
+        resp = a._post_verify(
+            request={"task": "t", "trace_id": "t", "session_id": "s",
+                     "extra_params": {"verify": [{"type": "lint"}]}},
+            response=self._failing_response(),
+            original_task="t",
+            start_time=time.time() - 31,
+        )
+        self.assertEqual(called["n"], 0)            # 超时后绝不重开新窗口
+        self.assertFalse(resp["details"]["verify_passed"])
+        self.assertIn("verify_gaps", resp["details"])
+
+    def test_request_timeout_override_caps_recursion(self):
+        a = self._agent()
+        seen = {}
+
+        def fake_execute(req):
+            seen["timeout"] = req.get("timeout")
+            return req
+        a.execute = fake_execute
+
+        # 调用方传了 timeout=10 (< self.timeout=30); deadline 应按 request.timeout 算,
+        # 外层已耗 9s → 剩余 ~1s 下传, 不被 self.timeout 放大。
+        a._post_verify(
+            request={"task": "t", "trace_id": "t", "session_id": "s", "timeout": 10,
+                     "extra_params": {"verify": [{"type": "lint"}]}},
+            response=self._failing_response(),
+            original_task="t",
+            start_time=time.time() - 9,
+        )
+        self.assertIsNotNone(seen.get("timeout"))
+        self.assertLessEqual(seen["timeout"], 2)
+        self.assertGreaterEqual(seen["timeout"], 1)
 
 
 class TestExecutionRunnerReal(unittest.TestCase):

@@ -63,8 +63,10 @@ class StateHistoryMixin:
             return []
         events = state.get("events") or []
         max_msgs = max(1, max_turns) * 2
-        if len(events) > max_msgs:
-            events = events[-max_msgs:]
+        # 先按 role 过滤再截断: events 是混合日志 (role 对话消息 + ReAct 状态事件
+        # react_started/tool_call/... 都 append 到同一条链)。若先 events[-max_msgs:]
+        # 截断, 末尾的状态事件会挤掉真正的对话轮, 多轮记忆被静默吃掉。所以先只留
+        # role 对话消息, 再对过滤后的列表取最近 max_msgs 条。
         msgs = []
         for ev in events:
             if isinstance(ev, dict):
@@ -72,6 +74,8 @@ class StateHistoryMixin:
                 content = ev.get("content")
                 if role in ("user", "assistant") and isinstance(content, str) and content:
                     msgs.append({"role": role, "content": content})
+        if len(msgs) > max_msgs:
+            msgs = msgs[-max_msgs:]
         return msgs
 
     def _history_prefix(self, session_id, max_turns: int = 6) -> str:
@@ -102,53 +106,62 @@ class StateHistoryMixin:
     ) -> None:
         """安全保存聚合状态 + append 本轮 user/assistant 到 events 历史链.
 
-        之前 bug: save_state 是 full-replace, 每轮覆盖前轮, 切回历史只看到最后一条.
-        现在 merge:
-          1. 读老 state 拿到 events list
-          2. 把本轮 user_task + assistant_answer 各 append 一个 role event
-          3. 顶层 task/answer 仍存 (向后兼容; 也方便 list_sessions 抽 title)
-          4. save_state 写回, events 保留了完整对话历史
+        之前 bug (full-replace): save_state 整存, 每轮覆盖前轮, 切回历史只看到最后一条.
+
+        再之前的 merge 写法 (get_state + 重建 events + 全量 save_state) 仍有 lost-update
+        竞态: get_state 与 save_state 是两次独立的 per-session 加锁, 中间若有并发
+        append_event / 另一轮 _save_state_safe, 各读旧 events 各全量写回 → 后写覆盖先写,
+        丢事件 (findings #2/#3)。
+
+        现在按 store 已有的原子原语拆成两类、不再在 agent 层做 events 的读-改-写:
+          1. 对话历史 (events 链): 本轮 user_task / assistant_answer 各走一次
+             append_event —— 它在 per-session 锁内 get→append→write 整段串行, 天然
+             race-free, 且只追加不覆盖。
+          2. 顶层标量 (status/task/answer/...): 走 merge_state —— store 持 per-session
+             锁做 get→浅合并(不动 events)→write, 与并发 append 互斥且不互相覆盖
+             (events 与标量是不相交的 key)。merge_state 不可用时降级到 save_state,
+             但此时只写标量、绝不带 events, 避免再把 events 清空。
         失败不阻断主任务.
         """
         if self.state_store is None:
             return
         try:
             new_state = dict(state) if isinstance(state, dict) else {}
-            # 1. 读老 events, 兼容首次 (无文件) 情况
-            old_events: list = []
-            if hasattr(self.state_store, "get_state"):
-                try:
-                    old = self.state_store.get_state(session_id) or {}
-                    if isinstance(old, dict):
-                        old_events = list(old.get("events") or [])
-                except Exception:
-                    old_events = []
 
-            # 2. 本轮 task / answer → 追加 2 个 role event
+            # 1. 本轮 task / answer → 各 append 一个 role event (原子, 不丢事件)
             #    task 用 state.task (已经是 original_task, 不含长期记忆 prefix)
             now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
             user_task = new_state.get("task")
             asst_answer = new_state.get("answer")
-            if user_task:
-                old_events.append({
+            event_type = new_state.get("execution_mode") or "agent"
+            has_append = hasattr(self.state_store, "append_event")
+            if has_append and user_task:
+                self.state_store.append_event(session_id, {
                     "role": "user",
                     "content": str(user_task),
                     "timestamp": now_iso,
                     "trace_id": trace_id,
-                    "type": new_state.get("execution_mode") or "agent",
+                    "type": event_type,
                 })
-            if asst_answer:
-                old_events.append({
+            if has_append and asst_answer:
+                self.state_store.append_event(session_id, {
                     "role": "assistant",
                     "content": str(asst_answer),
                     "timestamp": now_iso,
                     "trace_id": trace_id,
-                    "type": new_state.get("execution_mode") or "agent",
+                    "type": event_type,
                 })
-            new_state["events"] = old_events
 
-            if hasattr(self.state_store, "save_state"):
-                self.state_store.save_state(session_id, new_state)
+            # 2. 顶层标量字段 (list_sessions 抽 title / 前端 Path-3 兜底用), 不含 events
+            scalars = {k: v for k, v in new_state.items() if k != "events"}
+            if scalars:
+                if hasattr(self.state_store, "merge_state"):
+                    # 锁内读-改-写, 只浅合并标量、保留 events: race-free
+                    self.state_store.merge_state(session_id, scalars)
+                elif not has_append and hasattr(self.state_store, "save_state"):
+                    # 后端既无 append_event 也无 merge_state (老桩): 退回整存。
+                    # 此分支不写 events (events 已无原子写入手段), 仅落标量。
+                    self.state_store.save_state(session_id, scalars)
         except Exception as e:
             self.logger.warning(
                 f"状态保存失败(已忽略): session_id={session_id}, "

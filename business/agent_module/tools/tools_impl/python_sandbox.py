@@ -89,7 +89,8 @@ def python_sandbox(payload: Dict[str, Any]) -> Dict[str, Any]:
         timeout_seconds: 默认 2.0, 上限 10.0
 
     返回 data: {"stdout": str, "result": Any, "elapsed_seconds": float}
-        - "result": 最后一个表达式的值 (如果是赋值语句序列, 取 `result` 变量, 没有则 None)
+        - "result": 末尾若是裸表达式, 取其求值结果; 否则取显式 `result` 变量; 都没有则 None
+          (不靠 locals 插入顺序猜测, 避免变量重赋值后返回错值)
         - "stdout": 暂不支持 (sandbox 不允许 print)
 
     ⚠️ 教学/受限实现, 不能用来跑不可信代码 — Python sandbox 是公认难题,
@@ -115,14 +116,28 @@ def python_sandbox(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 2. 在受限命名空间执行, 用线程 + 标志位做协作式超时
     import threading
     import time as _time
-    result_holder: Dict[str, Any] = {"value": None, "error": None}
+    result_holder: Dict[str, Any] = {"value": None, "has_trailing_expr": False, "error": None}
     safe_globals = {"__builtins__": {}}
     safe_globals.update(_SANDBOX_BUILTINS)
     safe_locals: Dict[str, Any] = {}
 
+    # 若模块体末尾是裸表达式 (ast.Expr), 拆出来单独 eval, 以捕获"最后一个表达式的值";
+    # 其余语句正常 exec。这样不必靠 locals 插入顺序去猜 (重赋值会让顺序失真)。
+    trailing_expr: Optional[ast.expr] = None
+    if isinstance(tree, ast.Module) and tree.body and isinstance(tree.body[-1], ast.Expr):
+        trailing_expr = tree.body[-1].value
+        tree.body = tree.body[:-1]
+
     def _run():
         try:
             exec(compile(tree, "<sandbox>", "exec"), safe_globals, safe_locals)
+            if trailing_expr is not None:
+                expr_ast = ast.Expression(body=trailing_expr)
+                ast.fix_missing_locations(expr_ast)
+                result_holder["value"] = eval(  # noqa: S307 - 已通过 AST 白名单校验
+                    compile(expr_ast, "<sandbox>", "eval"), safe_globals, safe_locals
+                )
+                result_holder["has_trailing_expr"] = True
         except Exception as e:
             result_holder["error"] = f"{type(e).__name__}: {e}"
 
@@ -148,14 +163,12 @@ def python_sandbox(payload: Dict[str, Any]) -> Dict[str, Any]:
             "retryable": False,
         }
 
-    # 提取 `result` 变量 (如果用户定义了), 否则取最后一个赋值变量, 都没就 None
-    final = safe_locals.get("result")
-    if final is None and safe_locals:
-        # 取最后赋值的非内部变量
-        for k in list(safe_locals.keys())[::-1]:
-            if not k.startswith("_"):
-                final = safe_locals[k]
-                break
+    # 提取返回值: 末尾裸表达式的求值结果优先; 否则显式 `result` 变量; 都没有则 None。
+    # 不再按 locals 插入顺序猜测 (插入顺序是首次赋值序, 变量重赋值后会返回错的变量)。
+    if result_holder["has_trailing_expr"]:
+        final = result_holder["value"]
+    else:
+        final = safe_locals.get("result")
 
     return {
         "code": "SUCCESS", "message": "ok",

@@ -115,8 +115,9 @@ AGENT_CONFIG_SCHEMA: List[ConfigField] = [
     # 性能
     ConfigField("agent.cacheable_tools", "cacheable_tools", "list",
                 ["rag_search", "calculator", "currency_convert", "weather", "wikipedia",
-                 "datetime", "text_stats", "regex_extract", "json_query", "code_lint"],
-                "ANYTHING_AGENT_CACHEABLE_TOOLS", "性能", "结果可缓存的只读工具 (同输入命中缓存)"),
+                 "text_stats", "regex_extract", "json_query", "code_lint"],
+                "ANYTHING_AGENT_CACHEABLE_TOOLS", "性能",
+                "结果可缓存的只读工具 (同输入命中缓存; 不含 datetime 等输出随墙钟变化的工具)"),
     ConfigField("agent.tool_cache_max_size", "tool_cache_max_size", "int", 256,
                 "ANYTHING_AGENT_TOOL_CACHE_SIZE", "性能", "工具结果 LRU 缓存容量"),
 ]

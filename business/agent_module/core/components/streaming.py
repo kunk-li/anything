@@ -14,11 +14,31 @@ Agent 流式 generator. 任务期间 yield 每个 thought / action / observation
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
 
 class StreamingMixin:
     """Agent 流式 generator (Task #48 + Task V/W 集成版)."""
+
+    @contextmanager
+    def _routing_scope(self, task):
+        """模型分级路由作用域 (执行计划③): set ContextVar → 退出时 reset。
+
+        关键 (并发正确性): 流式 generator 由 run_in_executor 逐个 next() 驱动, 相邻 next()
+        可能落在线程池里**不同**的 worker 线程 → ContextVar 是 per-context(per-thread) 的,
+        若只在 run_stream 外层 set 一次, 它绑定在第一个 next() 的线程上下文里, 后续真正发 LLM
+        请求的 next() 跑在别的线程时读到的还是默认 (None, None), 路由被悄悄丢失。
+
+        故必须把 set 与"读取路由的 LLM 调用"放进**同一个同步帧** (同一次 next()): 每次 llm_call /
+        chat_stream 起头前进这个 with、调完即退。begin_routing/end_routing fail-safe, 默认关返
+        None → 零行为变化。"""
+        from ..model_routing import begin_routing, end_routing
+        _tok = begin_routing(self, task)
+        try:
+            yield
+        finally:
+            end_routing(_tok)
 
     def _persist_stream_answer(self, session_id, task, answer, trace_id, status="completed"):
         """ZZ-4: 持久化流式答案到 state_store (后端单一数据源).
@@ -83,11 +103,22 @@ class StreamingMixin:
         buf = []
         sid = request.get("session_id")
         try:
-            for token in self.llm_client.chat_stream(prompt=prompt, trace_id=trace_id):
+            # 模型分级路由 (执行计划③): chat_stream 在**第一个 next()** (yield from adapter 之前)
+            # 就读 model_routing ContextVar 决定模型/token 上限。本 generator 由 run_in_executor 逐
+            # next() 驱动且可能换线程, 故必须在同一同步帧里 set 路由 + 触发首个 token (而不是在 run_stream
+            # 外层 set 一次——那会活不过 next() 边界)。用 _routing_scope 包住"建流 + 取首 token";
+            # 模型一旦选定, 后续 token 不再读路由, 无需保持作用域。用独立哨兵判耗尽 (不能拿 None/""
+            # 当结束信号——adapter 可能合法 yield 空 delta, 原 for 循环靠 if token 跳过仍继续)。
+            _DONE = object()
+            _stream_iter = iter(self.llm_client.chat_stream(prompt=prompt, trace_id=trace_id))
+            with self._routing_scope(task):
+                token = next(_stream_iter, _DONE)
+            while token is not _DONE:
                 if token:
                     got_any = True
                     buf.append(str(token))
                     yield {"type": "chunk", "text": str(token)}
+                token = next(_stream_iter, _DONE)
         except GeneratorExit:
             # ZZ-4: 用户点停止 → WS 断开 → 上层 gen.close() 在此 yield 处抛 GeneratorExit.
             # 把已经流给用户的半截答案落库 (后端单一数据源, 切会话/刷新不丢), 再重新抛出.
@@ -128,15 +159,14 @@ class StreamingMixin:
         return True
 
     def run_stream(self, request: Dict[str, Any]):
-        """Agent 流式入口: 包一层模型分级路由 (执行计划③) 后委托 _run_stream_impl。
-        generator: set 路由 (按任务复杂度) → yield from 实现 → finally 重置 (耗尽/关闭都重置)。
-        默认关 → begin_routing 返 None → 零行为变化。"""
-        from ..model_routing import begin_routing, end_routing
-        _tok = begin_routing(self, (request or {}).get("task"))
-        try:
-            yield from self._run_stream_impl(request)
-        finally:
-            end_routing(_tok)
+        """Agent 流式入口: 委托 _run_stream_impl。
+
+        模型分级路由 (执行计划③) **不能**在这里 set 一次了事: 本 generator 由 run_in_executor
+        逐 next() 驱动, 相邻 next() 可能跑在线程池不同线程, 而 ContextVar 是 per-context 的,
+        外层 set 的路由活不过 next() 边界 (绑在第一个 next() 的线程上, 后续发 LLM 请求的 next()
+        换了线程就读不到) → 路由静默丢失。改为在实现里每个 LLM 调用前用 _routing_scope 就地
+        set/reset (同一同步帧内 set + 读取), 见下方各调用点。"""
+        yield from self._run_stream_impl(request)
 
     def _run_stream_impl(self, request: Dict[str, Any]):
         """Agent 流式 generator: yield ReAct 每一步 + final answer.
@@ -158,6 +188,9 @@ class StreamingMixin:
         """
         start_time = time.time()
         task = request.get("task")
+        # 模型分级路由按*原始*任务复杂度判 (与非流式 execute 用 original_task 一致); 下面 task 会被
+        # 注入记忆/画像/历史改写, 不能拿改写后的判复杂度。
+        _routing_task = task
         trace_id = request.get("trace_id")
         session_id = request.get("session_id")
         extra_params = request.get("extra_params") or {}
@@ -262,11 +295,15 @@ class StreamingMixin:
             extra_params.get("approve_plan", False)
         )
         if plan_only:
-            plan_result = self._generate_plan(
-                task=task, available_tools=available_tools, trace_id=trace_id,
-                llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
-                project_root=extra_params.get("active_project_root"),
-            )
+            # 模型分级路由就地 set/reset (同一同步帧内 set + _generate_plan 内部 llm_call 读取),
+            # 防 next() 跨线程丢路由。
+            with self._routing_scope(_routing_task):
+                plan_result = self._generate_plan(
+                    task=task, available_tools=available_tools, trace_id=trace_id,
+                    llm_call=llm_call, tool_descriptions=self._tool_descriptions(),
+                    project_root=extra_params.get("active_project_root"),
+                    match_text=_routing_task,
+                )
             if plan_result is not None:
                 yield {
                     "type": "plan",
@@ -310,23 +347,26 @@ class StreamingMixin:
                     max_iterations=self.max_react_iterations,
                     tool_descriptions=tool_descriptions,
                     project_root=extra_params.get("active_project_root"),
+                    match_text=_routing_task,
                 )
                 # 健壮: react 计划 LLM 调用撞网络抖动会抛异常 — 重试 (短退避) 而非直接报错。
                 # 本 generator 在线程池跑 (handle_stream via run_in_executor), time.sleep 安全。
+                # 模型分级路由就地 set/reset (同一同步帧内 set + llm_call 读取), 防 next() 跨线程丢路由。
                 raw = None
                 _last_err = None
-                for _attempt in range(3):
-                    try:
-                        raw = llm_call(prompt)
-                        _last_err = None
-                        break
-                    except Exception as e:
-                        _last_err = e
-                        self.logger.warning(
-                            f"[react-stream] LLM 调用异常 iter={iteration} 第{_attempt + 1}/3 次: {e}"
-                        )
-                        if _attempt < 2:
-                            time.sleep(0.8 * (_attempt + 1))  # 0.8s → 1.6s 退避
+                with self._routing_scope(_routing_task):
+                    for _attempt in range(3):
+                        try:
+                            raw = llm_call(prompt)
+                            _last_err = None
+                            break
+                        except Exception as e:
+                            _last_err = e
+                            self.logger.warning(
+                                f"[react-stream] LLM 调用异常 iter={iteration} 第{_attempt + 1}/3 次: {e}"
+                            )
+                            if _attempt < 2:
+                                time.sleep(0.8 * (_attempt + 1))  # 0.8s → 1.6s 退避
                 if _last_err is not None:
                     yield {"type": "error", "code": "AGENT_RUN_FAILED",
                            "message": f"LLM 调用异常 iter={iteration} (重试 3 次仍失败): {_last_err}"}
@@ -529,7 +569,9 @@ class StreamingMixin:
                     else:
                         # 无工具但解析失败: 用 task 重新干净作答 (恢复"洗净", 生 JSON 不外泄)
                         final_prompt = str(task or "")
-                    _full = llm_call(final_prompt)
+                    # 模型分级路由就地 set/reset (同一同步帧内), 防 next() 跨线程丢路由。
+                    with self._routing_scope(_routing_task):
+                        _full = llm_call(final_prompt)
                     if _full and str(_full).strip():
                         answer_out = str(_full)
                 except Exception as e:

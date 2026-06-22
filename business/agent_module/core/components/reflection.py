@@ -68,7 +68,13 @@ class ReflectionMixin:
         meta["overall_quality"] = critique.get("overall_quality")
 
         # 自评分高 + LLM 自己说不用 revise → 跳过, 节省一轮调用
-        if not critique.get("should_revise", True) and int(critique.get("overall_quality") or 0) >= 4:
+        # overall_quality 防御性解析: LLM 可能返非数值 (如 "high"/"good"), int() 会抛 ValueError
+        # 静默丢弃整个 reflection — 这里降级为 0 (= 不够高 → 不跳过 revise)
+        try:
+            quality = int(critique.get("overall_quality") or 0)
+        except (TypeError, ValueError):
+            quality = 0
+        if not critique.get("should_revise", True) and quality >= 4:
             meta["skipped_revise"] = "self_eval_good"
             meta["cost_ms"] = int((time.time() - t0) * 1000)
             return None, meta

@@ -15,6 +15,7 @@ import socket
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 # ============================================================
@@ -22,6 +23,28 @@ from typing import Any, Callable, Dict, List, Optional
 # ============================================================
 
 _EXT_LANG = {"py": "python", "json": "json", "yaml": "yaml", "yml": "yaml", "sql": "sql"}
+
+
+def _resolve_lint_path(raw: str) -> Optional[Path]:
+    """把 code_lint 的 path 限制在项目源码树 (cwd) 内, 防任意文件读取.
+
+    code_lint 的用途是审本项目源码 (见 docstring), 所以沙盒边界 = 项目根 (cwd),
+    比 pdf/excel 的 uploads/ 白名单宽, 但仍拒绝绝对路径越界与 .. 穿越出根。
+    返回归一化后的绝对 Path; 越界/不存在/非文件 → None。
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        root = Path.cwd().resolve()
+        # 相对路径拼到 cwd; 绝对路径直接 resolve —— 两者都 resolve 后用 relative_to 校验
+        candidate = (root / raw if not Path(raw).is_absolute() else Path(raw)).resolve(strict=False)
+    except (OSError, ValueError):
+        return None
+    try:
+        candidate.relative_to(root)  # 越出项目根 (含 .. 穿越/绝对路径逃逸) → ValueError
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
 
 
 def code_lint(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -41,13 +64,18 @@ def code_lint(payload: Dict[str, Any]) -> Dict[str, Any]:
     source = "inline"
     # path 优先 (或 code 缺失时回退 path): 直接读真实文件, 不依赖模型复述 → 根治"审代码假语法错"。
     if isinstance(path, str) and path.strip() and not (isinstance(code, str) and code):
+        safe = _resolve_lint_path(path)
+        if safe is None:
+            return {"code": "PARAM_INVALID",
+                    "message": f"path 无效或越出项目源码树 (禁绝对路径/.. 穿越, 须为 cwd 内的文件): {path!r}",
+                    "data": None, "retryable": False}
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as _f:
+            with open(safe, "r", encoding="utf-8", errors="replace") as _f:
                 code = _f.read()
         except OSError as e:
             return {"code": "TOOL_CALL_FAILED", "message": f"读取文件失败: {path} ({e})",
                     "data": None, "retryable": False}
-        _ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        _ext = safe.suffix.lstrip(".").lower()
         inferred_lang = _EXT_LANG.get(_ext)
         source = f"path:{path}"
 

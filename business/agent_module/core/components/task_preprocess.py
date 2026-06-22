@@ -94,8 +94,9 @@ class TaskPreprocessMixin:
             )
 
     def _pre_step_inject_memory(self, ctx: TaskPreContext) -> None:
-        """Task FFF (#92): 查 query 相关 fact 注入 task 前; 记 memory_hits 给 details。"""
-        if not (ctx.task and self.memory_enabled and self.long_term_memory is not None):
+        """Task FFF (#92): 查 query 相关 fact 注入 task 前; 记 memory_hits 给 details; 纠正递归跳过。"""
+        if not (ctx.task and self.memory_enabled and self.long_term_memory is not None
+                and not ctx.extra_params.get("_skip_history_prefix")):
             return
         try:
             augmented, hits = self._inject_long_term_memory(

@@ -89,13 +89,14 @@ class TestSpawnSubagentTool(unittest.TestCase):
         # 把父 llm_planner 替换为子用的脚本 LLM (子 agent 复用父 llm_planner)
         parent.llm_planner = child_llm
 
-        result = spawn(
-            role="researcher",
-            task="找 anything 项目信息",
-            allowed_tools=["search"],
-            trace_id="t-parent",
-            session_id="s-parent",
-        )
+        # 真实 executor 用单字典调用工具 (tool(payload)), 测试同样走该契约
+        result = spawn({
+            "role": "researcher",
+            "task": "找 anything 项目信息",
+            "allowed_tools": ["search"],
+            "trace_id": "t-parent",
+            "session_id": "s-parent",
+        })
         self.assertEqual(result["code"], "SUCCESS")
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["answer"], "子 agent 答案 ✓")
@@ -110,12 +111,12 @@ class TestSpawnSubagentTool(unittest.TestCase):
             '{"thought":"先查","action":{"tool":"search","input":{"query":"x"}}}',
             '{"thought":"已得到","final_answer":"基于 search 结果 X"}',
         ])
-        result = spawn(
-            task="x 是什么",
-            allowed_tools=["search"],
-            trace_id="t",
-            session_id="s",
-        )
+        result = spawn({
+            "task": "x 是什么",
+            "allowed_tools": ["search"],
+            "trace_id": "t",
+            "session_id": "s",
+        })
         self.assertEqual(result["code"], "SUCCESS")
         self.assertEqual(result["data"]["answer"], "基于 search 结果 X")
         self.assertEqual(result["data"]["iterations_used"], 2)
@@ -133,12 +134,12 @@ class TestSpawnSubagentTool(unittest.TestCase):
         parent.llm_planner = _ScriptedLLM([
             '{"thought":"直接答","final_answer":"answer Y"}',
         ])
-        result = spawn(
-            task="t",
-            allowed_tools=["echo"],
-            trace_id="t",
-            session_id="s",
-        )
+        result = spawn({
+            "task": "t",
+            "allowed_tools": ["echo"],
+            "trace_id": "t",
+            "session_id": "s",
+        })
         self.assertEqual(result["code"], "SUCCESS")
         self.assertEqual(result["data"]["allowed_tools"], ["echo"])
 
@@ -146,18 +147,18 @@ class TestSpawnSubagentTool(unittest.TestCase):
         """allowed_tools 跟父 registry 无交集 → PARAM_INVALID, 不真的 spawn"""
         parent = _make_parent_agent()
         spawn = make_spawn_subagent_tool(parent)
-        result = spawn(
-            task="x",
-            allowed_tools=["nonexistent_tool"],
-            trace_id="t", session_id="s",
-        )
+        result = spawn({
+            "task": "x",
+            "allowed_tools": ["nonexistent_tool"],
+            "trace_id": "t", "session_id": "s",
+        })
         self.assertEqual(result["code"], "PARAM_INVALID")
         self.assertFalse(result["success"])
 
     def test_subagent_empty_task_returns_error(self):
         parent = _make_parent_agent()
         spawn = make_spawn_subagent_tool(parent)
-        result = spawn(task="", trace_id="t", session_id="s")
+        result = spawn({"task": "", "trace_id": "t", "session_id": "s"})
         self.assertEqual(result["code"], "PARAM_MISSING")
 
     def test_subagent_default_inherits_all_tools_except_self(self):
@@ -170,7 +171,7 @@ class TestSpawnSubagentTool(unittest.TestCase):
             '{"thought":"答","final_answer":"答 Z"}',
         ])
 
-        result = spawn(task="x", trace_id="t", session_id="s")
+        result = spawn({"task": "x", "trace_id": "t", "session_id": "s"})
         self.assertEqual(result["code"], "SUCCESS")
         # allowed 中不应含 spawn_subagent
         self.assertNotIn("spawn_subagent", result["data"]["allowed_tools"])
@@ -184,38 +185,46 @@ class TestSpawnSubagentTool(unittest.TestCase):
         parent.llm_planner = _ScriptedLLM([
             '{"thought":"final","final_answer":"Z"}',
         ])
-        result = spawn(
-            task="x", max_iterations=999,  # 应被 clamp 到 10
-            trace_id="t", session_id="s",
-        )
+        result = spawn({
+            "task": "x", "max_iterations": 999,  # 应被 clamp 到 10
+            "trace_id": "t", "session_id": "s",
+        })
         self.assertEqual(result["code"], "SUCCESS")
 
     def test_spawn_subagent_propagates_to_real_subagent(self):
         """spawn_subagent 注册到父 registry 后, 父 agent 跑 ReAct 调它能成功执行.
 
-        关键验证: spawn_subagent 出现在 tool_results_summary 里 (即父真的调到了它).
-        不验证 final_answer 文本 — _ScriptedLLM 在父/子之间共享, 响应顺序难精确控制.
+        关键验证: 父 agent 通过真实 executor 契约 (tool(payload) 单字典调用) 调到
+        spawn_subagent, 它出现在 tool_results_summary 里, 父最终拿到非空 answer.
+
+        用 _SeqLLM 而非共享 _ScriptedLLM 队列: 父/子共用同一 llm_planner, 子 agent 在配置
+        默认 self_verify=auto 下会额外消耗一次 LLM 调用, 固定队列的"谁先 pop"假设不稳。
+        _SeqLLM 让首次调用返回 spawn 动作, 其后任意次调用都返回可解析的 final_answer
+        (对 ReAct 与 self_verify 两种 prompt 都安全), 故无论子消耗几次调用, 父下一轮必能收尾。
         """
         parent = _make_parent_agent()
         spawn = make_spawn_subagent_tool(parent)
         parent.tool_registry.register("spawn_subagent", spawn, description="...")
-        # 给一份够长的脚本, 父和子从共享队列消费, 哪个先 final_answer 哪个先停.
-        parent.llm_planner = _ScriptedLLM([
-            # 父第 1 轮: 调 spawn_subagent
-            '{"thought":"派生","action":{"tool":"spawn_subagent",'
-            '"input":{"task":"子任务","allowed_tools":["search"]}}}',
-            # 子 / 父接下来谁先 pop 给 final_answer 谁先停
-            '{"thought":"final","final_answer":"answer A"}',
-            '{"thought":"final","final_answer":"answer B"}',
-            '{"thought":"final","final_answer":"answer C"}',
-        ])
+
+        class _SeqLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, prompt):
+                self.calls += 1
+                if self.calls == 1:
+                    return ('{"thought":"派生","action":{"tool":"spawn_subagent",'
+                            '"input":{"task":"子任务","allowed_tools":["search"]}}}')
+                return '{"thought":"final","final_answer":"answer X"}'
+
+        parent.llm_planner = _SeqLLM()
         result = parent.execute({"task": "总任务", "trace_id": "T", "session_id": "S"})
         self.assertEqual(result["code"], "SUCCESS")
         # 父调了 spawn_subagent 工具, 应该在 tool_results_summary 里看到它
         tool_names = [t.get("tool_name") for t in result["data"]["tool_results_summary"]]
         self.assertIn("spawn_subagent", tool_names)
-        # 应该有非空 answer
-        self.assertTrue(result["data"]["answer"])
+        # 父最终拿到非空 answer
+        self.assertEqual(result["data"]["answer"], "answer X")
 
 
 if __name__ == "__main__":

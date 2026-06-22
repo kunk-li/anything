@@ -55,7 +55,8 @@ class PlannerMixin:
         # 补全 step 字段
         steps: List[Dict[str, Any]] = []
         for i, step in enumerate(plan_steps[: self.max_planner_steps], start=1):
-            input_data = step.get("input_data") or {}
+            raw_input_data = step.get("input_data")
+            input_data = raw_input_data if isinstance(raw_input_data, dict) else {}
             input_data.setdefault("trace_id", trace_id)
             input_data.setdefault("extra_params", extra_params)
             if step.get("tool_name") == "rag_search":

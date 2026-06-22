@@ -138,8 +138,12 @@ class SelfVerifyMixin:
             return response
 
         # auto 模式: 预算内 + 可修 + 未超时 → 带 feedback 递归纠正
+        # 墙钟超时按 *原始* start_time 累计, 并下传剩余预算给递归 execute, 否则内层
+        # execute 会重开一个完整 timeout 窗口, 总墙钟可达 (max_correction+1)x 配置超时。
+        effective_timeout = int(request.get("timeout") or self.timeout)
+        remaining = effective_timeout - (time.time() - start_time)
         within_budget = attempt < self.max_correction
-        within_time = (time.time() - start_time) < self.timeout
+        within_time = remaining > 0
         if fixable_fb and within_budget and within_time:
             self._append_state_event(
                 session_id=session_id, event_type="self_correct", trace_id=trace_id,
@@ -151,6 +155,9 @@ class SelfVerifyMixin:
             new_extra["_skip_history_prefix"] = True
             new_request = dict(request)
             new_request["extra_params"] = new_extra
+            # 把剩余预算 (>=1s, 避免传 0 被 `or self.timeout` 重置回满额) 作为 deadline
+            # 下传; 内层 execute 的逐步/逐轮超时检查据此承接外层墙钟而非重新计时。
+            new_request["timeout"] = max(1, int(remaining))
             return self.execute(new_request)
 
         # 预算耗尽 / 不可修 → 返回 + 标记缺口

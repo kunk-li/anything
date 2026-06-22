@@ -186,6 +186,21 @@ class TestMcpHttpClient(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             McpHttpClient(self._spec(), post=_ErrPost()).list_tools()
 
+    def test_json_body_with_data_colon_substring_not_misparsed_as_sse(self):
+        # JSON 响应值里含子串 "data:" (如 data URI) → 必须按 JSON 解析, 不能误判成 SSE 帧丢消息
+        class _JsonWithDataColon:
+            def __call__(self, url, payload, headers):
+                rid = payload.get("id")
+                if rid is None:
+                    return 202, {}, ""
+                result = {} if payload.get("method") == "initialize" else \
+                    {"tools": [{"name": "img", "description": "data:image/png;base64,AAAA"}]}
+                return 200, {}, json.dumps({"jsonrpc": "2.0", "id": rid, "result": result})
+        c = McpHttpClient(self._spec(), post=_JsonWithDataColon())
+        tools = c.list_tools()
+        self.assertEqual(tools[0]["name"], "img")
+        self.assertIn("data:image", tools[0]["description"])
+
 
 class TestTransportRouting(unittest.TestCase):
     def test_default_client_for_http(self):
@@ -263,6 +278,22 @@ class TestMcpProviderLifecycle(unittest.TestCase):
         p.discover()
         self.assertEqual(p._clients, [])
         p.close()                          # 不抛
+
+    def test_failed_handshake_reaps_started_client(self):
+        # list_tools() 在子进程已起后才失败(握手报错) → discover 必须 close 回收, 防泄漏
+        class _StartsThenFails:
+            def __init__(self):
+                self.closed = 0
+            def list_tools(self):
+                raise RuntimeError("handshake boom after Popen")
+            def close(self):
+                self.closed += 1
+        fc = _StartsThenFails()
+        p = McpToolProvider([McpServerSpec(name="s", command="x")],
+                            client_factory=lambda spec: fc)
+        p.discover()
+        self.assertEqual(p._clients, [])   # 失败的不留引用
+        self.assertEqual(fc.closed, 1)     # 但已起的连接被 close 回收 (子进程不泄漏)
 
     def test_close_failure_isolated(self):
         # 单个 client close 抛 → 吞掉不外泄, 其余仍关 (fail-safe)

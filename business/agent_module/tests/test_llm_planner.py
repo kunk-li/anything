@@ -146,6 +146,31 @@ class TestLLMPlanner(unittest.TestCase):
         self.assertEqual(plan["plan_source"], "llm")
         self.assertEqual(plan["steps"][0]["tool_name"], "llm_generate")
 
+    def test_llm_non_dict_input_data_coerced_not_crash(self):
+        """LLM 给出非 dict 的 input_data(畸形 plan)-> 强制为 {} 补全,不崩溃。"""
+        def fake_llm(prompt: str) -> str:
+            # input_data 是 list/字符串(非 dict),旧实现 `or {}` 保留它会在
+            # 后续 .setdefault 上抛 AttributeError 而非触发兜底
+            return (
+                '{"steps": ['
+                '{"step_id":"s1","tool_name":"rag_search","input_data":["不是字典"]},'
+                '{"step_id":"s2","tool_name":"llm_generate","input_data":"也不是字典"}'
+                ']}'
+            )
+
+        agent = self._make_agent(llm_planner=fake_llm)
+        # 不应抛 AttributeError;畸形 input_data 被强制为 {} 后正常补全
+        plan = agent.parse_task(task="abc", session_id="sess1", trace_id="t1")
+
+        self.assertEqual(plan["plan_source"], "llm")
+        self.assertEqual(len(plan["steps"]), 2)
+        for step in plan["steps"]:
+            self.assertIsInstance(step["input_data"], dict)
+            self.assertEqual(step["input_data"]["trace_id"], "t1")
+        # rag_search 的补全字段仍生效
+        self.assertEqual(plan["steps"][0]["input_data"]["query"], "abc")
+        self.assertEqual(plan["steps"][1]["input_data"]["prompt"], "abc")
+
     def test_max_planner_steps_truncates(self):
         """LLM 输出过多步骤时被 max_planner_steps 截断。"""
         def fake_llm(prompt: str) -> str:

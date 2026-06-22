@@ -15,6 +15,7 @@ test_runner / worktree 可注入 (测试不起真子进程/不动真 git); 默�
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,10 +33,15 @@ class _GitWorktree:
 
     def create(self) -> str:
         d = tempfile.mkdtemp(prefix="anything_shadow_")
-        subprocess.run(
-            ["git", "-C", self.repo_root, "worktree", "add", "--detach", d, "HEAD"],
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            subprocess.run(
+                ["git", "-C", self.repo_root, "worktree", "add", "--detach", d, "HEAD"],
+                check=True, capture_output=True, text=True,
+            )
+        except BaseException:
+            # worktree add 失败 → mkdtemp 已落盘的临时目录无人接管 (path 未返回, finally 清不到), 自己兜底删再抛
+            shutil.rmtree(d, ignore_errors=True)
+            raise
         return d
 
     def apply_diff(self, path: str, diff: str) -> bool:

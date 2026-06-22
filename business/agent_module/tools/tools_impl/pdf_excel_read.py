@@ -17,7 +17,21 @@ from typing import Any, Dict, List, Optional
 
 
 # 允许读取的目录前缀 (按 cwd 解析). path 必须在这些里面.
+# 每项按路径"段"拆开, 用整段相等比较, 不用字符串 startswith —
+# 否则 uploads_secret/ 这种兄弟目录会被 startswith("uploads") 误放行.
 _ALLOWED_PREFIXES = ("uploads", "source_docs", "documents", "run/uploads")
+_ALLOWED_PREFIX_PARTS = tuple(tuple(pre.split("/")) for pre in _ALLOWED_PREFIXES)
+
+
+def _under_allowed_prefix(rel: Path) -> bool:
+    """rel 是相对 cwd 的路径; 判断它是否落在某个允许前缀目录"内"
+    (按路径段整段比较, 防 uploads_secret/ 这种兄弟目录穿越)."""
+    parts = rel.parts
+    for pre in _ALLOWED_PREFIX_PARTS:
+        # rel 必须真的在前缀目录"下" (段数严格大于前缀), 而不是等于前缀本身
+        if len(parts) > len(pre) and parts[: len(pre)] == pre:
+            return True
+    return False
 
 # 扫描版 PDF (无文字层) 自动渲染参数: 页数上限防止几百页扫描件逐页跑多模态
 SCAN_RENDER_MAX_PAGES = 5
@@ -29,26 +43,22 @@ def _resolve_safe_path(file_path: str) -> Optional[Path]:
     if not file_path or not isinstance(file_path, str):
         return None
     p = Path(file_path)
+    cwd = Path.cwd().resolve()
     if p.is_absolute():
         # 绝对路径: 必须在 cwd 内
         try:
-            rp = p.resolve(strict=False)
+            candidate = p.resolve(strict=False)
         except Exception:
             return None
-        try:
-            rp.relative_to(Path.cwd().resolve())
-        except ValueError:
-            return None
-        return rp if rp.exists() else None
-    # 相对路径: 拼到 cwd, 校验前缀
-    candidate = (Path.cwd() / p).resolve()
+    else:
+        # 相对路径: 拼到 cwd
+        candidate = (cwd / p).resolve()
+    # 两条分支统一: 必须在 cwd 内 + 落在允许前缀目录下 (同一道沙盒墙)
     try:
-        candidate.relative_to(Path.cwd().resolve())
+        rel = candidate.relative_to(cwd)
     except ValueError:
         return None
-    # 至少匹配一个允许的前缀 (再宽就太开放)
-    rel = candidate.relative_to(Path.cwd().resolve())
-    if not any(str(rel).replace("\\", "/").startswith(pre) for pre in _ALLOWED_PREFIXES):
+    if not _under_allowed_prefix(rel):
         # 给点提示而不是直接拒, 让 LLM 知道路径不对
         return None
     return candidate if candidate.exists() else None
